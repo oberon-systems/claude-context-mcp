@@ -1,0 +1,19 @@
+# Local environment
+.env
+
+# Database data directory (see DATA_DIR)
+/pgdata/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+
+# Misc
+*.log
+.pre-commit

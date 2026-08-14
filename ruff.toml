@@ -1,0 +1,21 @@
+target-version = "py311"
+line-length = 88
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # import ordering
+    "B",   # bugbear
+    "UP",  # pyupgrade
+    "ANN", # explicit annotations, required by CLAUDE.md section 6
+    "D",   # docstrings
+]
+ignore = [
+    "D203", # incompatible with D211
+    "D213", # incompatible with D212
+]
+
+[lint.pydocstyle]
+convention = "pep257"

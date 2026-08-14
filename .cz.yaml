@@ -1,0 +1,16 @@
+commitizen:
+  name: wyld_cz
+  version: 0.0.0
+  tag_format: v$version
+  update_changelog_on_bump: true
+  # The built-in default is "bump: version $current_version -> $new_version"
+  # written with a Unicode arrow, which the ASCII rule forbids.
+  bump_message: 'bump: version $current_version -> $new_version'
+  allowed_prefixes:
+    - Merge
+    - Revert
+    - Pull request
+    - fixup!
+    - squash!
+    - amend!
+    - "bump:"

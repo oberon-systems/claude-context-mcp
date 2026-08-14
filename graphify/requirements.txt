@@ -1,0 +1,5 @@
+psycopg2-binary==2.9.9
+# Reserved for the tree-sitter AST pass tracked in ROADMAP.md. Not imported by
+# process_graph.py yet.
+tree-sitter==0.21.3
+networkx==3.2.1

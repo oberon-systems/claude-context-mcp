@@ -1,0 +1,82 @@
+# Stack layout:
+#   postgres + mcp-server are the long running services, started by `make up`.
+#   graphify is a one-shot indexing job behind the `index` profile, so a plain
+#   `up` does not try to run it. Start it with `make index`.
+
+x-database-url: &database-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-context}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see .env.example}
+    volumes:
+      - ${DATA_DIR:-./pgdata}:/var/lib/postgresql/data
+      # Only replayed when the data directory is empty. Recreate the volume
+      # after changing the schema, or apply the change by hand.
+      - ./init-db:/docker-entrypoint-initdb.d:ro
+    networks: [base]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-context}
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Code graph indexer. Runs to completion and exits.
+  # https://github.com/Graphify-Labs/graphify
+  graphify:
+    build:
+      context: ./graphify
+    image: claude-context-mcp/graphify:${TAG:-dev}
+    restart: "no"
+    environment:
+      DATABASE_URL: *database-url
+      TARGET_PROJECT_PATH: /project
+    volumes:
+      # Read-only by contract: the indexer must never mutate host sources.
+      - ${PROJECT_PATH:?PROJECT_PATH is required, see .env.example}:/project:ro
+    networks: [base]
+    profiles: [index]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # MCP server exposed to Claude CLI over SSE.
+  mcp-server:
+    build:
+      context: ./mcp-server
+    image: claude-context-mcp/mcp-server:${TAG:-dev}
+    restart: unless-stopped
+    ports:
+      - "${MCP_PORT:-3000}:3000"
+    networks: [base]
+    environment:
+      DATABASE_URL: *database-url
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  base:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.200.0/24

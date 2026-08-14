@@ -1,0 +1,12 @@
+default: true
+
+# Line length is not enforced: CLAUDE.md and the README tables are authored as
+# long lines on purpose, and reflowing them adds churn without adding clarity.
+MD013: false
+
+# Duplicate headings are fine when they sit under different parents.
+MD024:
+  siblings_only: true
+
+# Bare URLs inside code fences and command examples are intentional.
+MD034: false
