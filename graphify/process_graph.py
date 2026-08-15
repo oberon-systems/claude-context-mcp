@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import posixpath
+import re
 from collections.abc import Iterator
 from functools import cache
 from typing import Any
@@ -23,6 +24,7 @@ import tree_sitter_rust
 import tree_sitter_toml
 import tree_sitter_typescript
 import tree_sitter_yaml
+import yaml
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 from tree_sitter import Language, Node, Parser, Query, QueryCursor
@@ -95,6 +97,50 @@ MAX_SUMMARY_LENGTH = 300
 # How many declared names a fallback summary lists before it says "+N more".
 SUMMARY_ENTITY_LIMIT = 8
 
+# Ansible: the directories a role is made of, used to find the role a file
+# belongs to and to resolve what its tasks refer to.
+ANSIBLE_ROLE_DIRS = frozenset(
+    {
+        "defaults",
+        "files",
+        "handlers",
+        "library",
+        "meta",
+        "molecule",
+        "tasks",
+        "templates",
+        "tests",
+        "vars",
+    }
+)
+# Modules whose argument names a file, mapped to the edge they produce and the
+# argument keys that carry the path.
+ANSIBLE_FILE_MODULES: dict[str, tuple[str, tuple[str, ...]]] = {
+    "include": ("includes", ("file", "_raw_params")),
+    "include_tasks": ("includes", ("file", "_raw_params")),
+    "import_tasks": ("includes", ("file", "_raw_params")),
+    "include_vars": ("reads_vars", ("file", "_raw_params")),
+    "template": ("uses_template", ("src",)),
+    "copy": ("uses_file", ("src",)),
+}
+ANSIBLE_ROLE_MODULES = frozenset({"import_role", "include_role"})
+# Where each edge looks inside the owning role when the target is a bare name.
+ANSIBLE_RELATION_DIRS = {
+    "includes": ("tasks",),
+    "reads_vars": ("vars", "defaults"),
+    "uses_template": ("templates",),
+    "uses_file": ("files",),
+}
+# Edges whose target is a role rather than a file below the role.
+ANSIBLE_ROLE_RELATIONS = frozenset({"uses_role", "depends_on"})
+# The files a role name resolves to, in the order they are tried.
+ANSIBLE_ROLE_ENTRY_POINTS = (
+    "tasks/main.yml",
+    "tasks/main.yaml",
+    "meta/main.yml",
+    "meta/main.yaml",
+)
+
 
 def node_text(node: Node) -> str:
     """Return the decoded source text of a node."""
@@ -149,8 +195,12 @@ class CodeParser:
             for node in nodes:
                 yield capture_name, node_text(node)
 
-    def get_entities(self, content: str) -> list[dict[str, str]]:
-        """Return the deduplicated entities declared in content."""
+    def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return the deduplicated entities declared in content.
+
+        rel_path is unused by most grammars; the Ansible parser needs it to
+        tell a task file from a handler file.
+        """
         if self.entity_query is None:
             return []
         return _unique_pairs(
@@ -158,8 +208,12 @@ class CodeParser:
             for kind, name in self.capture_texts(self.entity_query, self.parse(content))
         )
 
-    def get_relations(self, content: str) -> list[dict[str, str]]:
-        """Return the deduplicated relations found in content."""
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return the deduplicated relations found in content.
+
+        Each relation carries the scope its target is resolved in: "file" for
+        something the tree holds, "symbol" for a name another file declares.
+        """
         if self.relation_query is None:
             return []
         pairs: list[tuple[str, str]] = []
@@ -167,7 +221,11 @@ class CodeParser:
             target = strip_literal(text) if kind == "imports" else text.strip()
             pairs.append((target, kind))
         return [
-            {"target": entry["name"], "type": entry["type"]}
+            {
+                "target": entry["name"],
+                "type": entry["type"],
+                "scope": "file" if entry["type"] == "imports" else "symbol",
+            }
             for entry in _unique_pairs(iter(pairs))
         ]
 
@@ -361,7 +419,7 @@ class HCLParser(CodeParser):
         """Initialize HCL parser."""
         super().__init__(tree_sitter_hcl.language())
 
-    def get_entities(self, content: str) -> list[dict[str, str]]:
+    def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
         """Name a block by its type and labels, e.g. resource.aws_s3_bucket.main."""
         if self.entity_query is None:
             return []
@@ -439,6 +497,243 @@ class YAMLParser(CodeParser):
         super().__init__(tree_sitter_yaml.language())
 
 
+class AnsibleYamlLoader(yaml.SafeLoader):
+    """SafeLoader that tolerates the custom tags Ansible files carry."""
+
+
+# `!vault`, `!unsafe` and friends are not worth resolving, but they must not
+# abort the load of the file that holds them.
+AnsibleYamlLoader.add_multi_constructor("", lambda loader, suffix, node: None)
+
+
+def load_yaml_documents(content: str) -> list[Any] | None:
+    """Return the documents of a YAML file, or None when it does not parse."""
+    try:
+        return list(yaml.load_all(content, Loader=AnsibleYamlLoader))
+    except (yaml.YAMLError, RecursionError):
+        return None
+
+
+def role_root(rel_path: str) -> str:
+    """Return the role directory owning a file, e.g. roles/sshd."""
+    parts = rel_path.split("/")
+    for index in range(len(parts) - 2, 0, -1):
+        if parts[index] in ANSIBLE_ROLE_DIRS:
+            return "/".join(parts[:index])
+    return ""
+
+
+def expand_path_variables(target: str, rel_path: str) -> str:
+    """Replace the Ansible path variables with the directory they stand for.
+
+    `include_tasks: "{{ role_path }}/tasks/rocky/9.yml"` is the idiomatic way
+    to reach a sibling task file, and it is the only templating this indexer
+    can resolve without running Ansible.
+    """
+    known = {
+        "role_path": role_root(rel_path),
+        "playbook_dir": posixpath.dirname(rel_path),
+    }
+
+    def replace(match: re.Match[str]) -> str:
+        value = known.get(match.group(1))
+        return match.group(0) if value is None else value
+
+    return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace, target).lstrip("/")
+
+
+def is_templated(value: str) -> bool:
+    """Report whether a value still holds Jinja that only Ansible can expand."""
+    return "{{" in value or "{%" in value
+
+
+def ansible_argument(value: Any, keys: tuple[str, ...]) -> str:  # noqa: ANN401
+    """Read a file argument from a module call, in any of the forms it takes."""
+    if isinstance(value, dict):
+        for key in keys:
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                return candidate.strip()
+        return ""
+    if isinstance(value, str):
+        if "=" in value:
+            # The old `src=x dest=y` free form.
+            for key in keys:
+                match = re.search(rf"(?:^|\s){key}=(\S+)", value)
+                if match:
+                    return match.group(1)
+            return ""
+        return value.strip()
+    return ""
+
+
+def iter_ansible_plays(document: Any) -> Iterator[dict[str, Any]]:  # noqa: ANN401
+    """Yield the plays of a playbook document."""
+    if isinstance(document, list):
+        for item in document:
+            if isinstance(item, dict) and "hosts" in item:
+                yield item
+
+
+def iter_ansible_tasks(
+    node: Any,  # noqa: ANN401
+    entity_type: str = "task",
+) -> Iterator[tuple[dict[str, Any], str]]:
+    """Yield every task in a document, descending into plays and blocks."""
+    if isinstance(node, list):
+        for item in node:
+            yield from iter_ansible_tasks(item, entity_type)
+        return
+    if not isinstance(node, dict):
+        return
+    if "hosts" in node:
+        for key in ("pre_tasks", "tasks", "post_tasks"):
+            yield from iter_ansible_tasks(node.get(key), "task")
+        yield from iter_ansible_tasks(node.get("handlers"), "handler")
+        return
+    yield node, entity_type
+    for key in ("block", "rescue", "always"):
+        yield from iter_ansible_tasks(node.get(key), entity_type)
+
+
+def ansible_role_name(entry: Any) -> str:  # noqa: ANN401
+    """Return the role name of a `roles:` or `dependencies:` entry."""
+    if isinstance(entry, str):
+        return entry.strip()
+    if isinstance(entry, dict):
+        for key in ("role", "name"):
+            value = entry.get(key)
+            if isinstance(value, str):
+                return value.strip()
+    return ""
+
+
+def ansible_kind(rel_path: str, documents: list[Any]) -> str:
+    """Classify an Ansible YAML file by its path and its shape."""
+    if any(any(True for _ in iter_ansible_plays(document)) for document in documents):
+        return "playbook"
+    segments = rel_path.split("/")
+    if "handlers" in segments:
+        return "handlers"
+    if "tasks" in segments:
+        return "tasks"
+    if {"defaults", "vars"} & set(segments) or segments[0] in (
+        "group_vars",
+        "host_vars",
+    ):
+        return "vars"
+    if "meta" in segments:
+        return "meta"
+    return "other"
+
+
+class AnsibleParser(YAMLParser):
+    """Ansible aware YAML parser.
+
+    Ansible expresses its structure in ordinary YAML, so the tree-sitter
+    queries above cannot tell a task from a variable. The documents are loaded
+    instead, and files that do not look like Ansible fall back to the plain
+    YAML behaviour of the base class.
+    """
+
+    FAMILY = "ansible"
+
+    def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Extract plays, tasks, handlers and role variables."""
+        documents = load_yaml_documents(content)
+        if documents is None:
+            return super().get_entities(content, rel_path)
+        kind = ansible_kind(rel_path, documents)
+        if kind in ("other", "meta"):
+            return super().get_entities(content, rel_path)
+
+        pairs: list[tuple[str, str]] = []
+        for document in documents:
+            if kind == "vars":
+                if isinstance(document, dict):
+                    pairs.extend((str(key), "variable") for key in document)
+                continue
+            for play in iter_ansible_plays(document):
+                pairs.append((str(play.get("hosts")), "play"))
+            default_type = "handler" if kind == "handlers" else "task"
+            for task, entity_type in iter_ansible_tasks(document, default_type):
+                name = task.get("name")
+                if isinstance(name, str) and name.strip():
+                    pairs.append((name.strip(), entity_type))
+        return _unique_pairs(iter(pairs))
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Extract includes, role uses, template and handler references."""
+        documents = load_yaml_documents(content)
+        if documents is None:
+            return []
+        kind = ansible_kind(rel_path, documents)
+        if kind in ("other", "vars"):
+            return []
+
+        found: list[tuple[str, str]] = []
+        for document in documents:
+            if kind == "meta":
+                if isinstance(document, dict):
+                    found.extend(
+                        (ansible_role_name(entry), "depends_on")
+                        for entry in document.get("dependencies") or []
+                    )
+                continue
+            for play in iter_ansible_plays(document):
+                found.extend(
+                    (ansible_role_name(entry), "uses_role")
+                    for entry in play.get("roles") or []
+                )
+                found.extend(
+                    (str(entry), "reads_vars")
+                    for entry in play.get("vars_files") or []
+                    if isinstance(entry, str)
+                )
+            for task, _ in iter_ansible_tasks(document):
+                found.extend(self._task_relations(task))
+
+        relations = []
+        for entry in _unique_pairs(iter(found)):
+            target = entry["name"]
+            relation_type = entry["type"]
+            if relation_type != "notifies":
+                target = expand_path_variables(target, rel_path)
+                if is_templated(target):
+                    # Nothing static is left to point at.
+                    continue
+            relations.append(
+                {
+                    "target": target,
+                    "type": relation_type,
+                    "scope": "symbol" if relation_type == "notifies" else "file",
+                }
+            )
+        return relations
+
+    @staticmethod
+    def _task_relations(task: dict[str, Any]) -> Iterator[tuple[str, str]]:
+        """Yield the (target, relation type) pairs a single task declares."""
+        for key, value in task.items():
+            if key == "notify":
+                entries = value if isinstance(value, list) else [value]
+                for entry in entries:
+                    if isinstance(entry, str):
+                        yield entry.strip(), "notifies"
+                continue
+            # Modules may be written plain or fully qualified.
+            module = key.rsplit(".", 1)[-1]
+            if module in ANSIBLE_FILE_MODULES:
+                relation_type, argument_keys = ANSIBLE_FILE_MODULES[module]
+                target = ansible_argument(value, argument_keys)
+                if target:
+                    yield target, relation_type
+            elif module in ANSIBLE_ROLE_MODULES:
+                name = ansible_role_name(value)
+                if name:
+                    yield name, "uses_role"
+
+
 EXTENSION_PARSERS: dict[str, type[CodeParser]] = {
     ".bash": BashParser,
     ".cjs": JavaScriptParser,
@@ -459,8 +754,8 @@ EXTENSION_PARSERS: dict[str, type[CodeParser]] = {
     ".toml": TOMLParser,
     ".ts": TypeScriptParser,
     ".tsx": TSXParser,
-    ".yaml": YAMLParser,
-    ".yml": YAMLParser,
+    ".yaml": AnsibleParser,
+    ".yml": AnsibleParser,
 }
 
 FILENAME_PARSERS: dict[str, type[CodeParser]] = {
@@ -735,7 +1030,7 @@ def prune_orphans(cursor: Cursor) -> int:
 def index_file(cursor: Cursor, rel_path: str, content: str) -> list[dict[str, str]]:
     """Store the file node and its entities. Returns the entities written."""
     parser = get_parser(rel_path)
-    entities = parser.get_entities(content) if parser else []
+    entities = parser.get_entities(content, rel_path) if parser else []
 
     upsert_file_node(cursor, rel_path, extract_summary(rel_path, content, entities))
     clear_file_artifacts(cursor, rel_path)
@@ -818,6 +1113,54 @@ def resolve_import(target: str, rel_path: str, known_files: set[str]) -> str | N
     return None
 
 
+def ansible_candidates(relation_type: str, target: str, rel_path: str) -> list[str]:
+    """Return the file paths an Ansible reference may point at."""
+    root = role_root(rel_path)
+    base_dir = posixpath.dirname(rel_path)
+    if relation_type in ANSIBLE_ROLE_RELATIONS:
+        # A role sits next to the role that names it, or under a top level
+        # roles directory.
+        prefixes = ["roles", posixpath.join(base_dir, "roles")]
+        if root:
+            prefixes.insert(0, posixpath.dirname(root))
+        return [
+            posixpath.normpath(posixpath.join(prefix, target, entry_point))
+            for prefix in prefixes
+            for entry_point in ANSIBLE_ROLE_ENTRY_POINTS
+        ]
+
+    directories = [base_dir]
+    if root:
+        directories.extend(
+            posixpath.join(root, name)
+            for name in ANSIBLE_RELATION_DIRS.get(relation_type, ())
+        )
+    # The target may already be written from the project root.
+    directories.append("")
+    return [
+        posixpath.normpath(posixpath.join(directory, target))
+        for directory in directories
+    ]
+
+
+def resolve_file_target(
+    relation_type: str, target: str, rel_path: str, known_files: set[str]
+) -> str | None:
+    """Resolve a file scoped relation to the id of an indexed file node."""
+    if relation_type == "imports":
+        return resolve_import(target, rel_path, known_files)
+    for candidate in ansible_candidates(relation_type, target, rel_path):
+        if candidate in known_files:
+            return truncate(candidate, MAX_NODE_ID_LENGTH)
+    return None
+
+
+def placeholder_id(relation_type: str, target: str) -> str:
+    """Return the node id standing for a target outside the tree."""
+    prefix = "role:" if relation_type in ANSIBLE_ROLE_RELATIONS else ""
+    return truncate(f"{prefix}{target}", MAX_NODE_ID_LENGTH)
+
+
 def language_family(rel_path: str) -> str:
     """Return the symbol namespace a file belongs to."""
     parser_class = _parser_class(rel_path)
@@ -891,19 +1234,21 @@ def link_file(
         return 0
 
     source_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
-    relations = parser.get_relations(content)
-    # Imports come first: knowing which files this one pulls in is what makes
-    # a call resolve to the right definition below.
-    relations.sort(key=lambda relation: relation["type"] != "imports")
+    relations = parser.get_relations(content, rel_path)
+    # File relations come first: knowing which files this one pulls in is what
+    # makes a call or a handler name resolve to the right definition below.
+    relations.sort(key=lambda relation: relation["scope"] != "file")
     imported: set[str] = set()
     edges = 0
     for relation in relations:
         target = relation["target"]
         relation_type = relation["type"]
-        if relation_type == "imports":
-            target_id = resolve_import(target, rel_path, known_files)
+        if relation["scope"] == "file":
+            target_id = resolve_file_target(
+                relation_type, target, rel_path, known_files
+            )
             if target_id is None:
-                target_id = truncate(target, MAX_NODE_ID_LENGTH)
+                target_id = placeholder_id(relation_type, target)
                 ensure_external_node(cursor, target_id, "external_import")
             else:
                 imported.add(target_id)

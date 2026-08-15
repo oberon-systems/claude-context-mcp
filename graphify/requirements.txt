@@ -3,6 +3,8 @@
 # so an unpinned rebuild used to break the indexer without a code change.
 pathspec==1.1.1
 psycopg2-binary==2.9.12
+# Ansible structure lives in the YAML values, not in the tree-sitter tree.
+PyYAML==6.0.3
 tree-sitter==0.26.0
 tree-sitter-bash==0.25.1
 tree-sitter-dockerfile==0.2.0

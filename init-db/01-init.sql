@@ -8,8 +8,9 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     name VARCHAR(255) NOT NULL,
     -- What the node stands for: file, or an entity kind reported by the
     -- parser (function, method, class, interface, type, struct, trait, enum,
-    -- block, target, table, key, heading, image, stage), or a placeholder for
-    -- something outside the tree (external_import, external_symbol).
+    -- block, target, table, key, heading, image, stage, and play, task,
+    -- handler, variable for Ansible), or a placeholder for something outside
+    -- the tree (external_import, external_symbol).
     type VARCHAR(50) NOT NULL,
     file_path TEXT,
     content TEXT,
@@ -25,7 +26,9 @@ CREATE TABLE IF NOT EXISTS graph_edges (
     id SERIAL PRIMARY KEY,
     source_id VARCHAR(255) REFERENCES graph_nodes (id) ON DELETE CASCADE,
     target_id VARCHAR(255) REFERENCES graph_nodes (id) ON DELETE CASCADE,
-    -- One of: imports, calls, inherits, uses.
+    -- What the source does with the target: imports, calls, inherits, or,
+    -- for Ansible, includes, uses_role, depends_on, reads_vars, uses_template,
+    -- uses_file, notifies.
     relation_type VARCHAR(50) NOT NULL,
     metadata JSONB DEFAULT '{}'::JSONB,
     UNIQUE (source_id, target_id, relation_type)
