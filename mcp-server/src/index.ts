@@ -180,12 +180,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "get_code_graph_neighbors") {
       const nodeId = requireString(args, "node_id");
       const res = await dbPool.query(
-        `SELECT target_id AS node_id, relation_type, 'outgoing' AS direction
-           FROM graph_edges WHERE source_id = $1
-         UNION
-         SELECT source_id AS node_id, relation_type, 'incoming' AS direction
-           FROM graph_edges WHERE target_id = $1
-         LIMIT $2`,
+        // The neighbour rows carry the node's type and summary, so a caller
+        // learns what it found without a second lookup per id.
+        `WITH neighbours AS (
+           SELECT target_id AS node_id, relation_type, 'outgoing' AS direction
+             FROM graph_edges WHERE source_id = $1
+           UNION
+           SELECT source_id AS node_id, relation_type, 'incoming' AS direction
+             FROM graph_edges WHERE target_id = $1
+         )
+         SELECT n.node_id, n.relation_type, n.direction,
+                g.type, g.file_path, g.summary
+           FROM neighbours AS n
+           LEFT JOIN graph_nodes AS g ON g.id = n.node_id
+          ORDER BY n.direction, n.relation_type, n.node_id
+          LIMIT $2`,
         [nodeId, MAX_RESULTS],
       );
 
@@ -197,7 +206,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "search_code_nodes") {
       const query = `%${requireString(args, "query")}%`;
       const res = await dbPool.query(
-        `SELECT id, name, type, file_path
+        `SELECT id, name, type, file_path, summary
            FROM graph_nodes
           WHERE name ILIKE $1 OR id ILIKE $1
           ORDER BY id
