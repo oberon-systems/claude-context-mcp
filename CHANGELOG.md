@@ -1,3 +1,9 @@
+## v0.3.1 (2026-08-15)
+
+### Bug Fixes
+
+- **make**: say none running when the stack is down
+
 ## v0.3.0 (2026-08-15)
 
 ### Features
