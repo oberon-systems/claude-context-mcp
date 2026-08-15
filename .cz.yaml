@@ -12,4 +12,4 @@ commitizen:
   name: wyld_cz
   tag_format: v$version
   update_changelog_on_bump: true
-  version: 0.5.1
+  version: 0.5.2

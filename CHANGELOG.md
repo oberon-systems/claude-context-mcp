@@ -1,3 +1,15 @@
+## v0.5.2 (2026-08-15)
+
+### Bug Fixes
+
+- **mcp-server**: keep a saved summary from being overwritten by the indexer
+- **graphify**: port the parsers to the tree-sitter 0.26 query API
+
+### Documentation
+
+- **ROADMAP**: record what the tree-sitter step delivers and what incremental indexing still owes
+- **README**: describe what the indexer actually selects and summarizes
+
 ## v0.5.1 (2026-08-15)
 
 ### Bug Fixes
