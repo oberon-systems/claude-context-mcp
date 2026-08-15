@@ -37,7 +37,7 @@ Once embeddings exist, add `search_code_semantic` to
 and returning the owning nodes. The tool is not worth adding before then, since
 it would return nothing.
 
-## 4. Incremental indexing
+## 4. Incremental indexing [COMPLETED]
 
 `make index` rewrites every node on every run. A re-index now clears what it
 previously derived from each file it visits, but a file deleted from the tree is

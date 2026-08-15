@@ -123,6 +123,39 @@ def upsert_entity_node(cursor: Cursor, rel_path: str, entity: dict[str, str]) ->
     )
 
 
+def get_file_hash(cursor: Cursor, rel_path: str) -> str | None:
+    """Retrieve the stored MD5 hash for a file."""
+    cursor.execute("SELECT hash FROM file_hashes WHERE file_path = %s;", (rel_path,))
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+
+def upsert_file_hash(cursor: Cursor, rel_path: str, file_hash: str) -> None:
+    """Store or update the MD5 hash for a file."""
+    cursor.execute(
+        """
+        INSERT INTO file_hashes (file_path, hash, updated_at)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (file_path) DO UPDATE SET
+            hash = EXCLUDED.hash,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        (rel_path, file_hash),
+    )
+
+
+def get_file_entities(cursor: Cursor, rel_path: str) -> list[dict[str, str]]:
+    """Retrieve existing entities for a file."""
+    cursor.execute(
+        """
+        SELECT id, name, type FROM graph_nodes
+        WHERE file_path = %s AND type <> 'file';
+        """,
+        (rel_path,),
+    )
+    return [{"id": row[0], "name": row[1], "type": row[2]} for row in cursor.fetchall()]
+
+
 def insert_edge(
     cursor: Cursor, source_id: str, target_id: str, relation_type: str
 ) -> None:

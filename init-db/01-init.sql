@@ -53,6 +53,12 @@ CREATE TABLE IF NOT EXISTS project_plans (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS file_hashes (
+    file_path TEXT PRIMARY KEY,
+    hash VARCHAR(32) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes (type);
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_file_path ON graph_nodes (file_path);
 CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges (source_id);

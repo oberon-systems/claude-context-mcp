@@ -6,6 +6,7 @@ still resolves, which a single pass cannot promise.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 
@@ -21,14 +22,22 @@ from graphify.storage import (
     clear_file_artifacts,
     ensure_external_node,
     get_db_connection,
+    get_file_entities,
+    get_file_hash,
     insert_edge,
     prune_orphans,
     upsert_entity_node,
+    upsert_file_hash,
     upsert_file_node,
 )
 from graphify.summaries import extract_summary
 
 LOG = logging.getLogger(__name__)
+
+
+def compute_hash(content: str) -> str:
+    """Compute MD5 hash of the file content."""
+    return hashlib.md5(content.encode("utf-8")).hexdigest()
 
 
 def index_file(cursor: Cursor, rel_path: str, content: str) -> list[dict[str, str]]:
@@ -111,14 +120,25 @@ def scan_and_build_graph() -> None:
                 content = read_source(full_path, rel_path)
                 if content is None:
                     continue
-                try:
-                    entities = index_file(cursor, rel_path, content)
-                except Exception:
-                    conn.rollback()
-                    failures += 1
-                    LOG.exception("Failed to index %s", rel_path)
-                    continue
-                conn.commit()
+
+                file_hash = compute_hash(content)
+                stored_hash = get_file_hash(cursor, rel_path)
+
+                if stored_hash == file_hash:
+                    # Skip parsing, retrieve entities from DB
+                    entities = get_file_entities(cursor, rel_path)
+                else:
+                    # Re-parse file
+                    try:
+                        entities = index_file(cursor, rel_path, content)
+                        upsert_file_hash(cursor, rel_path, file_hash)
+                    except Exception:
+                        conn.rollback()
+                        failures += 1
+                        LOG.exception("Failed to index %s", rel_path)
+                        continue
+                    conn.commit()
+
                 known_files.add(rel_path)
                 entity_total += len(entities)
                 for entity in entities:
