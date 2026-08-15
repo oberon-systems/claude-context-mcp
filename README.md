@@ -84,6 +84,47 @@ These implement DNS rebinding protection. MCP SDK 0.6 has none of its own
 server through your browser. Legitimate MCP clients send no `Origin` header, so
 the empty default rejects browser traffic while leaving Claude CLI unaffected.
 
+### Choosing what gets indexed
+
+The indexed project decides for itself, through two optional files at its root.
+Both use gitignore syntax and are read from the mount on every `make index`, so
+changing what a project indexes needs neither an image rebuild nor a new release
+of this repository.
+
+| File         | Purpose                                             |
+| ------------ | --------------------------------------------------- |
+| `.ctxignore` | Paths pruned from the walk                          |
+| `.ctxkeep`   | Files that become nodes; everything else is skipped |
+
+```text
+# .ctxignore
+.git/
+.cache/
+build/
+*.qcow2
+
+# .ctxkeep
+*.py
+*.ts
+*.hcl
+*.md
+Makefile
+```
+
+Each file **replaces** its built-in default rather than adding to it. That is
+what lets a project index file types this repository has never heard of, but it
+also means a `.ctxignore` omitting `.git/` really will walk into git's
+internals. The indexer warns when it spots that, and otherwise leaves the choice
+alone.
+
+Without these files the built-in defaults apply, which is the behaviour of
+earlier releases: source extensions such as `.py`, `.ts` and `.go`, minus the
+usual `.git`, `.venv`, `node_modules` and friends.
+
+Import edges are a separate matter. They are extracted only from the languages
+the parser understands, whatever `.ctxkeep` admits, so indexing documentation
+never mines prose for the word "import".
+
 ## Make targets
 
 Run `make` for the full list, including the per-service subdivisions.
