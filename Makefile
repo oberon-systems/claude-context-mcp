@@ -97,9 +97,26 @@ index: require-env  ## Index PROJECT_PATH into the graph (one-shot job)
 psql: require-env  ## Open a psql session against the context database
 	$(COMPOSE) exec postgres psql -U "$${POSTGRES_USER:-user}" -d "$${POSTGRES_DB:-context}"
 
-# `down -v` also drops the pgdata volume, so the schema in init-db/ is replayed
-# on the next `up`.
-clean:  ## Remove the containers, the database volume and the built images
+# The database lives in a bind mount, not a volume, so `down -v` never reached
+# it: that flag only drops named and anonymous volumes. Emptying the directory
+# here is what actually lets init-db/ be replayed on the next `up`, and what
+# stops a regenerated POSTGRES_PASSWORD from meeting a database that still
+# holds the old one and refuses every connection.
+#
+# The files belong to the postgres uid, so the host user cannot remove them.
+# Compose runs the deletion as root inside the postgres service itself, which
+# also means DATA_DIR stays resolved by compose rather than parsed again here.
+clean: require-env  ## Remove the containers, the database and the built images
+	@test -n "$(FORCE)" || { \
+		echo "This empties the database, and the index goes with it."; \
+		read -r -p "Continue? [y/N] " reply; \
+		case "$$reply" in [yY]*) ;; *) echo "aborted"; exit 1 ;; esac; \
+	}
+	$(COMPOSE) --profile index down --remove-orphans
+	$(COMPOSE) run --rm --no-deps --user root --entrypoint sh postgres -c \
+		'rm -rf /var/lib/postgresql/data/..?* \
+			/var/lib/postgresql/data/.[!.]* \
+			/var/lib/postgresql/data/*'
 	$(COMPOSE) --profile index down -v --remove-orphans
 	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) TAG='$(TAG)' clean
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) TAG='$(TAG)' clean
