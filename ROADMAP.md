@@ -43,3 +43,18 @@ it would return nothing.
 `make index` rewrites every node on every run. Track file content hashes in
 `graph_nodes.metadata` and skip unchanged files, and delete nodes for files that
 disappeared from the tree.
+
+## 5. Use public registry for built images
+
+User have to build images each time. Better way to pull images from some
+public storage instead of.
+
+## 6. Multi-projects support
+
+In some cases we have to use multiple projects in context, e.g. code base, CI part and
+infrastructure deps, but now we could index only one project. Better way use
+coma separated project path and index all of them.
+
+## 7. Git hook for re-indexing
+
+Implement git-hook for run re-indexing for each commit.
