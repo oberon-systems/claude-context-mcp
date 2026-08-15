@@ -371,6 +371,10 @@ class YAMLParser(CodeParser):
             for node, _ in self.query.captures(tree.root_node)
         ]
 
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, Any]]:
+        """Return empty list of relations for YAML."""
+        return []
+
 
 def get_parser(file_path: str) -> CodeParser | None:
     """Return a parser for the file extension."""
