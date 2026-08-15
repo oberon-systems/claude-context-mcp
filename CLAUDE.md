@@ -37,7 +37,7 @@ Refer to `ROADMAP.md` or task tracking for current state.
 ### Project Directory Layout
 
 - `/init-db/` - Database schema initialization scripts (`01-init.sql`).
-- `/graphify/` - Python code-graph parser service (`process_graph.py`, `Dockerfile`, `requirements.txt`).
+- `/graphify/` - Python code-graph parser service (`src/graphify/` package, `Dockerfile`, `requirements.txt`).
 - `/mcp-server/` - TypeScript MCP Server (`src/index.ts`, `Dockerfile`, `package.json`, `tsconfig.json`).
 - `docker-compose.yml` - Container orchestration.
 - `.pre-commit-config.yaml` - Pre-commit rules configuration.
@@ -47,7 +47,7 @@ Refer to `ROADMAP.md` or task tracking for current state.
 
 1. Maintain root `.pre-commit-config.yaml` and `.cz.yaml` (`wyld-cz`).
 2. Finalize SQL schema in `init-db/01-init.sql` for node graphs, edge relationships, and vector embeddings.
-3. Implement Tree-sitter AST parsing in `graphify/process_graph.py` for multi-language support (TS, PY, GO, RS).
+3. Extend the Tree-sitter parsers in `graphify/src/graphify/parsers/` as new languages are needed.
 4. Extend MCP tools in `mcp-server/src/index.ts` to expose vector similarity search alongside graph queries.
 
 ---

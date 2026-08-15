@@ -276,6 +276,7 @@ config file. `make init` installs them; `make mcp install` does it on its own.
 ```text
 init-db/       schema initialization replayed by the postgres entrypoint
 graphify/      Python indexer, its image and its Makefile
+  src/graphify/  the indexer package, run as `python -m graphify`
 mcp-server/    TypeScript MCP server, its image and its Makefile
 scripts/       helper scripts invoked by pre-commit
 docker-compose.yaml

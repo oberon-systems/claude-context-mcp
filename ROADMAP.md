@@ -6,7 +6,8 @@ deliberately deferred work, in the order it should be picked up.
 
 ## 1. Tree-sitter AST parsing [COMPLETED]
 
-`graphify/process_graph.py` uses tree-sitter for TS, TSX, JS, PY, GO, RS, SH,
+The `graphify` package (`graphify/src/graphify/`) uses tree-sitter for TS, TSX,
+JS, PY, GO, RS, SH,
 MD, MAKE, DOCKERFILE, HCL/TF, YAML, TOML.
 
 - emits `function`, `method`, `class` and per-language entity nodes, scoped to
