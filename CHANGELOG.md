@@ -1,3 +1,13 @@
+## v0.2.1 (2026-08-15)
+
+### Bug Fixes
+
+- **make**: delete the database that clean promised to delete
+
+### Documentation
+
+- **readme**: correct what clean removes
+
 ## v0.2.0 (2026-08-15)
 
 ### Features
