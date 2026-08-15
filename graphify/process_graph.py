@@ -1,9 +1,15 @@
 """Build a coarse code graph from a mounted codebase and store it in PostgreSQL.
 
-Every source file becomes a `file` node. Every line that looks like an import
-becomes an `external_import` node plus an `imports` edge from the file to it.
-This is a line-level heuristic; the tree-sitter based AST pass is tracked in
-ROADMAP.md and will replace `extract_import` without changing the schema.
+Every indexed file becomes a `file` node. Every line of a source file that looks
+like an import becomes an `external_import` node plus an `imports` edge from the
+file to it. This is a line-level heuristic; the tree-sitter based AST pass is
+tracked in ROADMAP.md and will replace `extract_import` without changing the
+schema.
+
+Which files are walked is decided by the project itself: a `.ctxignore` and a
+`.ctxkeep` at the project root, both in gitignore syntax, replace the built-in
+defaults below. They are read from the mounted project on every run, so changing
+what a project indexes needs no image rebuild.
 """
 
 from __future__ import annotations
@@ -12,6 +18,7 @@ import logging
 import os
 from collections.abc import Iterator
 
+import pathspec
 import psycopg2
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
@@ -20,9 +27,13 @@ LOG = logging.getLogger("graphify")
 
 PROJECT_PATH = os.getenv("TARGET_PROJECT_PATH", "/project")
 
-# Directory names pruned from the walk. Matched on the basename, so a project
-# directory that merely contains one of these strings in its path is kept.
-IGNORED_DIRS = frozenset(
+IGNORE_FILE = ".ctxignore"
+KEEP_FILE = ".ctxkeep"
+
+# Directory names pruned from the walk when the project ships no .ctxignore.
+# Matched on the basename, so a project directory that merely contains one of
+# these strings in its path is kept.
+DEFAULT_IGNORED_DIRS = frozenset(
     {
         ".git",
         ".mypy_cache",
@@ -40,7 +51,8 @@ IGNORED_DIRS = frozenset(
     }
 )
 
-SOURCE_EXTENSIONS = (
+# Files that become nodes when the project ships no .ctxkeep.
+DEFAULT_SOURCE_EXTENSIONS = (
     ".ts",
     ".tsx",
     ".js",
@@ -51,6 +63,22 @@ SOURCE_EXTENSIONS = (
     ".go",
     ".rs",
     ".sql",
+)
+
+# Files whose lines are scanned for imports. Deliberately not configurable:
+# this is what `extract_import` can parse, not a matter of project taste. A
+# project that indexes its documentation through .ctxkeep must not have prose
+# mined for the word "import", which would fill the graph with nonsense nodes.
+IMPORT_EXTENSIONS = (
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".py",
+    ".go",
+    ".rs",
 )
 
 # graph_nodes.id is VARCHAR(255); leave headroom rather than let a long line
@@ -66,18 +94,80 @@ def get_db_connection() -> Connection:
     return psycopg2.connect(db_url)
 
 
+def load_spec(root_path: str, file_name: str) -> pathspec.PathSpec | None:
+    """Return the PathSpec held in `file_name`, or None when it says nothing.
+
+    Blank lines and `#` comments are dropped, so a file containing only those
+    counts as absent and the built-in default applies.
+    """
+    path = os.path.join(root_path, file_name)
+    if not os.path.isfile(path):
+        return None
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = [
+                line
+                for line in (raw.strip() for raw in handle)
+                if line and not line.startswith("#")
+            ]
+    except OSError:
+        LOG.exception("Failed to read %s, falling back to the defaults", file_name)
+        return None
+
+    if not lines:
+        return None
+
+    LOG.info("Using %s from the project (%d patterns)", file_name, len(lines))
+    return pathspec.PathSpec.from_lines("gitwildmatch", lines)
+
+
 def iter_source_files(root_path: str) -> Iterator[tuple[str, str]]:
-    """Yield (absolute path, path relative to root_path) for every source file."""
+    """Yield (absolute path, path relative to root_path) for every indexed file.
+
+    A project's .ctxignore and .ctxkeep replace the built-in lists outright
+    rather than adding to them, so a .ctxignore that forgets `.git/` really does
+    walk into it. That case is loud rather than silent, see below.
+    """
+    ignore_spec = load_spec(root_path, IGNORE_FILE)
+    keep_spec = load_spec(root_path, KEEP_FILE)
+
+    if ignore_spec is not None and not ignore_spec.match_file(".git/"):
+        LOG.warning(
+            "%s does not exclude .git/, so git internals will be indexed; "
+            "add a .git/ line unless that is intended",
+            IGNORE_FILE,
+        )
+
     for current_dir, dir_names, file_names in os.walk(root_path):
+        rel_dir = os.path.relpath(current_dir, root_path)
+        rel_dir = "" if rel_dir == "." else rel_dir
+
         # Slice assignment is what actually prunes the descent; `continue` on
         # the parent would still walk into the ignored subtree.
-        dir_names[:] = [name for name in dir_names if name not in IGNORED_DIRS]
+        if ignore_spec is None:
+            dir_names[:] = [
+                name for name in dir_names if name not in DEFAULT_IGNORED_DIRS
+            ]
+        else:
+            # The trailing slash is what lets a `build/` pattern match the
+            # directory rather than only a file of that name.
+            dir_names[:] = [
+                name
+                for name in dir_names
+                if not ignore_spec.match_file(f"{os.path.join(rel_dir, name)}/")
+            ]
 
         for file_name in sorted(file_names):
-            if not file_name.endswith(SOURCE_EXTENSIONS):
+            rel_path = os.path.join(rel_dir, file_name)
+            if keep_spec is None:
+                if not file_name.endswith(DEFAULT_SOURCE_EXTENSIONS):
+                    continue
+            elif not keep_spec.match_file(rel_path):
                 continue
-            full_path = os.path.join(current_dir, file_name)
-            yield full_path, os.path.relpath(full_path, root_path)
+            if ignore_spec is not None and ignore_spec.match_file(rel_path):
+                continue
+            yield os.path.join(current_dir, file_name), rel_path
 
 
 def extract_import(line: str) -> str | None:
@@ -106,6 +196,11 @@ def index_file(cursor: Cursor, full_path: str, rel_path: str) -> int:
     )
 
     edges = 0
+    # Documentation and configuration reach this point through .ctxkeep; only
+    # the languages `extract_import` understands are mined for imports.
+    if not rel_path.endswith(IMPORT_EXTENSIONS):
+        return edges
+
     with open(full_path, encoding="utf-8", errors="ignore") as handle:
         for line in handle:
             import_id = extract_import(line)
