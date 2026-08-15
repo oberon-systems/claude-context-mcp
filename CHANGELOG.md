@@ -1,3 +1,9 @@
+## v0.7.0 (2026-08-15)
+
+### Features
+
+- **graphify**: implement incremental indexing
+
 ## v0.6.0 (2026-08-15)
 
 ### Refactor
