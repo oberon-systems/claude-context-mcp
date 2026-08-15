@@ -1,3 +1,13 @@
+## v0.3.0 (2026-08-15)
+
+### Features
+
+- **make**: report stack and index status
+
+### Documentation
+
+- **ROADMAP.md**: extend reodmap for 7 planned points
+
 ## v0.2.1 (2026-08-15)
 
 ### Bug Fixes
