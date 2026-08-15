@@ -111,19 +111,21 @@ build/
 Makefile
 ```
 
-Each file **replaces** its built-in default rather than adding to it. That is
-what lets a project index file types this repository has never heard of, but it
-also means a `.ctxignore` omitting `.git/` really will walk into git's
-internals. The indexer warns when it spots that, and otherwise leaves the choice
-alone.
+`.ctxkeep` **replaces** the default file selection rather than adding to it,
+which is what lets a project index file types this repository has never heard
+of. `.ctxignore` is additive: its patterns are pruned on top of the built-in
+skip list (`.git`, `.venv`, `node_modules`, `dist`, `target` and friends), so a
+`.ctxignore` that forgets `.git/` still does not walk into git's internals.
 
-Without these files the built-in defaults apply, which is the behaviour of
-earlier releases: source extensions such as `.py`, `.ts` and `.go`, minus the
-usual `.git`, `.venv`, `node_modules` and friends.
+Without these files the built-in defaults apply: every extension a parser
+understands (`.py`, `.ts`, `.tsx`, `.js`, `.go`, `.rs`, `.sh`, `.md`, `.toml`,
+`.yaml`, `.tf`, `.hcl`, plus `Dockerfile` and `Makefile` by name) and `.sql`,
+which becomes a file node without being parsed. Files above 1 MB are skipped
+whichever way they were selected, since they are generated bundles in practice.
 
-Import edges are a separate matter. They are extracted only from the languages
-the parser understands, whatever `.ctxkeep` admits, so indexing documentation
-never mines prose for the word "import".
+Entity and import edges are a separate matter. They are extracted only from the
+languages the parser understands, whatever `.ctxkeep` admits, so indexing
+documentation never mines prose for the word "import".
 
 ## Make targets
 
@@ -171,7 +173,11 @@ rather than tearing down the client session.
 
 ### Automatic Summarization
 
-The system automatically extracts initial summaries for indexed files (Markdown, Code) during the indexing process (`make index`). These summaries are stored in the `graph_nodes` database table and can be accessed or updated via MCP tools.
+Indexing generates a summary for every file from its leading docstring, comment
+block or first heading, and stores it on the file node in `graph_nodes`. A
+summary written through `save_node_summary` is tagged `summary_source: manual`
+in the node metadata, and re-indexing leaves those alone; generated summaries
+are refreshed on every run.
 
 ### Persistent Project Planning
 
@@ -196,7 +202,8 @@ holds a database, and every connection is then refused with
 `password authentication failed`. Run `make clean` to rebuild the database
 around the new password.
 
-- `graph_nodes` - one row per file, import or (later) code entity
+- `graph_nodes` - one row per file, per code entity (`file_path::name`) and per
+  unresolved external import or symbol
 - `graph_edges` - typed relations between nodes, unique per
   `(source, target, relation)`
 - `code_embeddings` - `vector(1536)` chunks with an HNSW cosine index, not
