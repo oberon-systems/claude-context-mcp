@@ -99,9 +99,13 @@ ps:  ## Show the state of every service
 # MCP_PORT is read out of .env rather than from `$(COMPOSE) port`, which only
 # answers while the container runs and would leave the address unprintable in
 # exactly the case worth reporting.
+#
+# The service list goes through xargs rather than `tr`: compose prints a bare
+# newline when nothing runs, and a translated newline is a space, which is not
+# empty enough for the shell default to fire.
 status: require-env  ## Show whether the stack runs and whether anything uses it
 	@running=$$($(COMPOSE) ps --services --filter status=running 2> /dev/null \
-		| tr '\n' ' '); \
+		| xargs); \
 	echo "containers: $${running:-none running}"; \
 	port=$$(sed -n 's/^MCP_PORT=//p' .env | tail -1); \
 	port=$${port:-3000}; \
