@@ -157,13 +157,25 @@ make mcp help
 
 ## MCP tools
 
-| Tool                       | Arguments                 | Returns                                                       |
-| -------------------------- | ------------------------- | ------------------------------------------------------------- |
-| `get_code_graph_neighbors` | `node_id`                 | Incoming and outgoing edges of a node, with the relation type |
-| `search_code_nodes`        | `query`, optional `limit` | Nodes whose name or id matches the substring                  |
+| Tool                       | Arguments                                        | Returns                                                       |
+| -------------------------- | ------------------------------------------------ | ------------------------------------------------------------- |
+| `get_code_graph_neighbors` | `node_id`                                        | Incoming and outgoing edges of a node, with the relation type |
+| `search_code_nodes`        | `query`, optional `limit`                        | Nodes whose name or id matches the substring                  |
+| `save_node_summary`        | `node_id`, `summary`                             | Saves or updates a summary for a specific node                |
+| `get_node_summary`         | `node_id`                                        | Retrieves summary, file path, and type for a node             |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `status` | Creates or updates a persistent project plan                  |
+| `get_plans`                | optional `status`                                | Retrieves project plans filtered by status                    |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
+
+### Automatic Summarization
+
+The system automatically extracts initial summaries for indexed files (Markdown, Code) during the indexing process (`make index`). These summaries are stored in the `graph_nodes` database table and can be accessed or updated via MCP tools.
+
+### Persistent Project Planning
+
+The system includes dedicated support for tracking project execution roadmaps. Plans are stored in the `project_plans` table and can be managed directly by an AI client using the `save_plan` and `get_plans` tools.
 
 ## Database schema
 
