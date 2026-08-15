@@ -1,5 +1,8 @@
 target-version = "py311"
 line-length = 88
+# The indexer lives under a src root, so isort is told where the first-party
+# `graphify` package is. Setting this replaces the default [".", "src"].
+src = [".", "src", "graphify/src"]
 
 [lint]
 select = [

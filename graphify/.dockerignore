@@ -3,3 +3,6 @@
 __pycache__
 *.pyc
 Makefile
+.pytest_cache
+requirements-dev.txt
+tests
