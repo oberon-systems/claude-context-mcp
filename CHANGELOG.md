@@ -1,3 +1,13 @@
+## v0.6.0 (2026-08-15)
+
+### Refactor
+
+- **graphify**: split the indexer into a package under src
+
+### Documentation
+
+- **graphify**: point the docs at the package layout
+
 ## v0.5.3 (2026-08-15)
 
 ### Features
