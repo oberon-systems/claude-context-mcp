@@ -4,22 +4,13 @@ Current state: the stack builds, starts, indexes a mounted codebase into a
 file/import graph, and serves that graph to Claude CLI over SSE. What follows is
 deliberately deferred work, in the order it should be picked up.
 
-## 1. Tree-sitter AST parsing
+## 1. Tree-sitter AST parsing [COMPLETED]
 
-`graphify/process_graph.py` currently detects imports by matching lines that
-contain an `import` keyword or a `require(` call. That is enough to link files
-to their dependencies, but it cannot see functions, classes or call sites.
+`graphify/process_graph.py` now uses tree-sitter for TS, PY, GO, RS, SH, MD, MAKE, DOCKERFILE, HCL, YAML, TOML.
 
-Replace `extract_import` with a tree-sitter pass over TS, PY, GO and RS:
-
-- emit `function`, `class` and `method` nodes with their file path and line span
-- emit `calls` and `inherits` edges alongside the existing `imports` edges
-- resolve relative import targets to the file nodes they point at, instead of
-  storing the raw import line as a node id
-
-`tree-sitter` and `networkx` are already pinned in
-`graphify/requirements.txt` for this. The schema in `init-db/01-init.sql`
-already accommodates the extra node and relation types.
+- emit `function`, `class`, `method` nodes
+- emit `calls`, `inherits` edges
+- resolve relative import targets to file nodes
 
 ## 2. Embedding generation
 
@@ -58,3 +49,10 @@ coma separated project path and index all of them.
 ## 7. Git hook for re-indexing
 
 Implement git-hook for run re-indexing for each commit.
+
+## 8. Use some CPU-Driven local model for generate summary
+
+We use dump analyst, better to use some local model
+just for this, for reduce token usage.
+
+Model should be part of compose deployment.
