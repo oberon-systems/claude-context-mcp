@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     type VARCHAR(50) NOT NULL,
     file_path TEXT,
     content TEXT,
+    summary TEXT,
     metadata JSONB DEFAULT '{}'::JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -31,6 +32,16 @@ CREATE TABLE IF NOT EXISTS code_embeddings (
     -- 1536 dimensions, matching OpenAI / Cohere / Nomic embedding models.
     embedding VECTOR(1536),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS project_plans (
+    id VARCHAR(255) PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    content TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'active', -- e.g. active, completed, archived
+    metadata JSONB DEFAULT '{}'::JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes (type);

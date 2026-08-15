@@ -184,15 +184,199 @@ def extract_import(line: str) -> str | None:
     return normalized[:MAX_NODE_ID_LENGTH] or None
 
 
+def extract_summary(file_path: str, content: str) -> str:
+    """Extract an initial summary from a file depending on its type."""
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".md":
+        headers = []
+        first_paragraph_lines = []
+        in_code_block = False
+        found_paragraph = False
+
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                continue
+
+            if stripped.startswith("#"):
+                headers.append(stripped)
+            elif stripped:
+                if not found_paragraph:
+                    # Fix E501: split long condition for Markdown paragraph detection
+                    is_excluded = (
+                        stripped.startswith("<!--")
+                        or stripped.startswith("-->")
+                        or stripped.startswith("|")
+                        or stripped.startswith("-")
+                        or stripped.startswith("*")
+                    )
+                    if not is_excluded:
+                        first_paragraph_lines.append(stripped)
+                        found_paragraph = True
+                elif len(first_paragraph_lines) > 0:
+                    first_paragraph_lines.append(stripped)
+            elif found_paragraph:
+                break
+
+        parts = []
+        if headers:
+            parts.append("\n".join(headers))
+        if first_paragraph_lines:
+            parts.append("\n".join(first_paragraph_lines))
+        summary = "\n\n".join(parts)
+        return summary
+
+    # Code files (.py, .ts, .tsx, .js, .go, .rs, .sql, etc.)
+    lines = content.splitlines()
+    summary_parts = []
+
+    # 1. Try to extract top-level comments / docstrings
+    if ext == ".py":
+        # Python docstring extraction
+        docstring_lines = []
+        in_docstring = False
+        quote_char = None
+        for line in lines[:50]:
+            stripped = line.strip()
+            if not in_docstring:
+                if '"""' in stripped:
+                    in_docstring = True
+                    quote_char = '"""'
+                    parts = stripped.split('"""')
+                    if len(parts) >= 3:
+                        docstring_lines.append(parts[1])
+                        break
+                    else:
+                        docstring_lines.append(stripped.replace('"""', ""))
+                elif "'''" in stripped:
+                    in_docstring = True
+                    quote_char = "'''"
+                    parts = stripped.split("'''")
+                    if len(parts) >= 3:
+                        docstring_lines.append(parts[1])
+                        break
+                    else:
+                        docstring_lines.append(stripped.replace("'''", ""))
+                elif stripped.startswith("#"):
+                    docstring_lines.append(stripped.lstrip("#").strip())
+                elif stripped:
+                    if not docstring_lines:
+                        break
+                    else:
+                        break
+            else:
+                if quote_char in line:
+                    docstring_lines.append(line.split(quote_char)[0])
+                    break
+                else:
+                    docstring_lines.append(line)
+        if docstring_lines:
+            summary_parts.append("\n".join(docstring_lines).strip())
+
+    else:
+        # JS/TS/Go/Rust/C block and line comments
+        comment_lines = []
+        in_block_comment = False
+        for line in lines[:50]:
+            stripped = line.strip()
+            if not in_block_comment:
+                if stripped.startswith("/*"):
+                    in_block_comment = True
+                    if "*/" in stripped:
+                        in_block_comment = False
+                        comment_lines.append(
+                            stripped.replace("/*", "").replace("*/", "").strip()
+                        )
+                    else:
+                        comment_lines.append(stripped.replace("/*", "").strip())
+                elif stripped.startswith("//") or stripped.startswith("--"):
+                    comment_lines.append(stripped.lstrip("/-").strip())
+                elif stripped:
+                    break
+            else:
+                if "*/" in stripped:
+                    in_block_comment = False
+                    comment_lines.append(stripped.replace("*/", "").strip())
+                    break
+                else:
+                    cleaned = stripped.lstrip("*").strip()
+                    comment_lines.append(cleaned)
+
+        if comment_lines:
+            summary_parts.append("\n".join(comment_lines).strip())
+
+        # 2. Extract main exports/function signatures
+        signatures = []
+        for line in lines[:100]:
+            stripped = line.strip()
+            if ext == ".py":
+                if line.startswith(("def ", "class ")):
+                    signatures.append(stripped.rstrip(":"))
+            elif ext == ".go":
+                if line.startswith(("func ", "type ")):
+                    signatures.append(stripped.rstrip("{"))
+            elif ext == ".rs":
+                if line.startswith(
+                    ("pub fn", "fn ", "pub struct", "struct ", "pub enum", "enum ")
+                ):
+                    signatures.append(stripped.rstrip("{").strip())
+            elif ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
+                export_keywords = (
+                    "export ",
+                    "function ",
+                    "class ",
+                    "interface ",
+                    "type ",
+                )
+                is_export = (
+                    line.startswith(export_keywords)
+                    or "export function " in line
+                    or "export class " in line
+                    or "export const " in line
+                )
+                if is_export:
+                    signatures.append(stripped.rstrip("{").strip())
+
+        if signatures:
+            if summary_parts:
+                summary_parts.append("Signatures:\n" + "\n".join(signatures[:5]))
+            else:
+                summary_parts.append("\n".join(signatures[:8]))
+
+        if not summary_parts:
+            fallback_lines = [
+                line_item.strip() for line_item in lines[:5] if line_item.strip()
+            ]
+            summary_parts.append("\n".join(fallback_lines))
+
+    summary = "\n\n".join(summary_parts)
+    return summary[:500] if len(summary) > 500 else summary
+
+
 def index_file(cursor: Cursor, full_path: str, rel_path: str) -> int:
     """Insert the file node and its import edges. Returns the edge count."""
+    content = ""
+    try:
+        with open(full_path, encoding="utf-8", errors="ignore") as handle:
+            content = handle.read()
+    except OSError:
+        LOG.exception("Failed to read %s for summary extraction", rel_path)
+
+    summary = extract_summary(rel_path, content)
+
     cursor.execute(
         """
-        INSERT INTO graph_nodes (id, name, type, file_path)
-        VALUES (%s, %s, 'file', %s)
-        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;
+        INSERT INTO graph_nodes (id, name, type, file_path, summary)
+        VALUES (%s, %s, 'file', %s, %s)
+        ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            summary = EXCLUDED.summary;
         """,
-        (rel_path, os.path.basename(rel_path), rel_path),
+        (rel_path, os.path.basename(rel_path), rel_path, summary),
     )
 
     edges = 0
@@ -201,29 +385,28 @@ def index_file(cursor: Cursor, full_path: str, rel_path: str) -> int:
     if not rel_path.endswith(IMPORT_EXTENSIONS):
         return edges
 
-    with open(full_path, encoding="utf-8", errors="ignore") as handle:
-        for line in handle:
-            import_id = extract_import(line)
-            if import_id is None:
-                continue
+    for line in content.splitlines():
+        import_id = extract_import(line)
+        if import_id is None:
+            continue
 
-            cursor.execute(
-                """
-                INSERT INTO graph_nodes (id, name, type)
-                VALUES (%s, 'import', 'external_import')
-                ON CONFLICT (id) DO NOTHING;
-                """,
-                (import_id,),
-            )
-            cursor.execute(
-                """
-                INSERT INTO graph_edges (source_id, target_id, relation_type)
-                VALUES (%s, %s, 'imports')
-                ON CONFLICT DO NOTHING;
-                """,
-                (rel_path, import_id),
-            )
-            edges += 1
+        cursor.execute(
+            """
+            INSERT INTO graph_nodes (id, name, type)
+            VALUES (%s, 'import', 'external_import')
+            ON CONFLICT (id) DO NOTHING;
+            """,
+            (import_id,),
+        )
+        cursor.execute(
+            """
+            INSERT INTO graph_edges (source_id, target_id, relation_type)
+            VALUES (%s, %s, 'imports')
+            ON CONFLICT DO NOTHING;
+            """,
+            (rel_path, import_id),
+        )
+        edges += 1
 
     return edges
 

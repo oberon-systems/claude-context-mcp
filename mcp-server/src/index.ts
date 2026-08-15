@@ -70,6 +70,80 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["query"],
         },
       },
+      {
+        name: "save_node_summary",
+        description:
+          "Save or update a summary for a specific node in the code graph",
+        inputSchema: {
+          type: "object",
+          properties: {
+            node_id: {
+              type: "string",
+              description: "The unique identifier of the node (e.g. file path)",
+            },
+            summary: {
+              type: "string",
+              description: "The summary content for the node",
+            },
+          },
+          required: ["node_id", "summary"],
+        },
+      },
+      {
+        name: "get_node_summary",
+        description:
+          "Retrieve the summary, file path, and type for a specific node",
+        inputSchema: {
+          type: "object",
+          properties: {
+            node_id: {
+              type: "string",
+              description: "The unique identifier of the node (e.g. file path)",
+            },
+          },
+          required: ["node_id"],
+        },
+      },
+      {
+        name: "save_plan",
+        description: "Create or update a persistent project execution plan",
+        inputSchema: {
+          type: "object",
+          properties: {
+            plan_id: {
+              type: "string",
+              description: "Unique identifier for the project plan",
+            },
+            title: {
+              type: "string",
+              description: "Title of the project plan",
+            },
+            content: {
+              type: "string",
+              description: "Detailed description/roadmap of the plan",
+            },
+            status: {
+              type: "string",
+              description:
+                "Status of the plan (e.g., active, completed, archived)",
+            },
+          },
+          required: ["plan_id", "title", "content"],
+        },
+      },
+      {
+        name: "get_plans",
+        description: "Retrieve project execution plans filtered by status",
+        inputSchema: {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              description: "Filter plans by status (default 'active')",
+            },
+          },
+        },
+      },
     ],
   };
 });
@@ -129,6 +203,98 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           ORDER BY id
           LIMIT $2`,
         [query, readLimit(args)],
+      );
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+      };
+    }
+
+    if (name === "save_node_summary") {
+      const nodeId = requireString(args, "node_id");
+      const summary = requireString(args, "summary");
+      const nameVal = nodeId.split("/").pop() || nodeId;
+      const typeVal = "file";
+
+      await dbPool.query(
+        `INSERT INTO graph_nodes (id, name, type, summary)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (id) DO UPDATE SET summary = EXCLUDED.summary`,
+        [nodeId, nameVal, typeVal, summary],
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Summary successfully saved for node: ${nodeId}`,
+          },
+        ],
+      };
+    }
+
+    if (name === "get_node_summary") {
+      const nodeId = requireString(args, "node_id");
+      const res = await dbPool.query(
+        `SELECT id, summary, file_path, type
+           FROM graph_nodes
+          WHERE id = $1`,
+        [nodeId],
+      );
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+      };
+    }
+
+    if (name === "save_plan") {
+      const planId = requireString(args, "plan_id");
+      const title = requireString(args, "title");
+      const content = requireString(args, "content");
+      let status = "active";
+      if (args !== undefined && args.status !== undefined) {
+        if (typeof args.status !== "string") {
+          throw new Error('Argument "status" must be a string');
+        }
+        status = args.status;
+      }
+
+      await dbPool.query(
+        `INSERT INTO project_plans (id, title, content, status, updated_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           status = EXCLUDED.status,
+           updated_at = CURRENT_TIMESTAMP`,
+        [planId, title, content, status],
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Plan ${planId} successfully saved.`,
+          },
+        ],
+      };
+    }
+
+    if (name === "get_plans") {
+      let status = "active";
+      if (args !== undefined && args.status !== undefined) {
+        if (typeof args.status !== "string") {
+          throw new Error('Argument "status" must be a string');
+        }
+        status = args.status;
+      }
+
+      const res = await dbPool.query(
+        `SELECT id, title, content, status, metadata, created_at, updated_at
+           FROM project_plans
+          WHERE status = $1
+          ORDER BY updated_at DESC`,
+        [status],
       );
 
       return {
