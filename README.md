@@ -138,7 +138,7 @@ make down        stop the stack, keeping the database volume
 make index       run the indexing job against PROJECT_PATH
 make logs        follow the service logs
 make psql        open a psql session against the context database
-make clean       remove containers, the database volume and the built images
+make clean       remove containers, the database directory and the built images
 ```
 
 Service Makefiles are reachable as subcommands, and work standalone too:
@@ -163,7 +163,20 @@ rather than tearing down the client session.
 
 `init-db/01-init.sql` is replayed by the PostgreSQL entrypoint **only when the
 data directory is empty**. After changing the schema, either apply the change by
-hand or run `make clean` to drop the volume and start over.
+hand or run `make clean` to empty `DATA_DIR` and start over. That target asks
+for confirmation first, since it destroys the index; `make clean FORCE=1` skips
+the prompt for scripted use.
+
+`DATA_DIR` is emptied from inside the postgres service rather than from the
+host: its files belong to the container's postgres uid, so a host-side `rm`
+fails on permissions.
+
+The database is a bind mount rather than a volume, so `docker compose down -v`
+does not remove it. That is also why a regenerated `POSTGRES_PASSWORD` cannot be
+applied on its own: the entrypoint skips initialisation while the directory
+holds a database, and every connection is then refused with
+`password authentication failed`. Run `make clean` to rebuild the database
+around the new password.
 
 - `graph_nodes` - one row per file, import or (later) code entity
 - `graph_edges` - typed relations between nodes, unique per
