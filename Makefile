@@ -24,15 +24,15 @@ SHELL := /bin/bash
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
 SUBS := graphify mcp
-ROOT_GOALS := help init shell lint check build up down restart logs ps index \
-	psql clean $(SUBS)
+ROOT_GOALS := help init shell lint check build up down restart logs ps status \
+	index psql clean $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init shell lint check build up down restart logs ps index psql \
-	clean graphify mcp require-venv require-env
+.PHONY: help init shell lint check build up down restart logs ps status index \
+	psql clean graphify mcp require-venv require-env
 
 help:  ## Show the current version and the available targets
 	@echo "$(PROJECT) $(VERSION)"
@@ -89,6 +89,28 @@ logs:  ## Follow the logs of the running services
 
 ps:  ## Show the state of every service
 	$(COMPOSE) ps
+
+# Answers two questions `ps` cannot: is the server reachable, and is anything
+# actually using it. `sessions` in the health payload counts connected MCP
+# clients, so zero there means no client attached however healthy the containers
+# look. Every step is best-effort: a stopped stack reports what is missing
+# rather than failing the target.
+#
+# MCP_PORT is read out of .env rather than from `$(COMPOSE) port`, which only
+# answers while the container runs and would leave the address unprintable in
+# exactly the case worth reporting.
+status: require-env  ## Show whether the stack runs and whether anything uses it
+	@running=$$($(COMPOSE) ps --services --filter status=running 2> /dev/null \
+		| tr '\n' ' '); \
+	echo "containers: $${running:-none running}"; \
+	port=$$(sed -n 's/^MCP_PORT=//p' .env | tail -1); \
+	port=$${port:-3000}; \
+	health=$$(curl -sS localhost:$$port/health 2> /dev/null); \
+	echo "health:     $${health:-unreachable on localhost:$$port}"; \
+	nodes=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
+		-d "$${POSTGRES_DB:-context}" -tAc 'select count(*) from graph_nodes' \
+		2> /dev/null | tr -d '\r'); \
+	echo "graph:      $${nodes:-unavailable} nodes"
 
 # graphify runs to completion and exits, so `run --rm` rather than `up`.
 index: require-env  ## Index PROJECT_PATH into the graph (one-shot job)

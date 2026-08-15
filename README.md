@@ -137,9 +137,15 @@ make up          start postgres and mcp-server
 make down        stop the stack, keeping the database volume
 make index       run the indexing job against PROJECT_PATH
 make logs        follow the service logs
+make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database
 make clean       remove containers, the database directory and the built images
 ```
+
+`make status` prints the running services, the `/health` payload and the number of
+indexed nodes. The `sessions` field in that payload is the count of connected MCP
+clients: a healthy stack reporting `0` means the client never attached, which is a
+different problem from the stack being down.
 
 Service Makefiles are reachable as subcommands, and work standalone too:
 
