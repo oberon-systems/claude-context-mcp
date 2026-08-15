@@ -1,7 +1,16 @@
-psycopg2-binary==2.9.9
-# Parses the gitignore syntax of .ctxignore and .ctxkeep.
-pathspec==0.12.1
-# Reserved for the tree-sitter AST pass tracked in ROADMAP.md. Not imported by
-# process_graph.py yet.
-tree-sitter==0.21.3
-networkx==3.2.1
+pathspec
+psycopg2-binary
+tree-sitter
+tree-sitter-python
+tree-sitter-typescript
+tree-sitter-javascript
+tree-sitter-go
+tree-sitter-rust
+tree-sitter-bash
+tree-sitter-markdown
+tree-sitter-make
+tree-sitter-dockerfile
+tree-sitter-hcl
+tree-sitter-yaml
+tree-sitter-toml
+networkx

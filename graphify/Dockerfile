@@ -6,6 +6,12 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Install build-essential for compiling tree-sitter bindings.
+# hadolint ignore=DL3008
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # psycopg2-binary ships a wheel with libpq statically linked, so no apt layer
 # and no compiler are needed here.
 COPY requirements.txt .

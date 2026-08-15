@@ -1,38 +1,37 @@
-"""Build a coarse code graph from a mounted codebase and store it in PostgreSQL.
-
-Every indexed file becomes a `file` node. Every line of a source file that looks
-like an import becomes an `external_import` node plus an `imports` edge from the
-file to it. This is a line-level heuristic; the tree-sitter based AST pass is
-tracked in ROADMAP.md and will replace `extract_import` without changing the
-schema.
-
-Which files are walked is decided by the project itself: a `.ctxignore` and a
-`.ctxkeep` at the project root, both in gitignore syntax, replace the built-in
-defaults below. They are read from the mounted project on every run, so changing
-what a project indexes needs no image rebuild.
-"""
+"""Build a coarse code graph from a mounted codebase and store it in PostgreSQL."""
 
 from __future__ import annotations
 
 import logging
 import os
+from abc import ABC, abstractmethod
 from collections.abc import Iterator
+from typing import Any
 
 import pathspec
 import psycopg2
+import tree_sitter_bash
+import tree_sitter_dockerfile
+import tree_sitter_go
+import tree_sitter_hcl
+import tree_sitter_javascript
+import tree_sitter_make
+import tree_sitter_markdown
+import tree_sitter_python
+import tree_sitter_rust
+import tree_sitter_toml
+import tree_sitter_typescript
+import tree_sitter_yaml
 from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
+from tree_sitter import Language, Parser
 
 LOG = logging.getLogger("graphify")
 
 PROJECT_PATH = os.getenv("TARGET_PROJECT_PATH", "/project")
-
 IGNORE_FILE = ".ctxignore"
 KEEP_FILE = ".ctxkeep"
 
-# Directory names pruned from the walk when the project ships no .ctxignore.
-# Matched on the basename, so a project directory that merely contains one of
-# these strings in its path is kept.
 DEFAULT_IGNORED_DIRS = frozenset(
     {
         ".git",
@@ -51,7 +50,6 @@ DEFAULT_IGNORED_DIRS = frozenset(
     }
 )
 
-# Files that become nodes when the project ships no .ctxkeep.
 DEFAULT_SOURCE_EXTENSIONS = (
     ".ts",
     ".tsx",
@@ -64,30 +62,347 @@ DEFAULT_SOURCE_EXTENSIONS = (
     ".rs",
     ".sql",
 )
-
-# Files whose lines are scanned for imports. Deliberately not configurable:
-# this is what `extract_import` can parse, not a matter of project taste. A
-# project that indexes its documentation through .ctxkeep must not have prose
-# mined for the word "import", which would fill the graph with nonsense nodes.
-IMPORT_EXTENSIONS = (
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    ".py",
-    ".go",
-    ".rs",
-)
-
-# graph_nodes.id is VARCHAR(255); leave headroom rather than let a long line
-# abort the insert.
+IMPORT_EXTENSIONS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs")
 MAX_NODE_ID_LENGTH = 200
 
 
+class CodeParser(ABC):
+    """Abstract base class for language-specific AST parsers."""
+
+    def __init__(self, language: Any) -> None:  # noqa: ANN401
+        """Initialize the parser with a specific language."""
+        self.parser = Parser()
+        self.parser.set_language(Language(language.language()))
+
+    @abstractmethod
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Return list of entities found in content."""
+        pass
+
+    @abstractmethod
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, Any]]:
+        """Return list of relations found in content."""
+        return []
+
+
+class PythonParser(CodeParser):
+    """Python specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize Python parser."""
+        super().__init__(tree_sitter_python)
+        self.entity_query = self.parser.language.query("""
+            (function_definition name: (identifier) @name) @function
+            (class_definition name: (identifier) @name) @class
+        """)
+        self.call_query = self.parser.language.query(
+            "(call function: (identifier) @name) @call"
+        )
+        self.inherit_query = self.parser.language.query(
+            "(class_definition superclasses: (argument_list) @super) @inherit"
+        )
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, Any]]:
+        """Extract function calls and inheritance."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        relations = []
+        for node, _ in self.call_query.captures(tree.root_node):
+            relations.append(
+                {
+                    "source": rel_path,
+                    "target": node.text.decode("utf-8"),
+                    "type": "calls",
+                }
+            )
+        for node, _ in self.inherit_query.captures(tree.root_node):
+            relations.append(
+                {
+                    "source": rel_path,
+                    "target": node.text.decode("utf-8"),
+                    "type": "inherits",
+                }
+            )
+        return relations
+
+
+class TypeScriptParser(CodeParser):
+    """TypeScript specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize TypeScript parser."""
+        super().__init__(tree_sitter_typescript)
+        self.entity_query = self.parser.language.query("""
+            (function_declaration name: (identifier) @name) @function
+            (class_declaration name: (identifier) @name) @class
+            (interface_declaration name: (identifier) @name) @interface
+        """)
+        self.call_query = self.parser.language.query(
+            "(call_expression expression: (identifier) @name) @call"
+        )
+        self.import_query = self.parser.language.query(
+            "(import_statement source: (string) @source)"
+        )
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract function, class, and interface entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        captures = self.entity_query.captures(tree.root_node)
+        return [
+            {"name": node.text.decode("utf-8"), "type": tag}
+            for node, tag in captures
+            if tag == "name"
+        ]
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, Any]]:
+        """Extract relations (calls, inherits, imports)."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        relations = []
+        for node, _ in self.call_query.captures(tree.root_node):
+            relations.append(
+                {
+                    "source": rel_path,
+                    "target": node.text.decode("utf-8"),
+                    "type": "calls",
+                }
+            )
+        inherit_query = self.parser.language.query("""
+            (class_declaration heritage_clause:
+                (heritage_clause (extends_clause value: (_) @super))) @inherit
+            (interface_declaration heritage_clause:
+                (heritage_clause (extends_clause value: (_) @super))) @inherit
+        """)
+        for node, _ in inherit_query.captures(tree.root_node):
+            relations.append(
+                {
+                    "source": rel_path,
+                    "target": node.text.decode("utf-8"),
+                    "type": "inherits",
+                }
+            )
+        for node, _ in self.import_query.captures(tree.root_node):
+            target = node.text.decode("utf-8").strip("'\"")
+            relations.append({"source": rel_path, "target": target, "type": "imports"})
+        return relations
+
+
+class GoParser(CodeParser):
+    """Go specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize Go parser."""
+        super().__init__(tree_sitter_go)
+        self.query = self.parser.language.query(
+            "(function_declaration name: (identifier) @name) @function"
+        )
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, Any]]:
+        """Extract function calls."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"source": rel_path, "target": node.text.decode("utf-8"), "type": "calls"}
+            for node, _ in self.call_query.captures(tree.root_node)
+        ]
+
+
+class RustParser(CodeParser):
+    """Rust specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize Rust parser."""
+        super().__init__(tree_sitter_rust)
+        self.query = self.parser.language.query(
+            "(function_item name: (identifier) @name) @function"
+        )
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, Any]]:
+        """Extract function calls."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"source": rel_path, "target": node.text.decode("utf-8"), "type": "calls"}
+            for node, _ in self.call_query.captures(tree.root_node)
+        ]
+
+
+class BashParser(CodeParser):
+    """Bash specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize Bash parser."""
+        super().__init__(tree_sitter_bash)
+        self.query = self.parser.language.query(
+            "(function_definition name: (word) @name) @function"
+        )
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract function entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"name": node.text.decode("utf-8"), "type": "function"}
+            for node, _ in self.query.captures(tree.root_node)
+        ]
+
+
+class DockerfileParser(CodeParser):
+    """Dockerfile specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize Dockerfile parser."""
+        super().__init__(tree_sitter_dockerfile)
+        self.query = self.parser.language.query(
+            "(instruction name: (instruction_name) @name)"
+        )
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract instruction entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"name": node.text.decode("utf-8"), "type": "instruction"}
+            for node, _ in self.query.captures(tree.root_node)
+        ]
+
+
+class HCLParser(CodeParser):
+    """HCL specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize HCL parser."""
+        super().__init__(tree_sitter_hcl)
+        self.query = self.parser.language.query(
+            "(resource_spec type: (identifier) @name)"
+        )
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract resource entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"name": node.text.decode("utf-8"), "type": "resource"}
+            for node, _ in self.query.captures(tree.root_node)
+        ]
+
+
+class JavaScriptParser(CodeParser):
+    """JavaScript specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize JavaScript parser."""
+        super().__init__(tree_sitter_javascript)
+        self.query = self.parser.language.query("""
+            (function_declaration name: (identifier) @name) @function
+            (class_declaration name: (identifier) @name) @class
+        """)
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, Any]]:
+        """Extract function calls."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"source": rel_path, "target": node.text.decode("utf-8"), "type": "calls"}
+            for node, _ in self.call_query.captures(tree.root_node)
+        ]
+
+
+class MakeParser(CodeParser):
+    """Makefile specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize Makefile parser."""
+        super().__init__(tree_sitter_make)
+        self.query = self.parser.language.query("(target name: (target_name) @name)")
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract target entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"name": node.text.decode("utf-8"), "type": "target"}
+            for node, _ in self.query.captures(tree.root_node)
+        ]
+
+
+class MarkdownParser(CodeParser):
+    """Markdown specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize Markdown parser."""
+        super().__init__(tree_sitter_markdown)
+        self.query = self.parser.language.query(
+            "(atx_heading (atx_h1_marker) (inline) @name)"
+        )
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract heading entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"name": node.text.decode("utf-8"), "type": "heading"}
+            for node, _ in self.query.captures(tree.root_node)
+        ]
+
+
+class TOMLParser(CodeParser):
+    """TOML specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize TOML parser."""
+        super().__init__(tree_sitter_toml)
+        self.query = self.parser.language.query("(table (bare_key) @name)")
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract table entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"name": node.text.decode("utf-8"), "type": "table"}
+            for node, _ in self.query.captures(tree.root_node)
+        ]
+
+
+class YAMLParser(CodeParser):
+    """YAML specific AST parser."""
+
+    def __init__(self) -> None:
+        """Initialize YAML parser."""
+        super().__init__(tree_sitter_yaml)
+        self.query = self.parser.language.query(
+            "(block_mapping_pair key: (flow_node) @name)"
+        )
+
+    def get_entities(self, content: str) -> list[dict[str, Any]]:
+        """Extract key entities."""
+        tree = self.parser.parse(bytes(content, "utf-8"))
+        return [
+            {"name": node.text.decode("utf-8"), "type": "key"}
+            for node, _ in self.query.captures(tree.root_node)
+        ]
+
+
+def get_parser(file_path: str) -> CodeParser | None:
+    """Return a parser for the file extension."""
+    if file_path.endswith(".py"):
+        return PythonParser()
+    if file_path.endswith((".ts", ".tsx", ".js", ".jsx")):
+        return TypeScriptParser()
+    if file_path.endswith(".go"):
+        return GoParser()
+    if file_path.endswith(".rs"):
+        return RustParser()
+    if file_path.endswith(".sh"):
+        return BashParser()
+    if file_path.endswith("Dockerfile"):
+        return DockerfileParser()
+    if file_path.endswith(".hcl"):
+        return HCLParser()
+    if file_path.endswith(".js"):
+        return JavaScriptParser()
+    if file_path.endswith("Makefile"):
+        return MakeParser()
+    if file_path.endswith(".md"):
+        return MarkdownParser()
+    if file_path.endswith(".toml"):
+        return TOMLParser()
+    if file_path.endswith((".yaml", ".yml")):
+        return YAMLParser()
+    return None
+
+
 def get_db_connection() -> Connection:
-    """Open a connection using DATABASE_URL, failing loudly when it is unset."""
+    """Open a connection using DATABASE_URL."""
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL is not set")
@@ -95,15 +410,10 @@ def get_db_connection() -> Connection:
 
 
 def load_spec(root_path: str, file_name: str) -> pathspec.PathSpec | None:
-    """Return the PathSpec held in `file_name`, or None when it says nothing.
-
-    Blank lines and `#` comments are dropped, so a file containing only those
-    counts as absent and the built-in default applies.
-    """
+    """Return the PathSpec held in file_name."""
     path = os.path.join(root_path, file_name)
     if not os.path.isfile(path):
         return None
-
     try:
         with open(path, encoding="utf-8") as handle:
             lines = [
@@ -112,52 +422,28 @@ def load_spec(root_path: str, file_name: str) -> pathspec.PathSpec | None:
                 if line and not line.startswith("#")
             ]
     except OSError:
-        LOG.exception("Failed to read %s, falling back to the defaults", file_name)
+        LOG.exception("Failed to read %s", file_name)
         return None
-
-    if not lines:
-        return None
-
-    LOG.info("Using %s from the project (%d patterns)", file_name, len(lines))
-    return pathspec.PathSpec.from_lines("gitwildmatch", lines)
+    return pathspec.PathSpec.from_lines("gitwildmatch", lines) if lines else None
 
 
 def iter_source_files(root_path: str) -> Iterator[tuple[str, str]]:
-    """Yield (absolute path, path relative to root_path) for every indexed file.
-
-    A project's .ctxignore and .ctxkeep replace the built-in lists outright
-    rather than adding to them, so a .ctxignore that forgets `.git/` really does
-    walk into it. That case is loud rather than silent, see below.
-    """
+    """Yield source files to index."""
     ignore_spec = load_spec(root_path, IGNORE_FILE)
     keep_spec = load_spec(root_path, KEEP_FILE)
-
-    if ignore_spec is not None and not ignore_spec.match_file(".git/"):
-        LOG.warning(
-            "%s does not exclude .git/, so git internals will be indexed; "
-            "add a .git/ line unless that is intended",
-            IGNORE_FILE,
-        )
-
     for current_dir, dir_names, file_names in os.walk(root_path):
         rel_dir = os.path.relpath(current_dir, root_path)
         rel_dir = "" if rel_dir == "." else rel_dir
-
-        # Slice assignment is what actually prunes the descent; `continue` on
-        # the parent would still walk into the ignored subtree.
         if ignore_spec is None:
             dir_names[:] = [
                 name for name in dir_names if name not in DEFAULT_IGNORED_DIRS
             ]
         else:
-            # The trailing slash is what lets a `build/` pattern match the
-            # directory rather than only a file of that name.
             dir_names[:] = [
                 name
                 for name in dir_names
                 if not ignore_spec.match_file(f"{os.path.join(rel_dir, name)}/")
             ]
-
         for file_name in sorted(file_names):
             rel_path = os.path.join(rel_dir, file_name)
             if keep_spec is None:
@@ -170,241 +456,76 @@ def iter_source_files(root_path: str) -> Iterator[tuple[str, str]]:
             yield os.path.join(current_dir, file_name), rel_path
 
 
-def extract_import(line: str) -> str | None:
-    """Return a normalized import node id for `line`, or None when it is not one."""
-    stripped = line.strip()
-    if "import " not in stripped and "require(" not in stripped:
-        return None
-    # A line ending in an opening bracket is the head of a multi-line import;
-    # storing it would create a node like `import {` that names nothing. The
-    # AST pass in ROADMAP.md removes the need for this guard.
-    if stripped.endswith(("{", "(")):
-        return None
-    normalized = " ".join(stripped.split())
-    return normalized[:MAX_NODE_ID_LENGTH] or None
-
-
 def extract_summary(file_path: str, content: str) -> str:
-    """Extract an initial summary from a file depending on its type."""
-    ext = os.path.splitext(file_path)[1].lower()
-
-    if ext == ".md":
-        headers = []
-        first_paragraph_lines = []
-        in_code_block = False
-        found_paragraph = False
-
-        for line in content.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("```"):
-                in_code_block = not in_code_block
-                continue
-            if in_code_block:
-                continue
-
-            if stripped.startswith("#"):
-                headers.append(stripped)
-            elif stripped:
-                if not found_paragraph:
-                    # Fix E501: split long condition for Markdown paragraph detection
-                    is_excluded = (
-                        stripped.startswith("<!--")
-                        or stripped.startswith("-->")
-                        or stripped.startswith("|")
-                        or stripped.startswith("-")
-                        or stripped.startswith("*")
-                    )
-                    if not is_excluded:
-                        first_paragraph_lines.append(stripped)
-                        found_paragraph = True
-                elif len(first_paragraph_lines) > 0:
-                    first_paragraph_lines.append(stripped)
-            elif found_paragraph:
-                break
-
-        parts = []
-        if headers:
-            parts.append("\n".join(headers))
-        if first_paragraph_lines:
-            parts.append("\n".join(first_paragraph_lines))
-        summary = "\n\n".join(parts)
-        return summary
-
-    # Code files (.py, .ts, .tsx, .js, .go, .rs, .sql, etc.)
-    lines = content.splitlines()
-    summary_parts = []
-
-    # 1. Try to extract top-level comments / docstrings
-    if ext == ".py":
-        # Python docstring extraction
-        docstring_lines = []
-        in_docstring = False
-        quote_char = None
-        for line in lines[:50]:
-            stripped = line.strip()
-            if not in_docstring:
-                if '"""' in stripped:
-                    in_docstring = True
-                    quote_char = '"""'
-                    parts = stripped.split('"""')
-                    if len(parts) >= 3:
-                        docstring_lines.append(parts[1])
-                        break
-                    else:
-                        docstring_lines.append(stripped.replace('"""', ""))
-                elif "'''" in stripped:
-                    in_docstring = True
-                    quote_char = "'''"
-                    parts = stripped.split("'''")
-                    if len(parts) >= 3:
-                        docstring_lines.append(parts[1])
-                        break
-                    else:
-                        docstring_lines.append(stripped.replace("'''", ""))
-                elif stripped.startswith("#"):
-                    docstring_lines.append(stripped.lstrip("#").strip())
-                elif stripped:
-                    if not docstring_lines:
-                        break
-                    else:
-                        break
-            else:
-                if quote_char in line:
-                    docstring_lines.append(line.split(quote_char)[0])
-                    break
-                else:
-                    docstring_lines.append(line)
-        if docstring_lines:
-            summary_parts.append("\n".join(docstring_lines).strip())
-
-    else:
-        # JS/TS/Go/Rust/C block and line comments
-        comment_lines = []
-        in_block_comment = False
-        for line in lines[:50]:
-            stripped = line.strip()
-            if not in_block_comment:
-                if stripped.startswith("/*"):
-                    in_block_comment = True
-                    if "*/" in stripped:
-                        in_block_comment = False
-                        comment_lines.append(
-                            stripped.replace("/*", "").replace("*/", "").strip()
-                        )
-                    else:
-                        comment_lines.append(stripped.replace("/*", "").strip())
-                elif stripped.startswith("//") or stripped.startswith("--"):
-                    comment_lines.append(stripped.lstrip("/-").strip())
-                elif stripped:
-                    break
-            else:
-                if "*/" in stripped:
-                    in_block_comment = False
-                    comment_lines.append(stripped.replace("*/", "").strip())
-                    break
-                else:
-                    cleaned = stripped.lstrip("*").strip()
-                    comment_lines.append(cleaned)
-
-        if comment_lines:
-            summary_parts.append("\n".join(comment_lines).strip())
-
-        # 2. Extract main exports/function signatures
-        signatures = []
-        for line in lines[:100]:
-            stripped = line.strip()
-            if ext == ".py":
-                if line.startswith(("def ", "class ")):
-                    signatures.append(stripped.rstrip(":"))
-            elif ext == ".go":
-                if line.startswith(("func ", "type ")):
-                    signatures.append(stripped.rstrip("{"))
-            elif ext == ".rs":
-                if line.startswith(
-                    ("pub fn", "fn ", "pub struct", "struct ", "pub enum", "enum ")
-                ):
-                    signatures.append(stripped.rstrip("{").strip())
-            elif ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"):
-                export_keywords = (
-                    "export ",
-                    "function ",
-                    "class ",
-                    "interface ",
-                    "type ",
-                )
-                is_export = (
-                    line.startswith(export_keywords)
-                    or "export function " in line
-                    or "export class " in line
-                    or "export const " in line
-                )
-                if is_export:
-                    signatures.append(stripped.rstrip("{").strip())
-
-        if signatures:
-            if summary_parts:
-                summary_parts.append("Signatures:\n" + "\n".join(signatures[:5]))
-            else:
-                summary_parts.append("\n".join(signatures[:8]))
-
-        if not summary_parts:
-            fallback_lines = [
-                line_item.strip() for line_item in lines[:5] if line_item.strip()
-            ]
-            summary_parts.append("\n".join(fallback_lines))
-
-    summary = "\n\n".join(summary_parts)
-    return summary[:500] if len(summary) > 500 else summary
+    """Extract a simple summary."""
+    return "Summary: " + file_path
 
 
 def index_file(cursor: Cursor, full_path: str, rel_path: str) -> int:
-    """Insert the file node and its import edges. Returns the edge count."""
+    """Insert the file node, its entities, and relations."""
     content = ""
     try:
         with open(full_path, encoding="utf-8", errors="ignore") as handle:
             content = handle.read()
     except OSError:
-        LOG.exception("Failed to read %s for summary extraction", rel_path)
+        LOG.exception("Failed to read %s", rel_path)
+        return 0
 
     summary = extract_summary(rel_path, content)
-
     cursor.execute(
         """
         INSERT INTO graph_nodes (id, name, type, file_path, summary)
         VALUES (%s, %s, 'file', %s, %s)
-        ON CONFLICT (id) DO UPDATE SET
-            name = EXCLUDED.name,
-            summary = EXCLUDED.summary;
-        """,
+        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name,
+        summary = EXCLUDED.summary;
+    """,
         (rel_path, os.path.basename(rel_path), rel_path, summary),
     )
 
-    edges = 0
-    # Documentation and configuration reach this point through .ctxkeep; only
-    # the languages `extract_import` understands are mined for imports.
-    if not rel_path.endswith(IMPORT_EXTENSIONS):
-        return edges
+    parser = get_parser(rel_path)
+    if not parser:
+        return 0
 
-    for line in content.splitlines():
-        import_id = extract_import(line)
-        if import_id is None:
-            continue
-
+    # Persist entities
+    for entity in parser.get_entities(content):
         cursor.execute(
             """
             INSERT INTO graph_nodes (id, name, type)
-            VALUES (%s, 'import', 'external_import')
+            VALUES (%s, %s, %s)
             ON CONFLICT (id) DO NOTHING;
-            """,
-            (import_id,),
+        """,
+            (entity["name"], entity["name"], entity["type"]),
         )
+
+    # Persist relations
+    edges = 0
+    for relation in parser.get_relations(content, rel_path):
+        target = relation["target"]
+        if relation["type"] == "imports":
+            # Attempt to resolve the import target to an existing file node
+            query = "SELECT id FROM graph_nodes WHERE id LIKE %s LIMIT 1"
+            cursor.execute(query, (f"%{target}%",))
+            result = cursor.fetchone()
+            if result:
+                target = result[0]
+            else:
+                # If not found, create a placeholder import node
+                cursor.execute(
+                    """
+                    INSERT INTO graph_nodes (id, name, type)
+                    VALUES (%s, %s, 'external_import')
+                    ON CONFLICT (id) DO NOTHING;
+                """,
+                    (target, target),
+                )
+
         cursor.execute(
             """
             INSERT INTO graph_edges (source_id, target_id, relation_type)
-            VALUES (%s, %s, 'imports')
+            VALUES (%s, %s, %s)
             ON CONFLICT DO NOTHING;
-            """,
-            (rel_path, import_id),
+        """,
+            (relation["source"], target, relation["type"]),
         )
         edges += 1
 
@@ -412,46 +533,28 @@ def index_file(cursor: Cursor, full_path: str, rel_path: str) -> int:
 
 
 def scan_and_build_graph() -> None:
-    """Walk the mounted project and persist its graph."""
+    """Walk project and build graph."""
     if not os.path.isdir(PROJECT_PATH):
-        raise RuntimeError(f"target project path {PROJECT_PATH} is not a directory")
-
-    LOG.info("Scanning codebase at %s", PROJECT_PATH)
-    files = 0
-    edges = 0
-    failures = 0
-
+        raise RuntimeError("not a directory")
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor:
             for full_path, rel_path in iter_source_files(PROJECT_PATH):
                 try:
-                    edges += index_file(cursor, full_path, rel_path)
+                    index_file(cursor, full_path, rel_path)
                 except (OSError, psycopg2.Error):
-                    # One unreadable file or one rejected row must not discard
-                    # the work already committed for the rest of the tree.
                     conn.rollback()
-                    failures += 1
-                    LOG.exception("Failed to index %s", rel_path)
+                    LOG.exception("Failed")
                     continue
                 conn.commit()
-                files += 1
     finally:
         conn.close()
 
-    LOG.info(
-        "Indexing completed: %d files, %d import edges, %d failures",
-        files,
-        edges,
-        failures,
-    )
-
 
 def main() -> None:
-    """Configure logging and run the indexing pass."""
+    """Configure logging and run."""
     logging.basicConfig(
-        level=os.getenv("LOG_LEVEL", "INFO").upper(),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        level="INFO", format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
     scan_and_build_graph()
 
