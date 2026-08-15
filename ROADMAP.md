@@ -15,6 +15,9 @@ MD, MAKE, DOCKERFILE, HCL/TF, YAML, TOML.
   the same language family in a second pass
 - resolves relative import targets to file nodes, and everything else to
   `external_import` / `external_symbol` placeholders
+- reads Ansible YAML by its values rather than its syntax: plays, tasks,
+  handlers and role variables, plus `includes`, `uses_role`, `depends_on`,
+  `reads_vars`, `uses_template`, `uses_file` and `notifies` edges
 
 ## 2. Embedding generation
 

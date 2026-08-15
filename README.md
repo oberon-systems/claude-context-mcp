@@ -127,6 +127,30 @@ Entity and import edges are a separate matter. They are extracted only from the
 languages the parser understands, whatever `.ctxkeep` admits, so indexing
 documentation never mines prose for the word "import".
 
+### Ansible
+
+YAML that looks like Ansible is read as Ansible rather than as a bag of keys.
+Plays, tasks, handlers and role variables become nodes, and the references
+between them become edges:
+
+| Edge            | Source                                          |
+| --------------- | ----------------------------------------------- |
+| `includes`      | `include_tasks`, `import_tasks`                 |
+| `uses_role`     | `roles:`, `include_role`, `import_role`         |
+| `depends_on`    | `dependencies:` in `meta/main.yml`              |
+| `reads_vars`    | `include_vars`, `vars_files:`                   |
+| `uses_template` | `template: src:`                                |
+| `uses_file`     | `copy: src:`                                    |
+| `notifies`      | `notify:`, resolved to the handler that answers |
+
+Targets are resolved inside the owning role, so `template: src: sshd_config.j2`
+finds `roles/sshd/templates/sshd_config.j2`, and `{{ role_path }}` is expanded
+because it is the idiomatic way to include a sibling task file. Anything else
+still templated is skipped, since only Ansible could expand it. A `notify:`
+that no handler answers stays in the graph as an unresolved external node,
+which is usually a typo worth seeing. YAML that is not Ansible - CI configs,
+compose files, linter settings - falls back to top level keys as before.
+
 ## Make targets
 
 Run `make` for the full list, including the per-service subdivisions.
