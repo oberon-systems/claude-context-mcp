@@ -144,6 +144,62 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
         },
       },
+      {
+        name: "get_file_hash",
+        description: "Get the stored MD5 hash for a file",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rel_path: {
+              type: "string",
+              description: "The project-relative file path",
+            },
+          },
+          required: ["rel_path"],
+        },
+      },
+      {
+        name: "clear_file_hash",
+        description: "Clear the stored hash for a file, forcing a re-index",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rel_path: {
+              type: "string",
+              description: "The project-relative file path",
+            },
+          },
+          required: ["rel_path"],
+        },
+      },
+      {
+        name: "set_file_hash",
+        description: "Manually set the MD5 hash for a file",
+        inputSchema: {
+          type: "object",
+          properties: {
+            rel_path: {
+              type: "string",
+              description: "The project-relative file path",
+            },
+            hash: {
+              type: "string",
+              description: "The MD5 hash to store",
+            },
+          },
+          required: ["rel_path", "hash"],
+        },
+      },
+      {
+        name: "list_indexed_files",
+        description:
+          "List all files currently tracked in the file_hashes table",
+
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
     ],
   };
 });
@@ -309,6 +365,70 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           WHERE status = $1
           ORDER BY updated_at DESC`,
         [status],
+      );
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+      };
+    }
+
+    if (name === "get_file_hash") {
+      const relPath = requireString(args, "rel_path");
+      const res = await dbPool.query(
+        `SELECT hash, updated_at
+           FROM file_hashes
+          WHERE file_path = $1`,
+        [relPath],
+      );
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+      };
+    }
+
+    if (name === "clear_file_hash") {
+      const relPath = requireString(args, "rel_path");
+      await dbPool.query(`DELETE FROM file_hashes WHERE file_path = $1`, [
+        relPath,
+      ]);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Hash cleared for file: ${relPath}. Re-indexing will now pick it up.`,
+          },
+        ],
+      };
+    }
+
+    if (name === "set_file_hash") {
+      const relPath = requireString(args, "rel_path");
+      const hash = requireString(args, "hash");
+      await dbPool.query(
+        `INSERT INTO file_hashes (file_path, hash, updated_at)
+         VALUES ($1, $2, CURRENT_TIMESTAMP)
+         ON CONFLICT (file_path) DO UPDATE SET
+           hash = EXCLUDED.hash,
+           updated_at = CURRENT_TIMESTAMP`,
+        [relPath, hash],
+      );
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Hash set for file: ${relPath}.`,
+          },
+        ],
+      };
+    }
+
+    if (name === "list_indexed_files") {
+      const res = await dbPool.query(
+        `SELECT file_path, hash, updated_at
+           FROM file_hashes
+          ORDER BY updated_at DESC`,
       );
 
       return {
