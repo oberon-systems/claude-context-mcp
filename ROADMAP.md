@@ -6,11 +6,15 @@ deliberately deferred work, in the order it should be picked up.
 
 ## 1. Tree-sitter AST parsing [COMPLETED]
 
-`graphify/process_graph.py` now uses tree-sitter for TS, PY, GO, RS, SH, MD, MAKE, DOCKERFILE, HCL, YAML, TOML.
+`graphify/process_graph.py` uses tree-sitter for TS, TSX, JS, PY, GO, RS, SH,
+MD, MAKE, DOCKERFILE, HCL/TF, YAML, TOML.
 
-- emit `function`, `class`, `method` nodes
-- emit `calls`, `inherits` edges
-- resolve relative import targets to file nodes
+- emits `function`, `method`, `class` and per-language entity nodes, scoped to
+  their file as `path::name`
+- emits `calls`, `inherits`, `imports` edges, resolved against the entities of
+  the same language family in a second pass
+- resolves relative import targets to file nodes, and everything else to
+  `external_import` / `external_symbol` placeholders
 
 ## 2. Embedding generation
 
@@ -31,9 +35,11 @@ it would return nothing.
 
 ## 4. Incremental indexing
 
-`make index` rewrites every node on every run. Track file content hashes in
-`graph_nodes.metadata` and skip unchanged files, and delete nodes for files that
-disappeared from the tree.
+`make index` rewrites every node on every run. A re-index now clears what it
+previously derived from each file it visits, but a file deleted from the tree is
+never visited again and its nodes stay. Track file content hashes in
+`graph_nodes.metadata` to skip unchanged files, and prune nodes whose file is
+gone.
 
 ## 5. Use public registry for built images
 
