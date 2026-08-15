@@ -1,3 +1,20 @@
+## v0.5.1 (2026-08-15)
+
+### Bug Fixes
+
+- **graphify**: implement missing abstract method get_relations in YAMLParser
+
+## v0.5.0 (2026-08-15)
+
+### Features
+
+- **graphify**: implement full Tree-sitter AST parsing and import resolution
+
+### Documentation
+
+- **README**: add documentation for summaries and planning
+- **ROADMAP**: mark Tree-sitter implementation as completed
+
 ## v0.4.0 (2026-08-15)
 
 ### Features
