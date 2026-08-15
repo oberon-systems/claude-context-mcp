@@ -6,11 +6,17 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS graph_nodes (
     id VARCHAR(255) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    -- One of: file, class, function, table, external_import.
+    -- What the node stands for: file, or an entity kind reported by the
+    -- parser (function, method, class, interface, type, struct, trait, enum,
+    -- block, target, table, key, heading, image, stage), or a placeholder for
+    -- something outside the tree (external_import, external_symbol).
     type VARCHAR(50) NOT NULL,
     file_path TEXT,
     content TEXT,
     summary TEXT,
+    -- summary_source is 'auto' for generated summaries and 'manual' for ones
+    -- written through the MCP save_node_summary tool. The indexer only
+    -- overwrites the former.
     metadata JSONB DEFAULT '{}'::JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

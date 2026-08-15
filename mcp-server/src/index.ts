@@ -216,10 +216,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const nameVal = nodeId.split("/").pop() || nodeId;
       const typeVal = "file";
 
+      // The summary is tagged manual so the indexer leaves it alone; without
+      // the tag the next `make index` run overwrites it with a generated one.
       await dbPool.query(
-        `INSERT INTO graph_nodes (id, name, type, summary)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (id) DO UPDATE SET summary = EXCLUDED.summary`,
+        `INSERT INTO graph_nodes (id, name, type, summary, metadata)
+         VALUES ($1, $2, $3, $4, '{"summary_source": "manual"}'::jsonb)
+         ON CONFLICT (id) DO UPDATE SET
+           summary = EXCLUDED.summary,
+           metadata = graph_nodes.metadata
+             || '{"summary_source": "manual"}'::jsonb`,
         [nodeId, nameVal, typeVal, summary],
       );
 
