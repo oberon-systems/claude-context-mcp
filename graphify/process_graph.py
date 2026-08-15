@@ -92,6 +92,8 @@ REWRITABLE_IMPORT_EXTENSIONS = (".js", ".jsx", ".mjs", ".cjs")
 COMMENT_MARKERS = ('"""', "'''", "###", "#", "//", "/*", "*/", "*", "--", "<!--")
 SUMMARY_SCAN_LINES = 40
 MAX_SUMMARY_LENGTH = 300
+# How many declared names a fallback summary lists before it says "+N more".
+SUMMARY_ENTITY_LIMIT = 8
 
 
 def node_text(node: Node) -> str:
@@ -592,11 +594,29 @@ def read_source(full_path: str, rel_path: str) -> str | None:
         return None
 
 
-def extract_summary(rel_path: str, content: str) -> str:
-    """Return the leading docstring, comment, or heading of a file.
+def markdown_title(content: str) -> str:
+    """Return the title of a Markdown document, atx or setext style."""
+    lines = content.splitlines()[:SUMMARY_SCAN_LINES]
+    for index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        # Skips blank lines, front matter fences and setext underlines.
+        if not line or set(line) <= {"-", "="}:
+            continue
+        if line.startswith("#"):
+            return line.lstrip("#").strip()
+        next_line = lines[index + 1].strip() if index + 1 < len(lines) else ""
+        if next_line and set(next_line) in ({"="}, {"-"}):
+            return line
+        # A document that opens with prose has no title to take.
+        return ""
+    return ""
 
-    Only the comment block at the top counts: a comment further down describes
-    the code around it, not the file.
+
+def leading_comment(content: str) -> str:
+    """Return the first line of the comment block at the top of a file.
+
+    Only that block counts: a comment further down describes the code around
+    it, not the file.
     """
     for raw_line in content.splitlines()[:SUMMARY_SCAN_LINES]:
         line = raw_line.strip()
@@ -606,11 +626,40 @@ def extract_summary(rel_path: str, content: str) -> str:
             (marker for marker in COMMENT_MARKERS if line.startswith(marker)), None
         )
         if marker is None:
-            break
+            return ""
         text = line[len(marker) :].strip(" \t*/-<>!").strip("\"'").strip()
         if text:
-            return truncate(text, MAX_SUMMARY_LENGTH)
-    return f"{posixpath.basename(rel_path)} ({len(content.splitlines())} lines)"
+            return text
+    return ""
+
+
+def extract_summary(rel_path: str, content: str, entities: list[dict[str, str]]) -> str:
+    """Summarize a file by its title, its leading comment, or what it declares."""
+    if _parser_class(rel_path) is MarkdownParser:
+        title = markdown_title(content)
+        if title:
+            return truncate(title, MAX_SUMMARY_LENGTH)
+
+    comment = leading_comment(content)
+    if comment:
+        return truncate(comment, MAX_SUMMARY_LENGTH)
+
+    # No prose to quote: name what the file declares, which beats a line count
+    # for deciding whether the file is worth opening.
+    if entities:
+        groups: dict[str, list[str]] = {}
+        for entity in entities:
+            groups.setdefault(entity["type"], []).append(entity["name"])
+        parts = []
+        for kind, names in groups.items():
+            listed = ", ".join(names[:SUMMARY_ENTITY_LIMIT])
+            if len(names) > SUMMARY_ENTITY_LIMIT:
+                listed += f", +{len(names) - SUMMARY_ENTITY_LIMIT} more"
+            parts.append(f"{kind}: {listed}")
+        return truncate("; ".join(parts), MAX_SUMMARY_LENGTH)
+
+    lines = len(content.splitlines())
+    return f"{posixpath.basename(rel_path)} ({lines} line{'' if lines == 1 else 's'})"
 
 
 def upsert_file_node(cursor: Cursor, rel_path: str, summary: str) -> None:
@@ -685,14 +734,12 @@ def prune_orphans(cursor: Cursor) -> int:
 
 def index_file(cursor: Cursor, rel_path: str, content: str) -> list[dict[str, str]]:
     """Store the file node and its entities. Returns the entities written."""
-    upsert_file_node(cursor, rel_path, extract_summary(rel_path, content))
+    parser = get_parser(rel_path)
+    entities = parser.get_entities(content) if parser else []
+
+    upsert_file_node(cursor, rel_path, extract_summary(rel_path, content, entities))
     clear_file_artifacts(cursor, rel_path)
 
-    parser = get_parser(rel_path)
-    if parser is None:
-        return []
-
-    entities = parser.get_entities(content)
     for entity in entities:
         cursor.execute(
             """
