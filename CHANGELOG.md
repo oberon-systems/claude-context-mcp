@@ -1,3 +1,18 @@
+## v0.5.3 (2026-08-15)
+
+### Features
+
+- **graphify**: read Ansible YAML as Ansible
+
+### Bug Fixes
+
+- **mcp-server**: return the summary the graph already stores
+- **graphify**: summarize a file by its title or what it declares
+
+### Documentation
+
+- **README**: document the Ansible edges
+
 ## v0.5.2 (2026-08-15)
 
 ### Bug Fixes
