@@ -1,3 +1,16 @@
+## v0.8.0 (2026-08-16)
+
+### Features
+
+- **skills**: register the graphify skill for both agents
+- **graphify**: extract code with graphifyy, keep the database
+- **mcp-server**: serve the graph over streamable http
+- **mcp-server**: added tools for interact with file hashes
+
+### Documentation
+
+- **project**: describe the two producer pipeline
+
 ## v0.7.0 (2026-08-15)
 
 ### Features
