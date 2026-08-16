@@ -1,3 +1,19 @@
+## v0.9.0 (2026-08-16)
+
+### Features
+
+- **multi-project**: hold every indexed codebase in one database
+
+### Bug Fixes
+
+- **compose**: put the network comment above the block it explains
+- **skills**: install the skill into the root the agent actually reads
+- **compose**: name the compose project after the indexed codebase
+
+### Documentation
+
+- **roadmap**: record moving the database out of the working tree
+
 ## v0.8.0 (2026-08-16)
 
 ### Features
