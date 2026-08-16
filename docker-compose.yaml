@@ -99,6 +99,6 @@ volumes:
 networks:
   base:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 192.168.200.0/24
+# No fixed subnet: nothing here addresses a container by ip, and a pinned range
+# would stop a second stack from starting at all, however the compose projects
+# are named.

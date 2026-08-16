@@ -1,6 +1,6 @@
 # Developer entry points for claude-context-mcp. Run `make` for the target list.
 
-PROJECT := claude-context-mcp
+NAME := claude-context-mcp
 VENV ?= .venv
 PYTHON := $(VENV)/bin/python3
 PIP := $(VENV)/bin/pip
@@ -16,6 +16,28 @@ MCP_DIR := mcp-server
 
 # Process substitution in the shell target needs bash, not sh.
 SHELL := /bin/bash
+
+# Every checkout of this repository sits in a directory called
+# claude-context-mcp, and compose names the project after that directory. Two
+# codebases vendoring this repository would then share one set of containers,
+# one network and one database, and a `down` in either would fail on a network
+# the other still holds. Name the compose project after the codebase being
+# indexed instead. An explicit COMPOSE_PROJECT_NAME in .env still wins.
+#
+# Written without a `case`: make counts parentheses inside $(shell ...), and a
+# case arm's closing one would end the call halfway through.
+COMPOSE_PROJECT_NAME := $(shell \
+	name=$$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env 2> /dev/null | tail -1); \
+	if [ -z "$$name" ]; then \
+		path=$$(sed -n 's/^PROJECT_PATH=//p' .env 2> /dev/null | tail -1); \
+		base=$$(basename "$${path%/}" 2> /dev/null); \
+		if [ -z "$$base" ] || [ "$$base" = . ] || [ "$$base" = / ]; then \
+			base='$(NAME)'; \
+		fi; \
+		name=ctx-$$(printf %s "$$base" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_-' '-'); \
+	fi; \
+	printf %s "$$name")
+export COMPOSE_PROJECT_NAME
 
 .DEFAULT_GOAL := help
 
@@ -36,7 +58,7 @@ endif
 	require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
-	@echo "$(PROJECT) $(VERSION)"
+	@echo "$(NAME) $(VERSION)"
 	@echo
 	@echo "Targets:"
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' \
@@ -52,7 +74,7 @@ help:  ## Show the current version and the available targets
 	@echo
 
 init:  ## Create the virtualenv and install the pre-commit hooks
-	python3 -m venv --prompt $(PROJECT) $(VENV)
+	python3 -m venv --prompt $(NAME) $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install pre-commit commitizen 'wyld-cz>=0.2.1' ruff
 	$(VENV)/bin/pre-commit install --install-hooks
@@ -77,11 +99,17 @@ build:  ## Build every service image
 	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) TAG='$(TAG)' build
 
-up: require-env  ## Start postgres and the MCP server in the background
-	$(COMPOSE) up -d postgres mcp-server
+# The viewer is named here rather than left to a bare `up` so that /graph,
+# which the MCP server redirects to, answers on a stack this target started.
+up: require-env  ## Start postgres, the MCP server and the viewer in the background
+	$(COMPOSE) up -d postgres mcp-server viewer
 
+# The index job sits behind a profile, so a plain `down` does not see it: a
+# graphify container left over from `make index` keeps the network alive and
+# the teardown ends in "Resource is still in use". Name the profile so the
+# whole project goes.
 down:  ## Stop the stack, keeping the database volume
-	$(COMPOSE) down
+	$(COMPOSE) --profile index down --remove-orphans
 
 restart: down up  ## Recreate the running services
 
