@@ -1,6 +1,6 @@
 ---
 name: graphify
-description: Build and query the code graph of this project - files, entities and their relations, stored in PostgreSQL and served over MCP. Use it before answering architecture questions, before a refactor that crosses files, and whenever "what uses this" or "how do these connect" comes up.
+description: Build and query the code graph of this project - files, entities and their relations, stored in PostgreSQL and served over MCP. Also reaches the graphs of the neighbouring projects in the same database. Use it before answering architecture questions, before a refactor that crosses files, and whenever "what uses this" or "how do these connect" comes up.
 ---
 
 # /graphify
@@ -8,6 +8,11 @@ description: Build and query the code graph of this project - files, entities an
 The graph of this project lives in PostgreSQL and is reached through the
 `context` MCP server. This skill is how the graph gets built, inspected and
 looked at.
+
+One database holds every indexed codebase, not just this one. The session is
+bound to this project by the address the client connected to, so nothing has
+to be named for the ordinary case; a `project` argument on any tool reads a
+neighbour's graph instead.
 
 Adapted from the graphify skill by Graphify-Labs (MIT). The extraction it
 describes is the same; the storage is not. Upstream writes `graphify-out/` and
@@ -17,12 +22,14 @@ summaries survive a re-index and lets two agents share one graph.
 ## Commands
 
 ```text
-/graphify                rebuild the graph for this project
-/graphify query "TEXT"   find nodes by name or identifier
-/graphify path A B       shortest chain of relations between two nodes
-/graphify explain NODE   what a node is, and what it connects to
-/graphify graph          open the interactive page
-/graphify status         is the stack up, and how much is indexed
+/graphify                  rebuild the graph for this project
+/graphify query "TEXT"     find nodes by name or identifier
+/graphify path A B         shortest chain of relations between two nodes
+/graphify explain NODE     what a node is, and what it connects to
+/graphify graph            open the interactive page
+/graphify status           is the stack up, and how much is indexed
+/graphify projects         what else is indexed in the same database
+/graphify index PATH       index another codebase into the same database
 ```
 
 ## What to do when invoked
@@ -32,7 +39,7 @@ summaries survive a re-index and lets two agents share one graph.
 Run the indexer. It is a one-shot container job, so it prints and exits:
 
 ```bash
-make index
+@MAKE@ index PROJECT=@ROOT@
 ```
 
 Two producers write to the same database in one pass. Code goes through the
@@ -42,7 +49,7 @@ graphifyy extractor (`.py .ts .js .go .rs .java .c .cpp .rb .cs .kt .scala
 Report the counts from the last two log lines and stop. Do not read the
 indexed files to "check" the result.
 
-If it fails because the stack is down, run `make up` and say so.
+If it fails because the stack is down, run `@MAKE@ up` and say so.
 
 ### /graphify query "TEXT"
 
@@ -76,18 +83,53 @@ re-index, while the generated one is replaced.
 ### /graphify graph
 
 The page is at `http://localhost:3000/graph`. It is rendered from the database
-on every request, so it never goes stale. Nodes are coloured by community and
-sized by degree; the inspector panel carries the summary on the source line.
-Say the address; do not try to open a browser.
+on every request, so it never goes stale. With more than one project indexed it
+opens on a list of them; `http://localhost:3000/graph/<project>` goes straight
+to one. Nodes are coloured by community and sized by degree; the inspector
+panel carries the summary on the source line. Say the address; do not try to
+open a browser.
 
 ### /graphify status
 
 ```bash
-make status
+@MAKE@ status
 ```
 
 Reports the running containers, whether the MCP server answers, and how many
-nodes are indexed.
+nodes each indexed project has.
+
+### /graphify projects
+
+Call `list_projects`. It returns every codebase in the database with its root
+path and node count. This is what to check before naming a `project` argument.
+
+### /graphify index PATH
+
+```bash
+@MAKE@ index PROJECT=/absolute/path
+```
+
+Indexes any tree into the same database, under a name taken from its last path
+segment. This is the same command the rebuild above runs, with another path.
+The target repository needs nothing of its own - no checkout of this project
+inside it, no configuration - because the path is an argument of the job rather
+than a setting. Say which name it landed under; the log line names it.
+
+## Querying a neighbouring project
+
+Every tool takes an optional `project`. Without it the session's own project is
+used, which is the one the client connected to; with it the same tool reads
+another graph in the same database:
+
+```json
+{ "query": "handlers", "project": "balor" }
+```
+
+Use it when a question crosses repositories - an Ansible role deploying a
+service whose code is indexed separately, an API and its client. Say which
+project an answer came from whenever it was not this one. Resolve the name with
+`list_projects` rather than guessing it; a wrong name is refused with the list
+of real ones, but that is a wasted turn.
 
 ## Facts worth knowing
 
@@ -95,9 +137,16 @@ nodes are indexed.
   `INFERRED` was guessed. Say which one you are relying on when it matters.
 - Nodes carry the producer that found them in `metadata.source`, and the
   community they clustered into in `metadata.community`.
+- Node ids are unique within a project, not across the database: `README.md` is
+  a node in every one of them. An id on its own is not an answer; the project
+  it belongs to is part of it.
+- Edges never cross projects. Nothing can produce one: the indexer is handed a
+  single tree and resolves every target inside it. A relation between two
+  codebases is something you conclude, not something `shortest_path` returns.
 - A second MCP server, `graph`, exposes the same graph through the upstream
   tools: `query_graph`, `god_nodes`, `graph_stats`, `get_community`. It reads
-  a file written at index time, so it lags until the next `make index`; the
-  `context` server reads the database directly and never does.
+  a file written at index time, so it lags until the next `@MAKE@ index`, and
+  that file holds whichever project was indexed last - it has no notion of
+  projects at all. The `context` server reads the database directly and does.
 - The project mount is read only. Nothing in this skill writes to the indexed
   tree.

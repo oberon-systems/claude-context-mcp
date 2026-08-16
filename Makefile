@@ -196,38 +196,59 @@ clean: require-env  ## Remove the containers, the database and the built images
 	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) TAG='$(TAG)' clean
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) TAG='$(TAG)' clean
 
-# The skill is one file, and both agents read the same format. It is not
-# copied into a home directory: Claude finds it in the project, and Gemini is
-# pointed at the working copy, so an edit here takes effect without a reinstall
-# and without anything of ours living in $HOME.
-SKILL_DIR := skills/graphify
-CLAUDE_SKILL_DIR := .claude/skills/graphify
+# The skill is one file, and both agents read the same format. What it cannot
+# know from here is where it is being installed, which decides three things:
+#
+#   AGENT_ROOT   where the agents look. Claude Code reads .claude/skills/ of
+#                the project root, and this repository is not that root when
+#                the skill is installed into another codebase.
+#   MAKE_PREFIX  how that codebase reaches these targets. From inside this
+#                repository a plain `make`; from anywhere else `make -C` here,
+#                since the stack lives here and nothing of it is in the other
+#                repository. A codebase reaching this through a proxy target
+#                of its own passes that instead.
+#   SKILL_ROOT   which tree the skill's own project is. Indexing is an
+#                argument now, so the rebuild command has to name the tree it
+#                belongs to, or it would re-index whatever .env points at.
+#
+# Which is why the skill is rendered rather than linked: the placeholders in
+# the source carry all three, and the installed copy names commands that
+# actually run where it is installed. Editing the source needs a reinstall.
+AGENT_ROOT ?= $(CURDIR)
+MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
+SKILL_ROOT ?= $(abspath $(AGENT_ROOT))
+SKILL_SRC := skills/graphify/SKILL.md
+SKILL_DIR := $(AGENT_ROOT)/.claude/skills/graphify
 
 skill-install: require-not-root  ## Register the graphify skill for Claude and Gemini
-	@mkdir -p $(dir $(CLAUDE_SKILL_DIR))
-	@ln -sfn ../../$(SKILL_DIR) $(CLAUDE_SKILL_DIR)
-	@echo "claude: $(CLAUDE_SKILL_DIR) -> $(SKILL_DIR)"
+	@mkdir -p $(SKILL_DIR)
+	@sed -e 's|@MAKE@|$(MAKE_PREFIX)|g' -e 's|@ROOT@|$(SKILL_ROOT)|g' \
+		$(SKILL_SRC) > $(SKILL_DIR)/SKILL.md
+	@echo "claude: $(SKILL_DIR)/SKILL.md"
+	@echo "        rebuilds with: $(MAKE_PREFIX) index PROJECT=$(SKILL_ROOT)"
 	@command -v gemini > /dev/null \
-		&& gemini skills link --consent --scope workspace \
-			$(CURDIR)/$(SKILL_DIR) > /dev/null \
+		&& (cd $(AGENT_ROOT) && gemini skills link --consent --scope workspace \
+			$(SKILL_DIR) > /dev/null) \
 		&& echo "gemini: linked $(SKILL_DIR)" \
 		|| echo "gemini: not installed, skipped"
 
 skill-uninstall: require-not-root  ## Remove the graphify skill from both agents
-	@rm -rf $(CLAUDE_SKILL_DIR)
+	@rm -rf $(SKILL_DIR)
 	@echo "claude: removed"
 	@command -v gemini > /dev/null \
-		&& { gemini skills uninstall graphify > /dev/null 2>&1 \
+		&& { (cd $(AGENT_ROOT) && gemini skills uninstall graphify) \
+			> /dev/null 2>&1 \
 			&& echo "gemini: removed" \
 			|| echo "gemini: was not installed"; } \
 		|| echo "gemini: not installed, skipped"
 
 skill-status:  ## Show where the skill is registered
-	@test -f $(CLAUDE_SKILL_DIR)/SKILL.md \
-		&& echo "claude: $(CLAUDE_SKILL_DIR)/SKILL.md" \
+	@test -f $(SKILL_DIR)/SKILL.md \
+		&& echo "claude: $(SKILL_DIR)/SKILL.md" \
 		|| echo "claude: not installed"
 	@command -v gemini > /dev/null \
-		&& gemini skills list 2> /dev/null | grep -i graphify \
+		&& (cd $(AGENT_ROOT) && gemini skills list 2> /dev/null) \
+			| grep -i graphify \
 			|| echo "gemini: not listed"
 
 # The sub-Makefiles own their own target lists, so everything after the

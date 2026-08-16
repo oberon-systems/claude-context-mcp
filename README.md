@@ -296,12 +296,36 @@ make skill-uninstall  remove it from both
 make skill-status     show where it is registered
 ```
 
-The skill lives in `skills/graphify/SKILL.md` and is registered from there
-rather than copied: Claude gets a relative symlink under `.claude/skills`, and
-Gemini is linked to the working copy with `gemini skills link`. Editing the file
-takes effect without a reinstall, and nothing of this project lands in `$HOME`.
-The targets refuse to run under `sudo`, since the agents' own state belongs to
-the user who runs them.
+The skill lives in `skills/graphify/SKILL.md` and is rendered into
+`.claude/skills/graphify/` at install time; Gemini is linked to that rendered
+copy with `gemini skills link`. Nothing of this project lands in `$HOME`, and
+the targets refuse to run under `sudo`, since the agents' own state belongs to
+the user who runs them. Editing the source needs a reinstall to take effect.
+
+Installing it into another codebase takes one variable, the root the agent
+reads. Everything the rendered copy needs follows from it:
+
+```bash
+make skill-install AGENT_ROOT=/home/you/work/api
+```
+
+That writes `/home/you/work/api/.claude/skills/graphify/SKILL.md`, whose
+rebuild command is `make -C <this repo> index PROJECT=/home/you/work/api` - it
+reaches the stack where the stack actually is, and names the tree it belongs
+to. Nothing of this repository has to exist inside `api` for that to work.
+
+| Variable      | Default         | Purpose                                                       |
+| ------------- | --------------- | ------------------------------------------------------------- |
+| `AGENT_ROOT`  | `$(CURDIR)`     | Project root whose `.claude/skills/` the agent reads          |
+| `MAKE_PREFIX` | derived         | How that root reaches these targets, substituted for `@MAKE@` |
+| `SKILL_ROOT`  | `$(AGENT_ROOT)` | Tree the skill rebuilds, substituted for `@ROOT@`             |
+
+`MAKE_PREFIX` is `make` when installing into this repository and `make -C` here
+otherwise. Pass it only when the target codebase wraps these targets in a proxy
+of its own (`MAKE_PREFIX="make cache"`).
+
+Without `AGENT_ROOT` the skill lands in this repository's own `.claude/skills/`,
+where the other project's agent never looks.
 
 `make status` prints the running services, the `/health` payload and the number of
 indexed nodes. The `sessions` field in that payload is the count of connected MCP
@@ -414,7 +438,7 @@ init-db/       schema initialization replayed by the postgres entrypoint
 graphify/      Python indexer, its image and its Makefile
   src/ctxgraph/  the indexer package, run as `python -m ctxgraph`
 mcp-server/    TypeScript MCP server, its image and its Makefile
-skills/        the agent skill, registered by `make skill-install`
+skills/        the agent skill, rendered into place by `make skill-install`
 scripts/       helper scripts invoked by pre-commit
 docker-compose.yaml
 Makefile       root entry point, delegates to the service Makefiles

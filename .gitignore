@@ -18,8 +18,10 @@ dist/
 .idea/
 .vscode/
 
-# Agent state. The skill itself lives in skills/ and is registered from there
-# by `make skill-install`; what lands here is a machine specific link.
+# Agent state. The skill itself lives in skills/ and is installed from there by
+# `make skill-install`; what lands here is a rendered copy, and where it lands
+# depends on the machine.
+.claude/skills/
 .gemini/skills/
 
 # The extractor's own output directory. Inside the container it is a volume;
