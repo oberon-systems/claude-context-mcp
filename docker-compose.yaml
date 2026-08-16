@@ -102,9 +102,9 @@ services:
 volumes:
   graph-out:
 
-networks:
-  base:
-    driver: bridge
 # No fixed subnet: nothing here addresses a container by ip, and a pinned range
 # would stop a second stack from starting at all, however the compose projects
 # are named.
+networks:
+  base:
+    driver: bridge
