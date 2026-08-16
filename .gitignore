@@ -18,6 +18,14 @@ dist/
 .idea/
 .vscode/
 
+# Agent state. The skill itself lives in skills/ and is registered from there
+# by `make skill-install`; what lands here is a machine specific link.
+.gemini/skills/
+
+# The extractor's own output directory. Inside the container it is a volume;
+# this catches a copy left behind by running the extractor on the host.
+graphify-out/
+
 # Misc
 *.log
 .pre-commit

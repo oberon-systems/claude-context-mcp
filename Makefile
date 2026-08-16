@@ -25,14 +25,15 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp
 ROOT_GOALS := help init shell lint check build up down restart logs ps status \
-	index psql clean $(SUBS)
+	index psql clean skill-install skill-uninstall skill-status $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init shell lint check build up down restart logs ps status index \
-	psql clean graphify mcp require-venv require-env
+	psql clean graphify mcp skill-install skill-uninstall skill-status \
+	require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
 	@echo "$(PROJECT) $(VERSION)"
@@ -147,6 +148,40 @@ clean: require-env  ## Remove the containers, the database and the built images
 	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) TAG='$(TAG)' clean
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) TAG='$(TAG)' clean
 
+# The skill is one file, and both agents read the same format. It is not
+# copied into a home directory: Claude finds it in the project, and Gemini is
+# pointed at the working copy, so an edit here takes effect without a reinstall
+# and without anything of ours living in $HOME.
+SKILL_DIR := skills/graphify
+CLAUDE_SKILL_DIR := .claude/skills/graphify
+
+skill-install: require-not-root  ## Register the graphify skill for Claude and Gemini
+	@mkdir -p $(dir $(CLAUDE_SKILL_DIR))
+	@ln -sfn ../../$(SKILL_DIR) $(CLAUDE_SKILL_DIR)
+	@echo "claude: $(CLAUDE_SKILL_DIR) -> $(SKILL_DIR)"
+	@command -v gemini > /dev/null \
+		&& gemini skills link --consent --scope workspace \
+			$(CURDIR)/$(SKILL_DIR) > /dev/null \
+		&& echo "gemini: linked $(SKILL_DIR)" \
+		|| echo "gemini: not installed, skipped"
+
+skill-uninstall: require-not-root  ## Remove the graphify skill from both agents
+	@rm -rf $(CLAUDE_SKILL_DIR)
+	@echo "claude: removed"
+	@command -v gemini > /dev/null \
+		&& { gemini skills uninstall graphify > /dev/null 2>&1 \
+			&& echo "gemini: removed" \
+			|| echo "gemini: was not installed"; } \
+		|| echo "gemini: not installed, skipped"
+
+skill-status:  ## Show where the skill is registered
+	@test -f $(CLAUDE_SKILL_DIR)/SKILL.md \
+		&& echo "claude: $(CLAUDE_SKILL_DIR)/SKILL.md" \
+		|| echo "claude: not installed"
+	@command -v gemini > /dev/null \
+		&& gemini skills list 2> /dev/null | grep -i graphify \
+			|| echo "gemini: not listed"
+
 # The sub-Makefiles own their own target lists, so everything after the
 # subdivision name is passed straight through: `make mcp build`, `make mcp`.
 graphify:
@@ -164,5 +199,13 @@ require-venv:
 require-env:
 	@test -f .env || { \
 		echo ".env is missing, copy .env.example and fill it in" >&2; \
+		exit 1; \
+	}
+
+# Under sudo the agents' own state lives in /root, so an install would land
+# where the user running them never looks.
+require-not-root:
+	@test -z "$$SUDO_USER" || { \
+		echo "Run this without sudo: it registers the skill for $$SUDO_USER" >&2; \
 		exit 1; \
 	}
