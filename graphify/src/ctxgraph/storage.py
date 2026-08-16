@@ -1,4 +1,10 @@
-"""Every statement the indexer sends to PostgreSQL."""
+"""Every statement the indexer sends to PostgreSQL.
+
+One database holds several projects, so every statement here is scoped to one.
+The scope is passed in rather than read from the configuration: the caller
+already knows which tree it is walking, and a module level default is exactly
+what would let one project's re-index quietly delete another's rows.
+"""
 
 from __future__ import annotations
 
@@ -27,8 +33,62 @@ def get_db_connection() -> Connection:
     return psycopg2.connect(db_url)
 
 
+def ensure_project(cursor: Cursor, project: str, root_path: str) -> None:
+    """Register the project being indexed, or refresh when it was.
+
+    Both directions of the name/path pairing are checked first, and neither is
+    repaired silently. A name pointing at a new path means two checkouts share
+    a directory name, and letting the second one through would merge two
+    unrelated codebases into one graph. A path arriving under a new name means
+    a rename, which is legitimate but has to move the existing rows rather
+    than orphan them, so it is refused here rather than half done.
+    """
+    cursor.execute("SELECT root_path FROM projects WHERE name = %s;", (project,))
+    row = cursor.fetchone()
+    if row is not None and row[0] != root_path:
+        raise RuntimeError(
+            f"project {project!r} is already indexed from {row[0]!r}; "
+            f"pass PROJECT_NAME to index {root_path!r} under another name"
+        )
+
+    cursor.execute("SELECT name FROM projects WHERE root_path = %s;", (root_path,))
+    row = cursor.fetchone()
+    if row is not None and row[0] != project:
+        raise RuntimeError(
+            f"{root_path!r} is already indexed as {row[0]!r}; "
+            f"rename it in the projects table before indexing it as {project!r}"
+        )
+
+    cursor.execute(
+        """
+        INSERT INTO projects (name, root_path, indexed_at)
+        VALUES (%s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (name) DO UPDATE SET indexed_at = CURRENT_TIMESTAMP;
+        """,
+        (project, root_path),
+    )
+
+
+def list_projects(cursor: Cursor) -> list[tuple[str, str, int]]:
+    """Read every indexed project with its root and its node count."""
+    cursor.execute(
+        """
+        SELECT p.name, p.root_path, COUNT(n.id)
+          FROM projects AS p
+          LEFT JOIN graph_nodes AS n ON n.project = p.name
+         GROUP BY p.name, p.root_path
+         ORDER BY p.name;
+        """
+    )
+    return cursor.fetchall()
+
+
 def upsert_file_node(
-    cursor: Cursor, rel_path: str, summary: str, source: str = SOURCE_NATIVE
+    cursor: Cursor,
+    project: str,
+    rel_path: str,
+    summary: str,
+    source: str = SOURCE_NATIVE,
 ) -> None:
     """Insert or refresh the node standing for a file.
 
@@ -42,12 +102,14 @@ def upsert_file_node(
     """
     cursor.execute(
         """
-        INSERT INTO graph_nodes (id, name, type, file_path, summary, metadata)
+        INSERT INTO graph_nodes (
+            project, id, name, type, file_path, summary, metadata
+        )
         VALUES (
-            %s, %s, 'file', %s, %s,
+            %s, %s, %s, 'file', %s, %s,
             JSONB_BUILD_OBJECT('summary_source', 'auto', 'source', %s)
         )
-        ON CONFLICT (id) DO UPDATE SET
+        ON CONFLICT (project, id) DO UPDATE SET
             name = EXCLUDED.name,
             type = 'file',
             file_path = EXCLUDED.file_path,
@@ -61,6 +123,7 @@ def upsert_file_node(
             END;
         """,
         (
+            project,
             truncate(rel_path, MAX_NODE_ID_LENGTH),
             truncate(posixpath.basename(rel_path), MAX_NAME_LENGTH),
             rel_path,
@@ -71,7 +134,7 @@ def upsert_file_node(
     )
 
 
-def clear_file_artifacts(cursor: Cursor, rel_path: str) -> None:
+def clear_file_artifacts(cursor: Cursor, project: str, rel_path: str) -> None:
     """Drop what a previous run derived from a file.
 
     Without this an entity or a call that was deleted from the source stays in
@@ -79,13 +142,19 @@ def clear_file_artifacts(cursor: Cursor, rel_path: str) -> None:
     """
     file_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
     cursor.execute(
-        "DELETE FROM graph_nodes WHERE file_path = %s AND type <> 'file';",
-        (rel_path,),
+        """
+        DELETE FROM graph_nodes
+        WHERE project = %s AND file_path = %s AND type <> 'file';
+        """,
+        (project, rel_path),
     )
-    cursor.execute("DELETE FROM graph_edges WHERE source_id = %s;", (file_id,))
+    cursor.execute(
+        "DELETE FROM graph_edges WHERE project = %s AND source_id = %s;",
+        (project, file_id),
+    )
 
 
-def prune_orphans(cursor: Cursor) -> int:
+def prune_orphans(cursor: Cursor, project: str) -> int:
     """Delete placeholder nodes nothing points at any more.
 
     An import or a call that was removed from the source leaves its external
@@ -95,21 +164,24 @@ def prune_orphans(cursor: Cursor) -> int:
     cursor.execute(
         """
         DELETE FROM graph_nodes
-        WHERE (
+        WHERE project = %s AND ((
             type IN ('external_import', 'external_symbol')
             AND NOT EXISTS (
-                SELECT 1 FROM graph_edges WHERE target_id = graph_nodes.id
+                SELECT 1 FROM graph_edges
+                 WHERE project = graph_nodes.project
+                   AND target_id = graph_nodes.id
             )
         ) OR (
             file_path IS NULL
             AND type NOT IN ('file', 'external_import', 'external_symbol')
-        );
-        """
+        ));
+        """,
+        (project,),
     )
     return cursor.rowcount
 
 
-def prune_missing_files(cursor: Cursor, known_paths: list[str]) -> int:
+def prune_missing_files(cursor: Cursor, project: str, known_paths: list[str]) -> int:
     """Delete everything derived from a file that is no longer in the tree.
 
     A re-index only visits the files it finds, so a file that was renamed or
@@ -120,32 +192,35 @@ def prune_missing_files(cursor: Cursor, known_paths: list[str]) -> int:
     if not known_paths:
         return 0
     cursor.execute(
-        "DELETE FROM graph_nodes WHERE file_path IS NOT NULL "
+        "DELETE FROM graph_nodes WHERE project = %s AND file_path IS NOT NULL "
         "AND NOT (file_path = ANY(%s));",
-        (known_paths,),
+        (project, known_paths),
     )
     removed = cursor.rowcount
     cursor.execute(
-        "DELETE FROM file_hashes WHERE NOT (file_path = ANY(%s));",
-        (known_paths,),
+        "DELETE FROM file_hashes WHERE project = %s AND NOT (file_path = ANY(%s));",
+        (project, known_paths),
     )
     return removed
 
 
-def ensure_external_node(cursor: Cursor, node_id: str, node_type: str) -> None:
+def ensure_external_node(
+    cursor: Cursor, project: str, node_id: str, node_type: str
+) -> None:
     """Create a placeholder node for a target defined outside the project."""
     cursor.execute(
         """
-        INSERT INTO graph_nodes (id, name, type)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (id) DO NOTHING;
+        INSERT INTO graph_nodes (project, id, name, type)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (project, id) DO NOTHING;
         """,
-        (node_id, truncate(node_id, MAX_NAME_LENGTH), node_type),
+        (project, node_id, truncate(node_id, MAX_NAME_LENGTH), node_type),
     )
 
 
 def upsert_entity_node(
     cursor: Cursor,
+    project: str,
     rel_path: str,
     entity: dict[str, str],
     source: str = SOURCE_NATIVE,
@@ -153,15 +228,16 @@ def upsert_entity_node(
     """Insert or refresh the node standing for something a file declares."""
     cursor.execute(
         """
-        INSERT INTO graph_nodes (id, name, type, file_path, metadata)
-        VALUES (%s, %s, %s, %s, JSONB_BUILD_OBJECT('source', %s))
-        ON CONFLICT (id) DO UPDATE SET
+        INSERT INTO graph_nodes (project, id, name, type, file_path, metadata)
+        VALUES (%s, %s, %s, %s, %s, JSONB_BUILD_OBJECT('source', %s))
+        ON CONFLICT (project, id) DO UPDATE SET
             name = EXCLUDED.name,
             type = EXCLUDED.type,
             file_path = EXCLUDED.file_path,
             metadata = graph_nodes.metadata || EXCLUDED.metadata;
         """,
         (
+            project,
             entity_node_id(rel_path, entity["name"]),
             truncate(entity["name"], MAX_NAME_LENGTH),
             truncate(entity["type"], MAX_TYPE_LENGTH),
@@ -173,6 +249,7 @@ def upsert_entity_node(
 
 def upsert_extracted_node(
     cursor: Cursor,
+    project: str,
     node_id: str,
     name: str,
     node_type: str,
@@ -189,9 +266,11 @@ def upsert_extracted_node(
     """
     cursor.execute(
         """
-        INSERT INTO graph_nodes (id, name, type, file_path, summary, metadata)
-        VALUES (%s, %s, %s, %s, %s, %s::JSONB)
-        ON CONFLICT (id) DO UPDATE SET
+        INSERT INTO graph_nodes (
+            project, id, name, type, file_path, summary, metadata
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s::JSONB)
+        ON CONFLICT (project, id) DO UPDATE SET
             name = EXCLUDED.name,
             type = EXCLUDED.type,
             file_path = EXCLUDED.file_path,
@@ -205,6 +284,7 @@ def upsert_extracted_node(
             END;
         """,
         (
+            project,
             truncate(node_id, MAX_NODE_ID_LENGTH),
             truncate(name, MAX_NAME_LENGTH),
             truncate(node_type, MAX_TYPE_LENGTH),
@@ -215,7 +295,7 @@ def upsert_extracted_node(
     )
 
 
-def clear_producer_artifacts(cursor: Cursor, source: str) -> int:
+def clear_producer_artifacts(cursor: Cursor, project: str, source: str) -> int:
     """Drop what one producer wrote, leaving the other producer's rows alone.
 
     File nodes are kept: they are the anchor both producers and the MCP
@@ -224,54 +304,65 @@ def clear_producer_artifacts(cursor: Cursor, source: str) -> int:
     entity deleted from the source has no other way out of the graph.
     """
     cursor.execute(
-        "DELETE FROM graph_edges WHERE metadata ->> 'source' = %s;",
-        (source,),
+        """
+        DELETE FROM graph_edges
+        WHERE project = %s AND metadata ->> 'source' = %s;
+        """,
+        (project, source),
     )
     cursor.execute(
         """
         DELETE FROM graph_nodes
-        WHERE metadata ->> 'source' = %s AND type <> 'file';
+        WHERE project = %s AND metadata ->> 'source' = %s AND type <> 'file';
         """,
-        (source,),
+        (project, source),
     )
     return cursor.rowcount
 
 
-def get_file_hash(cursor: Cursor, rel_path: str) -> str | None:
+def get_file_hash(cursor: Cursor, project: str, rel_path: str) -> str | None:
     """Retrieve the stored MD5 hash for a file."""
-    cursor.execute("SELECT hash FROM file_hashes WHERE file_path = %s;", (rel_path,))
+    cursor.execute(
+        "SELECT hash FROM file_hashes WHERE project = %s AND file_path = %s;",
+        (project, rel_path),
+    )
     result = cursor.fetchone()
     return result[0] if result else None
 
 
-def upsert_file_hash(cursor: Cursor, rel_path: str, file_hash: str) -> None:
+def upsert_file_hash(
+    cursor: Cursor, project: str, rel_path: str, file_hash: str
+) -> None:
     """Store or update the MD5 hash for a file."""
     cursor.execute(
         """
-        INSERT INTO file_hashes (file_path, hash, updated_at)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (file_path) DO UPDATE SET
+        INSERT INTO file_hashes (project, file_path, hash, updated_at)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (project, file_path) DO UPDATE SET
             hash = EXCLUDED.hash,
             updated_at = CURRENT_TIMESTAMP;
         """,
-        (rel_path, file_hash),
+        (project, rel_path, file_hash),
     )
 
 
-def get_file_entities(cursor: Cursor, rel_path: str) -> list[dict[str, str]]:
+def get_file_entities(
+    cursor: Cursor, project: str, rel_path: str
+) -> list[dict[str, str]]:
     """Retrieve existing entities for a file."""
     cursor.execute(
         """
         SELECT id, name, type FROM graph_nodes
-        WHERE file_path = %s AND type <> 'file';
+        WHERE project = %s AND file_path = %s AND type <> 'file';
         """,
-        (rel_path,),
+        (project, rel_path),
     )
     return [{"id": row[0], "name": row[1], "type": row[2]} for row in cursor.fetchall()]
 
 
 def insert_edge(
     cursor: Cursor,
+    project: str,
     source_id: str,
     target_id: str,
     relation_type: str,
@@ -280,11 +371,14 @@ def insert_edge(
     """Record one relation, ignoring a repeat of an edge already stored."""
     cursor.execute(
         """
-        INSERT INTO graph_edges (source_id, target_id, relation_type, metadata)
-        VALUES (%s, %s, %s, %s::JSONB)
+        INSERT INTO graph_edges (
+            project, source_id, target_id, relation_type, metadata
+        )
+        VALUES (%s, %s, %s, %s, %s::JSONB)
         ON CONFLICT DO NOTHING;
         """,
         (
+            project,
             source_id,
             target_id,
             truncate(relation_type, MAX_TYPE_LENGTH),
@@ -293,31 +387,39 @@ def insert_edge(
     )
 
 
-def iter_nodes(cursor: Cursor) -> list[tuple[str, str, str, str | None, str | None]]:
+def iter_nodes(
+    cursor: Cursor, project: str
+) -> list[tuple[str, str, str, str | None, str | None]]:
     """Read every node, for rebuilding the graph outside the database."""
     cursor.execute(
         """
         SELECT id, name, type, file_path, summary,
                COALESCE(metadata ->> 'community', '')
-          FROM graph_nodes;
-        """
+          FROM graph_nodes
+         WHERE project = %s;
+        """,
+        (project,),
     )
     return cursor.fetchall()
 
 
-def iter_edges(cursor: Cursor) -> list[tuple[str, str, str, str]]:
+def iter_edges(cursor: Cursor, project: str) -> list[tuple[str, str, str, str]]:
     """Read every edge, for rebuilding the graph outside the database."""
     cursor.execute(
         """
         SELECT source_id, target_id, relation_type,
                COALESCE(metadata ->> 'confidence', 'EXTRACTED')
-          FROM graph_edges;
-        """
+          FROM graph_edges
+         WHERE project = %s;
+        """,
+        (project,),
     )
     return cursor.fetchall()
 
 
-def store_communities(cursor: Cursor, communities: dict[int, list[str]]) -> int:
+def store_communities(
+    cursor: Cursor, project: str, communities: dict[int, list[str]]
+) -> int:
     """Write the community each node was clustered into back onto the node.
 
     Clustering runs over the merged graph, so this is what lets a node found
@@ -333,8 +435,8 @@ def store_communities(cursor: Cursor, communities: dict[int, list[str]]) -> int:
             """
             UPDATE graph_nodes
                SET metadata = metadata || JSONB_BUILD_OBJECT('community', %s)
-             WHERE id = %s;
+             WHERE project = %s AND id = %s;
             """,
-            (community_id, node_id),
+            (community_id, project, node_id),
         )
     return len(pairs)

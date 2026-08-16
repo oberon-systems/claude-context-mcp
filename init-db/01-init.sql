@@ -3,8 +3,28 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- One row per indexed codebase. Every other table is scoped to it, which is
+-- what lets one database serve several projects and lets an agent working in
+-- one of them read the graph of another.
+--
+-- The name is what addresses a project everywhere else: in the `project`
+-- argument of the MCP tools and in the `/mcp/<name>` endpoint a client
+-- connects to. It is derived from the last segment of the root path, so
+-- root_path is UNIQUE to keep two different checkouts from claiming one name
+-- and silently merging their graphs.
+CREATE TABLE IF NOT EXISTS projects (
+    name VARCHAR(64) PRIMARY KEY,
+    root_path TEXT NOT NULL UNIQUE,
+    indexed_at TIMESTAMP WITH TIME ZONE
+);
+
 CREATE TABLE IF NOT EXISTS graph_nodes (
-    id VARCHAR(255) PRIMARY KEY,
+    project VARCHAR(64) NOT NULL REFERENCES projects (
+        name
+    ) ON DELETE CASCADE,
+    -- Unique within a project, not across the database: `README.md` is a node
+    -- id in every codebase there is, which is why the key is composite.
+    id VARCHAR(255) NOT NULL,
     name VARCHAR(255) NOT NULL,
     -- What the node stands for: file, or an entity kind reported by the
     -- parser (function, method, class, interface, type, struct, trait, enum,
@@ -19,51 +39,85 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     -- written through the MCP save_node_summary tool. The indexer only
     -- overwrites the former.
     metadata JSONB DEFAULT '{}'::JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project, id)
 );
 
+-- Both endpoints of an edge are in the same project. Nothing can produce a
+-- cross-project edge today: the indexer is handed one tree at a time and
+-- resolves every target inside it, so an edge reaching out of the project
+-- would have no way to be discovered. Keeping the constraint single-project
+-- makes that explicit rather than leaving a column that is always equal.
 CREATE TABLE IF NOT EXISTS graph_edges (
     id SERIAL PRIMARY KEY,
-    source_id VARCHAR(255) REFERENCES graph_nodes (id) ON DELETE CASCADE,
-    target_id VARCHAR(255) REFERENCES graph_nodes (id) ON DELETE CASCADE,
+    project VARCHAR(64) NOT NULL,
+    source_id VARCHAR(255) NOT NULL,
+    target_id VARCHAR(255) NOT NULL,
     -- What the source does with the target: imports, calls, inherits, or,
     -- for Ansible, includes, uses_role, depends_on, reads_vars, uses_template,
     -- uses_file, notifies.
     relation_type VARCHAR(50) NOT NULL,
     metadata JSONB DEFAULT '{}'::JSONB,
-    UNIQUE (source_id, target_id, relation_type)
+    FOREIGN KEY (project, source_id) REFERENCES graph_nodes (
+        project, id
+    ) ON DELETE CASCADE,
+    FOREIGN KEY (project, target_id) REFERENCES graph_nodes (
+        project, id
+    ) ON DELETE CASCADE,
+    UNIQUE (project, source_id, target_id, relation_type)
 );
 
 CREATE TABLE IF NOT EXISTS code_embeddings (
     id SERIAL PRIMARY KEY,
-    node_id VARCHAR(255) REFERENCES graph_nodes (id) ON DELETE CASCADE,
+    project VARCHAR(64) NOT NULL,
+    node_id VARCHAR(255) NOT NULL,
     content_chunk TEXT NOT NULL,
     -- 1536 dimensions, matching OpenAI / Cohere / Nomic embedding models.
     embedding VECTOR(1536),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project, node_id) REFERENCES graph_nodes (
+        project, id
+    ) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS project_plans (
-    id VARCHAR(255) PRIMARY KEY,
+    project VARCHAR(64) NOT NULL REFERENCES projects (
+        name
+    ) ON DELETE CASCADE,
+    id VARCHAR(255) NOT NULL,
     title VARCHAR(255) NOT NULL,
     content TEXT NOT NULL,
     status VARCHAR(50) DEFAULT 'active', -- e.g. active, completed, archived
     metadata JSONB DEFAULT '{}'::JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project, id)
 );
 
 CREATE TABLE IF NOT EXISTS file_hashes (
-    file_path TEXT PRIMARY KEY,
+    project VARCHAR(64) NOT NULL REFERENCES projects (
+        name
+    ) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
     hash VARCHAR(32) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (project, file_path)
 );
 
-CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes (type);
-CREATE INDEX IF NOT EXISTS idx_graph_nodes_file_path ON graph_nodes (file_path);
-CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges (source_id);
-CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges (target_id);
-CREATE INDEX IF NOT EXISTS idx_code_embeddings_node ON code_embeddings (node_id);
+-- Every lookup is inside one project, so the project column leads each index.
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_type ON graph_nodes (project, type);
+CREATE INDEX IF NOT EXISTS idx_graph_nodes_file_path ON graph_nodes (
+    project, file_path
+);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges (
+    project, source_id
+);
+CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges (
+    project, target_id
+);
+CREATE INDEX IF NOT EXISTS idx_code_embeddings_node ON code_embeddings (
+    project, node_id
+);
 
 -- HNSW over cosine distance: the intended lookup is `embedding <=> query`.
 -- Unlike ivfflat this index does not need training data, so it can be created

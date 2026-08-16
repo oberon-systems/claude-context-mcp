@@ -19,11 +19,13 @@ from ctxgraph.config import (
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
     MAX_NODE_ID_LENGTH,
+    PROJECT_NAME,
     PROJECT_PATH,
+    PROJECT_ROOT,
     SOURCE_GRAPHIFYY,
 )
 from ctxgraph.discovery import iter_source_files, read_source
-from ctxgraph.identifiers import entity_node_id, truncate
+from ctxgraph.identifiers import entity_node_id, project_name, truncate
 from ctxgraph.interop import (
     import_extraction,
     materialize_graph_json,
@@ -36,6 +38,7 @@ from ctxgraph.storage import (
     clear_file_artifacts,
     clear_producer_artifacts,
     ensure_external_node,
+    ensure_project,
     get_db_connection,
     get_file_entities,
     get_file_hash,
@@ -62,21 +65,26 @@ def compute_hash(content: str) -> str:
     return hashlib.md5(content.encode("utf-8")).hexdigest()
 
 
-def index_file(cursor: Cursor, rel_path: str, content: str) -> list[dict[str, str]]:
+def index_file(
+    cursor: Cursor, project: str, rel_path: str, content: str
+) -> list[dict[str, str]]:
     """Store the file node and its entities. Returns the entities written."""
     parser = get_parser(rel_path)
     entities = parser.get_entities(content, rel_path) if parser else []
 
-    upsert_file_node(cursor, rel_path, extract_summary(rel_path, content, entities))
-    clear_file_artifacts(cursor, rel_path)
+    upsert_file_node(
+        cursor, project, rel_path, extract_summary(rel_path, content, entities)
+    )
+    clear_file_artifacts(cursor, project, rel_path)
 
     for entity in entities:
-        upsert_entity_node(cursor, rel_path, entity)
+        upsert_entity_node(cursor, project, rel_path, entity)
     return entities
 
 
 def link_file(
     cursor: Cursor,
+    project: str,
     rel_path: str,
     content: str,
     known_files: set[str],
@@ -107,17 +115,17 @@ def link_file(
             )
             if target_id is None:
                 target_id = placeholder_id(relation_type, target)
-                ensure_external_node(cursor, target_id, "external_import")
+                ensure_external_node(cursor, project, target_id, "external_import")
             else:
                 imported.add(target_id)
         else:
             target_id = resolve_symbol(target, rel_path, symbols, imported)
             if target_id is None:
                 target_id = truncate(target, MAX_NODE_ID_LENGTH)
-                ensure_external_node(cursor, target_id, "external_symbol")
+                ensure_external_node(cursor, project, target_id, "external_symbol")
         if target_id == source_id:
             continue
-        insert_edge(cursor, source_id, target_id, relation_type)
+        insert_edge(cursor, project, source_id, target_id, relation_type)
         edges += 1
     return edges
 
@@ -151,7 +159,7 @@ def normalize_extraction(
 
 
 def index_with_graphifyy(
-    cursor: Cursor, sources: list[tuple[str, str]]
+    cursor: Cursor, project: str, sources: list[tuple[str, str]]
 ) -> tuple[int, int]:
     """Extract the code half of the tree and store it. Returns nodes, edges.
 
@@ -173,15 +181,33 @@ def index_with_graphifyy(
     extraction = extract([Path(full_path) for full_path, _ in sources])
     normalize_extraction(extraction, PROJECT_PATH)
 
-    clear_producer_artifacts(cursor, SOURCE_GRAPHIFYY)
+    clear_producer_artifacts(cursor, project, SOURCE_GRAPHIFYY)
     # Also clear by file. A tree indexed before the extractor was introduced
     # has entities our own parsers wrote for these same files, and nothing
     # else would ever collect them: the parsers no longer visit a code file,
     # so their own per-file cleanup never runs on one again.
     for _, rel_path in sources:
-        clear_file_artifacts(cursor, rel_path)
+        clear_file_artifacts(cursor, project, rel_path)
 
-    return import_extraction(cursor, extraction, heads)
+    return import_extraction(cursor, project, extraction, heads)
+
+
+def resolve_project() -> tuple[str, str]:
+    """Settle on the name and the host path of the tree being indexed.
+
+    The mount inside the container is always `/project`, which says nothing
+    about which codebase it is. One database now holds several, so the host
+    path has to arrive separately; `make index` passes it, and a hand-rolled
+    `docker run` has to as well.
+    """
+    root_path = PROJECT_ROOT.strip()
+    if not root_path:
+        raise RuntimeError(
+            "PROJECT_ROOT is not set. It is the host path of the tree being "
+            "indexed, and it is what tells one project in the database from "
+            "another. Pass it, or run the job through `make index`."
+        )
+    return project_name(PROJECT_NAME, root_path), root_path
 
 
 def scan_and_build_graph() -> None:
@@ -189,22 +215,33 @@ def scan_and_build_graph() -> None:
     if not os.path.isdir(PROJECT_PATH):
         raise RuntimeError(f"{PROJECT_PATH} is not a directory")
 
+    project, root_path = resolve_project()
+
     conn = get_db_connection()
     try:
+        # Before anything else: every other table references this row, and a
+        # name already claimed by a different checkout has to stop the run
+        # rather than merge two codebases into one graph.
+        with conn.cursor() as cursor:
+            ensure_project(cursor, project, root_path)
+            conn.commit()
+
         discovered = list(iter_source_files(PROJECT_PATH))
         code_sources = [pair for pair in discovered if is_graphifyy_source(pair[1])]
         sources = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
         LOG.info(
-            "Indexing %d files from %s (%d via graphifyy, %d via our parsers)",
+            "Indexing %d files of project %s from %s "
+            "(%d via graphifyy, %d via our parsers)",
             len(discovered),
-            PROJECT_PATH,
+            project,
+            root_path,
             len(code_sources),
             len(sources),
         )
 
         with conn.cursor() as cursor:
             try:
-                nodes, edges = index_with_graphifyy(cursor, code_sources)
+                nodes, edges = index_with_graphifyy(cursor, project, code_sources)
                 conn.commit()
                 LOG.info("graphifyy: %d nodes, %d edges", nodes, edges)
             except Exception:
@@ -228,16 +265,16 @@ def scan_and_build_graph() -> None:
                     continue
 
                 file_hash = compute_hash(content)
-                stored_hash = get_file_hash(cursor, rel_path)
+                stored_hash = get_file_hash(cursor, project, rel_path)
 
                 if stored_hash == file_hash:
                     # Skip parsing, retrieve entities from DB
-                    entities = get_file_entities(cursor, rel_path)
+                    entities = get_file_entities(cursor, project, rel_path)
                 else:
                     # Re-parse file
                     try:
-                        entities = index_file(cursor, rel_path, content)
-                        upsert_file_hash(cursor, rel_path, file_hash)
+                        entities = index_file(cursor, project, rel_path, content)
+                        upsert_file_hash(cursor, project, rel_path, file_hash)
                     except Exception:
                         conn.rollback()
                         failures += 1
@@ -260,7 +297,7 @@ def scan_and_build_graph() -> None:
                     continue
                 try:
                     edge_total += link_file(
-                        cursor, rel_path, content, known_files, symbols
+                        cursor, project, rel_path, content, known_files, symbols
                     )
                 except Exception:
                     conn.rollback()
@@ -271,9 +308,9 @@ def scan_and_build_graph() -> None:
 
             try:
                 gone = prune_missing_files(
-                    cursor, [rel_path for _, rel_path in discovered]
+                    cursor, project, [rel_path for _, rel_path in discovered]
                 )
-                pruned = gone + prune_orphans(cursor)
+                pruned = gone + prune_orphans(cursor, project)
                 conn.commit()
             except psycopg2.Error:
                 conn.rollback()
@@ -283,7 +320,7 @@ def scan_and_build_graph() -> None:
             # Clustering runs last, over what both producers wrote, so a
             # playbook and the module it deploys can share a community.
             try:
-                recluster(cursor)
+                recluster(cursor, project)
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -292,13 +329,14 @@ def scan_and_build_graph() -> None:
             try:
                 os.makedirs(GRAPHIFY_OUT_DIR, exist_ok=True)
                 materialize_graph_json(
-                    cursor, os.path.join(GRAPHIFY_OUT_DIR, "graph.json")
+                    cursor, project, os.path.join(GRAPHIFY_OUT_DIR, "graph.json")
                 )
             except Exception:
                 LOG.exception("Failed to write graph.json")
 
         LOG.info(
-            "Done: %d files, %d entities, %d edges, %d pruned, %d failures",
+            "Done with %s: %d files, %d entities, %d edges, %d pruned, %d failures",
+            project,
             len(known_files),
             entity_total,
             edge_total,

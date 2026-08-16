@@ -140,14 +140,34 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 	port=$${port:-3000}; \
 	health=$$(curl -sS localhost:$$port/health 2> /dev/null); \
 	echo "health:     $${health:-unreachable on localhost:$$port}"; \
-	nodes=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
-		-d "$${POSTGRES_DB:-context}" -tAc 'select count(*) from graph_nodes' \
+	graph=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
+		-d "$${POSTGRES_DB:-context}" -tAc "select string_agg( \
+			p.name || ' (' || c.nodes || ')', ', ' order by p.name) \
+			from projects p, lateral ( \
+				select count(*) as nodes from graph_nodes g \
+				 where g.project = p.name) c" \
 		2> /dev/null | tr -d '\r'); \
-	echo "graph:      $${nodes:-unavailable} nodes"
+	echo "graph:      $${graph:-unavailable}"
 
 # graphify runs to completion and exits, so `run --rm` rather than `up`.
-index: require-env  ## Index PROJECT_PATH into the graph (one-shot job)
-	$(COMPOSE) --profile index run --rm graphify
+#
+# One database holds every indexed codebase, so the tree to walk is an argument
+# rather than a setting: `make index PROJECT=/path/to/anything` mounts that
+# path and stores its graph under its own name. The target needs nothing of the
+# indexed repository - no checkout of this one inside it, no .env, no Makefile -
+# which is what makes indexing a neighbour a one-liner. PROJECT_PATH from .env
+# is the default, so a plain `make index` keeps meaning what it did.
+#
+# PROJECT_ROOT travels alongside the mount because the container only ever sees
+# /project, and the projects table records where that came from.
+PROJECT ?=
+PROJECT_NAME ?=
+INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
+
+index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
+	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
+		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
+		$(COMPOSE) --profile index run --rm graphify
 
 psql: require-env  ## Open a psql session against the context database
 	$(COMPOSE) exec postgres psql -U "$${POSTGRES_USER:-user}" -d "$${POSTGRES_DB:-context}"

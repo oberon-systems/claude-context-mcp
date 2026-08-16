@@ -39,6 +39,12 @@ services:
     environment:
       DATABASE_URL: *database-url
       TARGET_PROJECT_PATH: /project
+      # The mount is always /project inside the container, which says nothing
+      # about which codebase it holds. The host path travels separately so the
+      # projects table can record where the graph came from, and the name is
+      # derived from it unless one is given.
+      PROJECT_ROOT: ${PROJECT_PATH}
+      PROJECT_NAME: ${PROJECT_NAME:-}
     volumes:
       # Read-only by contract: the indexer must never mutate host sources.
       - ${PROJECT_PATH}:/project:ro

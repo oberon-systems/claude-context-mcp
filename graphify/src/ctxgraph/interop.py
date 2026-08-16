@@ -112,6 +112,7 @@ def node_id(node: dict[str, str]) -> str:
 
 def import_extraction(
     cursor: Cursor,
+    project: str,
     extraction: dict[str, list[dict[str, str]]],
     contents: dict[str, str],
 ) -> tuple[int, int]:
@@ -158,10 +159,13 @@ def import_extraction(
                 contents.get(source_file, ""),
                 entities_by_file.get(source_file, []),
             )
-            upsert_file_node(cursor, source_file, summary, source=SOURCE_GRAPHIFYY)
+            upsert_file_node(
+                cursor, project, source_file, summary, source=SOURCE_GRAPHIFYY
+            )
         else:
             upsert_extracted_node(
                 cursor,
+                project,
                 our_id,
                 label,
                 kind,
@@ -189,11 +193,12 @@ def import_extraction(
         target_id = id_map.get(their_target)
         if target_id is None:
             target_id = truncate(their_target, MAX_NODE_ID_LENGTH)
-            ensure_external_node(cursor, target_id, "external_import")
+            ensure_external_node(cursor, project, target_id, "external_import")
         if target_id == source_id:
             continue
         insert_edge(
             cursor,
+            project,
             source_id,
             target_id,
             edge.get("relation", "uses"),
@@ -208,7 +213,7 @@ def import_extraction(
     return written, linked
 
 
-def db_to_graph(cursor: Cursor) -> nx.Graph:
+def db_to_graph(cursor: Cursor, project: str) -> nx.Graph:
     """Rebuild the whole graph in memory, in the shape graphifyy expects.
 
     Node attributes follow its own export: `label`, `source_file`,
@@ -216,7 +221,9 @@ def db_to_graph(cursor: Cursor) -> nx.Graph:
     point - it rides along into its HTML view and its MCP tools.
     """
     graph = nx.Graph()
-    for node_key, name, kind, file_path, summary, community in iter_nodes(cursor):
+    for node_key, name, kind, file_path, summary, community in iter_nodes(
+        cursor, project
+    ):
         attrs: dict[str, object] = {
             "label": name,
             "kind": kind,
@@ -227,7 +234,7 @@ def db_to_graph(cursor: Cursor) -> nx.Graph:
             attrs["community"] = int(community)
         graph.add_node(node_key, **attrs)
 
-    for source_id, target_id, relation, confidence in iter_edges(cursor):
+    for source_id, target_id, relation, confidence in iter_edges(cursor, project):
         if source_id is None or target_id is None:
             continue
         graph.add_edge(
@@ -249,15 +256,15 @@ def communities_of(graph: nx.Graph) -> dict[int, list[str]]:
     return grouped
 
 
-def recluster(cursor: Cursor) -> int:
+def recluster(cursor: Cursor, project: str) -> int:
     """Cluster the merged graph and store the result on the nodes."""
-    graph = db_to_graph(cursor)
+    graph = db_to_graph(cursor, project)
     if graph.number_of_nodes() == 0:
         return 0
     grouped = cluster(graph)
     sizes = Counter(len(members) for members in grouped.values())
     LOG.info("Clustered into %d communities (sizes %s)", len(grouped), dict(sizes))
-    return store_communities(cursor, grouped)
+    return store_communities(cursor, project, grouped)
 
 
 def annotate_for_graphifyy(graph: nx.Graph) -> nx.Graph:
@@ -301,15 +308,15 @@ def community_labels(graph: nx.Graph, grouped: dict[int, list[str]]) -> dict[int
     return labels
 
 
-def materialize_graph_json(cursor: Cursor, output_path: str) -> None:
+def materialize_graph_json(cursor: Cursor, project: str, output_path: str) -> None:
     """Write the database out as the graph.json graphifyy tools read."""
-    graph = annotate_for_graphifyy(db_to_graph(cursor))
+    graph = annotate_for_graphifyy(db_to_graph(cursor, project))
     to_json(graph, communities_of(graph), output_path)
 
 
-def render_html(cursor: Cursor, output_path: str) -> None:
+def render_html(cursor: Cursor, project: str, output_path: str) -> None:
     """Render the database as the interactive graph page."""
-    graph = annotate_for_graphifyy(db_to_graph(cursor))
+    graph = annotate_for_graphifyy(db_to_graph(cursor, project))
     grouped = communities_of(graph)
     to_html(
         graph,

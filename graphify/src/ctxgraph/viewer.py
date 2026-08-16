@@ -8,14 +8,16 @@ browser, so what is on screen is what is in the database.
 
 from __future__ import annotations
 
+import html
 import logging
 import os
 import re
 import tempfile
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from ctxgraph.interop import render_html
-from ctxgraph.storage import get_db_connection
+from ctxgraph.storage import get_db_connection, list_projects
 
 LOG = logging.getLogger(__name__)
 
@@ -42,13 +44,43 @@ _VIS_SRC = re.compile(rb'src="https://unpkg\.com/vis-network[^"]*"')
 VIS_SRC = f'src="{VIS_NETWORK_ROUTE}"'.encode()
 
 
-def render() -> bytes:
-    """Render the current contents of the database as a page."""
+INDEX_TEMPLATE = """<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Code graph</title></head>
+<body style="font-family: sans-serif; margin: 3rem">
+<h1>Indexed projects</h1>
+<ul>{items}</ul>
+</body>
+</html>
+"""
+
+
+def render_index(projects: list[tuple[str, str, int]]) -> bytes:
+    """List the projects in the database, each linking to its own graph.
+
+    Shown when the address names no project and more than one is indexed.
+    Guessing would be worse than asking: the graphs are unrelated, and the
+    page carries no sign of which one you are looking at.
+    """
+    items = "".join(
+        '<li><a href="/graph?project={name}">{name}</a> '
+        "- {count} nodes, {root}</li>".format(
+            name=html.escape(name),
+            count=count,
+            root=html.escape(root_path),
+        )
+        for name, root_path, count in projects
+    )
+    return INDEX_TEMPLATE.format(items=items or "<li>nothing indexed yet</li>").encode()
+
+
+def render(project: str) -> bytes:
+    """Render one project's graph as a page."""
     conn = get_db_connection()
     try:
         with conn.cursor() as cursor, tempfile.TemporaryDirectory() as work_dir:
             output_path = os.path.join(work_dir, "graph.html")
-            render_html(cursor, output_path)
+            render_html(cursor, project, output_path)
             with open(output_path, "rb") as handle:
                 page = handle.read()
     finally:
@@ -72,18 +104,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 - the name is fixed by the base class
         """Render the graph, serve the library, or say why neither worked."""
-        path = self.path.split("?")[0]
+        parsed = urllib.parse.urlparse(self.path)
 
-        if path == VIS_NETWORK_ROUTE:
+        if parsed.path == VIS_NETWORK_ROUTE:
             self.serve_library()
             return
 
-        if path not in PATHS:
+        if parsed.path not in PATHS:
             self.send_error(404, "Not found")
             return
 
+        requested = urllib.parse.parse_qs(parsed.query).get("project", [""])[0]
+
         try:
-            body = render()
+            body = self.render_for(requested)
         except Exception as error:  # noqa: BLE001 - reported to the browser
             LOG.exception("Failed to render the graph")
             self.send_error(503, "Cannot render the graph", str(error))
@@ -91,6 +125,32 @@ class Handler(BaseHTTPRequestHandler):
 
         # The page is regenerated per request; a cached copy would defeat it.
         self.reply(body, "text/html; charset=utf-8", "no-store")
+
+    def render_for(self, requested: str) -> bytes:
+        """Pick the project to draw, and draw it.
+
+        A single indexed project is drawn without being named, which is the
+        common case and keeps the address short. Past that the index page is
+        the answer, since a rendered graph says nothing about whose it is.
+        """
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                projects = list_projects(cursor)
+        finally:
+            conn.close()
+
+        names = [name for name, _, _ in projects]
+        if requested:
+            if requested not in names:
+                raise RuntimeError(
+                    f"no project named {requested!r}; indexed: "
+                    f"{', '.join(names) or 'none'}"
+                )
+            return render(requested)
+        if len(names) == 1:
+            return render(names[0])
+        return render_index(projects)
 
     def serve_library(self) -> None:
         """Send the vendored drawing library.

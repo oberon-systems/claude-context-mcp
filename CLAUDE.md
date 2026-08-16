@@ -52,6 +52,8 @@ Refer to `ROADMAP.md` or task tracking for current state.
 
 1. Maintain root `.pre-commit-config.yaml` and `.cz.yaml` (`wyld-cz`).
 2. Finalize SQL schema in `init-db/01-init.sql` for node graphs, edge relationships, and vector embeddings.
+   Every table is scoped to a row of `projects`: one database holds the graph of
+   every indexed codebase, and `graph_nodes` is keyed on `(project, id)`.
 3. Extend the Tree-sitter parsers in `graphify/src/ctxgraph/parsers/` as new
    infrastructure formats are needed. Programming languages go to the upstream
    extractor instead, through `GRAPHIFYY_EXTENSIONS` in `config.py`.

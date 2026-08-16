@@ -33,9 +33,37 @@ const DEFAULT_RESULTS = 20;
 const MAX_HOPS = 10;
 const DEFAULT_HOPS = 6;
 
-const listToolsHandler = async (): Promise<ListToolsResult> => {
+// One database holds the graph of every indexed codebase, so every statement
+// below is scoped to one project. A session gets its default from the address
+// the client connected to (`/mcp/<project>`), and any single call can name a
+// different one to read a neighbour's graph without reconnecting.
+function projectDescription(sessionProject: string | null): string {
+  return sessionProject === null
+    ? "Project to query. Required here: this session was opened on /mcp " +
+        "without naming one. list_projects returns the available names."
+    : `Project to query. Defaults to "${sessionProject}"; name another ` +
+        "indexed project to read its graph instead.";
+}
+
+const listToolsHandler = async (
+  sessionProject: string | null,
+): Promise<ListToolsResult> => {
+  const project = {
+    type: "string",
+    description: projectDescription(sessionProject),
+  };
   return {
     tools: [
+      {
+        name: "list_projects",
+        description:
+          "List the codebases indexed in this database, with their root " +
+          "paths and node counts",
+        inputSchema: {
+          type: "object",
+          properties: {},
+        },
+      },
       {
         name: "get_code_graph_neighbors",
         description:
@@ -43,6 +71,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             node_id: {
               type: "string",
               description: "File or node identifier, for example src/index.ts",
@@ -57,6 +86,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             query: {
               type: "string",
               description: "Substring matched against the node name and id",
@@ -76,6 +106,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             source_id: {
               type: "string",
               description:
@@ -100,6 +131,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             node_id: {
               type: "string",
               description: "The unique identifier of the node (e.g. file path)",
@@ -119,6 +151,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             node_id: {
               type: "string",
               description: "The unique identifier of the node (e.g. file path)",
@@ -133,6 +166,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             plan_id: {
               type: "string",
               description: "Unique identifier for the project plan",
@@ -160,6 +194,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             status: {
               type: "string",
               description: "Filter plans by status (default 'active')",
@@ -173,6 +208,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             rel_path: {
               type: "string",
               description: "The project-relative file path",
@@ -187,6 +223,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             rel_path: {
               type: "string",
               description: "The project-relative file path",
@@ -201,6 +238,7 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         inputSchema: {
           type: "object",
           properties: {
+            project,
             rel_path: {
               type: "string",
               description: "The project-relative file path",
@@ -217,10 +255,11 @@ const listToolsHandler = async (): Promise<ListToolsResult> => {
         name: "list_indexed_files",
         description:
           "List all files currently tracked in the file_hashes table",
-
         inputSchema: {
           type: "object",
-          properties: {},
+          properties: {
+            project,
+          },
         },
       },
     ],
@@ -259,67 +298,124 @@ function readLimit(args: Record<string, unknown> | undefined): number {
   return Math.min(Math.max(Math.trunc(value), 1), MAX_RESULTS);
 }
 
-const callToolHandler = async (
-  request: CallToolRequest,
-): Promise<CallToolResult> => {
-  const { name, arguments: args } = request.params;
+/** Pick the project a call is about: its own argument, else the session's. */
+function readProject(
+  args: Record<string, unknown> | undefined,
+  sessionProject: string | null,
+): string {
+  const value = args?.project;
+  if (typeof value === "string" && value.trim() !== "") {
+    return value.trim();
+  }
+  if (sessionProject !== null) {
+    return sessionProject;
+  }
+  throw new Error(
+    'Argument "project" is required: this session was opened on /mcp without ' +
+      "naming one. Connect to /mcp/<project> instead, or pass the argument. " +
+      "list_projects returns the available names.",
+  );
+}
 
-  // Errors are reported back through the tool result rather than thrown, so a
-  // bad argument or a database outage does not tear down the client session.
-  try {
-    if (name === "get_code_graph_neighbors") {
-      const nodeId = requireString(args, "node_id");
-      const res = await dbPool.query(
-        // The neighbour rows carry the node's type and summary, so a caller
-        // learns what it found without a second lookup per id.
-        `WITH neighbours AS (
+/** Reject an unknown project by name rather than by empty result.
+ *
+ * A misspelled name is otherwise indistinguishable from an empty graph on
+ * every read tool, and turns into a foreign key error on every write one.
+ */
+async function requireProject(project: string): Promise<string> {
+  const res = await dbPool.query(`SELECT 1 FROM projects WHERE name = $1`, [
+    project,
+  ]);
+  if (res.rowCount === 0) {
+    const all = await dbPool.query(`SELECT name FROM projects ORDER BY name`);
+    const names = all.rows.map((row) => row.name as string).join(", ");
+    throw new Error(
+      `No project named "${project}". Indexed: ${names || "none"}. ` +
+        "Index one with `make index PROJECT=/path/to/it`.",
+    );
+  }
+  return project;
+}
+
+function makeCallToolHandler(
+  sessionProject: string | null,
+): (request: CallToolRequest) => Promise<CallToolResult> {
+  return async (request: CallToolRequest): Promise<CallToolResult> => {
+    const { name, arguments: args } = request.params;
+
+    // Errors are reported back through the tool result rather than thrown, so
+    // a bad argument or a database outage does not tear down the session.
+    try {
+      if (name === "list_projects") {
+        const res = await dbPool.query(
+          `SELECT p.name, p.root_path, p.indexed_at, COUNT(n.id) AS nodes
+             FROM projects AS p
+             LEFT JOIN graph_nodes AS n ON n.project = p.name
+            GROUP BY p.name, p.root_path, p.indexed_at
+            ORDER BY p.name`,
+        );
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
+
+      const project = await requireProject(readProject(args, sessionProject));
+
+      if (name === "get_code_graph_neighbors") {
+        const nodeId = requireString(args, "node_id");
+        const res = await dbPool.query(
+          // The neighbour rows carry the node's type and summary, so a caller
+          // learns what it found without a second lookup per id.
+          `WITH neighbours AS (
            SELECT target_id AS node_id, relation_type, 'outgoing' AS direction
-             FROM graph_edges WHERE source_id = $1
+             FROM graph_edges WHERE project = $1 AND source_id = $2
            UNION
            SELECT source_id AS node_id, relation_type, 'incoming' AS direction
-             FROM graph_edges WHERE target_id = $1
+             FROM graph_edges WHERE project = $1 AND target_id = $2
          )
          SELECT n.node_id, n.relation_type, n.direction,
                 g.type, g.file_path, g.summary
            FROM neighbours AS n
-           LEFT JOIN graph_nodes AS g ON g.id = n.node_id
+           LEFT JOIN graph_nodes AS g
+             ON g.project = $1 AND g.id = n.node_id
           ORDER BY n.direction, n.relation_type, n.node_id
-          LIMIT $2`,
-        [nodeId, MAX_RESULTS],
-      );
+          LIMIT $3`,
+          [project, nodeId, MAX_RESULTS],
+        );
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-      };
-    }
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
 
-    if (name === "search_code_nodes") {
-      const query = `%${requireString(args, "query")}%`;
-      const res = await dbPool.query(
-        `SELECT id, name, type, file_path, summary
+      if (name === "search_code_nodes") {
+        const query = `%${requireString(args, "query")}%`;
+        const res = await dbPool.query(
+          `SELECT id, name, type, file_path, summary
            FROM graph_nodes
-          WHERE name ILIKE $1 OR id ILIKE $1
+          WHERE project = $1 AND (name ILIKE $2 OR id ILIKE $2)
           ORDER BY id
-          LIMIT $2`,
-        [query, readLimit(args)],
-      );
+          LIMIT $3`,
+          [project, query, readLimit(args)],
+        );
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-      };
-    }
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
 
-    if (name === "shortest_path") {
-      const sourceId = requireString(args, "source_id");
-      const targetId = requireString(args, "target_id");
+      if (name === "shortest_path") {
+        const sourceId = requireString(args, "source_id");
+        const targetId = requireString(args, "target_id");
 
-      // Breadth first, in the database. Edges are followed in both
-      // directions because the graph records who imports whom, not which way
-      // a reader wants to travel, and the visited path is carried along so a
-      // walk cannot loop back through a node it already used.
-      const res = await dbPool.query(
-        `WITH RECURSIVE walk(node_id, path, depth) AS (
-             SELECT $1::VARCHAR, ARRAY[$1::VARCHAR], 0
+        // Breadth first, in the database. Edges are followed in both
+        // directions because the graph records who imports whom, not which way
+        // a reader wants to travel, and the visited path is carried along so a
+        // walk cannot loop back through a node it already used.
+        const res = await dbPool.query(
+          `WITH RECURSIVE walk(node_id, path, depth) AS (
+             SELECT $2::VARCHAR, ARRAY[$2::VARCHAR], 0
            UNION ALL
              SELECT next.id, walk.path || next.id, walk.depth + 1
                FROM walk
@@ -329,213 +425,223 @@ const callToolHandler = async (
                           ELSE e.source_id
                         END AS id
                    FROM graph_edges e
-                  WHERE e.source_id = walk.node_id
-                     OR e.target_id = walk.node_id
+                  WHERE e.project = $1
+                    AND (e.source_id = walk.node_id
+                      OR e.target_id = walk.node_id)
                ) AS next ON TRUE
-              WHERE walk.depth < $3
-                AND walk.node_id <> $2
+              WHERE walk.depth < $4
+                AND walk.node_id <> $3
                 AND NOT (next.id = ANY (walk.path))
          )
          SELECT path, depth
            FROM walk
-          WHERE node_id = $2
+          WHERE node_id = $3
           ORDER BY depth
           LIMIT 1`,
-        [sourceId, targetId, readHops(args)],
-      );
+          [project, sourceId, targetId, readHops(args)],
+        );
 
-      if (res.rows.length === 0) {
+        if (res.rows.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No path from ${sourceId} to ${targetId} within the hop limit`,
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(res.rows[0], null, 2) },
+          ],
+        };
+      }
+
+      if (name === "save_node_summary") {
+        const nodeId = requireString(args, "node_id");
+        const summary = requireString(args, "summary");
+        const nameVal = nodeId.split("/").pop() || nodeId;
+        const typeVal = "file";
+
+        // The summary is tagged manual so the indexer leaves it alone; without
+        // the tag the next `make index` run overwrites it with a generated one.
+        await dbPool.query(
+          `INSERT INTO graph_nodes (project, id, name, type, summary, metadata)
+         VALUES ($1, $2, $3, $4, $5, '{"summary_source": "manual"}'::jsonb)
+         ON CONFLICT (project, id) DO UPDATE SET
+           summary = EXCLUDED.summary,
+           metadata = graph_nodes.metadata
+             || '{"summary_source": "manual"}'::jsonb`,
+          [project, nodeId, nameVal, typeVal, summary],
+        );
+
         return {
           content: [
             {
               type: "text",
-              text: `No path from ${sourceId} to ${targetId} within the hop limit`,
+              text: `Summary successfully saved for node: ${nodeId}`,
             },
           ],
         };
       }
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.rows[0], null, 2) }],
-      };
-    }
-
-    if (name === "save_node_summary") {
-      const nodeId = requireString(args, "node_id");
-      const summary = requireString(args, "summary");
-      const nameVal = nodeId.split("/").pop() || nodeId;
-      const typeVal = "file";
-
-      // The summary is tagged manual so the indexer leaves it alone; without
-      // the tag the next `make index` run overwrites it with a generated one.
-      await dbPool.query(
-        `INSERT INTO graph_nodes (id, name, type, summary, metadata)
-         VALUES ($1, $2, $3, $4, '{"summary_source": "manual"}'::jsonb)
-         ON CONFLICT (id) DO UPDATE SET
-           summary = EXCLUDED.summary,
-           metadata = graph_nodes.metadata
-             || '{"summary_source": "manual"}'::jsonb`,
-        [nodeId, nameVal, typeVal, summary],
-      );
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Summary successfully saved for node: ${nodeId}`,
-          },
-        ],
-      };
-    }
-
-    if (name === "get_node_summary") {
-      const nodeId = requireString(args, "node_id");
-      const res = await dbPool.query(
-        `SELECT id, summary, file_path, type
+      if (name === "get_node_summary") {
+        const nodeId = requireString(args, "node_id");
+        const res = await dbPool.query(
+          `SELECT id, summary, file_path, type
            FROM graph_nodes
-          WHERE id = $1`,
-        [nodeId],
-      );
+          WHERE project = $1 AND id = $2`,
+          [project, nodeId],
+        );
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-      };
-    }
-
-    if (name === "save_plan") {
-      const planId = requireString(args, "plan_id");
-      const title = requireString(args, "title");
-      const content = requireString(args, "content");
-      let status = "active";
-      if (args !== undefined && args.status !== undefined) {
-        if (typeof args.status !== "string") {
-          throw new Error('Argument "status" must be a string');
-        }
-        status = args.status;
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
       }
 
-      await dbPool.query(
-        `INSERT INTO project_plans (id, title, content, status, updated_at)
-         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-         ON CONFLICT (id) DO UPDATE SET
+      if (name === "save_plan") {
+        const planId = requireString(args, "plan_id");
+        const title = requireString(args, "title");
+        const content = requireString(args, "content");
+        let status = "active";
+        if (args !== undefined && args.status !== undefined) {
+          if (typeof args.status !== "string") {
+            throw new Error('Argument "status" must be a string');
+          }
+          status = args.status;
+        }
+
+        await dbPool.query(
+          `INSERT INTO project_plans (
+           project, id, title, content, status, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+         ON CONFLICT (project, id) DO UPDATE SET
            title = EXCLUDED.title,
            content = EXCLUDED.content,
            status = EXCLUDED.status,
            updated_at = CURRENT_TIMESTAMP`,
-        [planId, title, content, status],
-      );
+          [project, planId, title, content, status],
+        );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Plan ${planId} successfully saved.`,
-          },
-        ],
-      };
-    }
-
-    if (name === "get_plans") {
-      let status = "active";
-      if (args !== undefined && args.status !== undefined) {
-        if (typeof args.status !== "string") {
-          throw new Error('Argument "status" must be a string');
-        }
-        status = args.status;
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Plan ${planId} successfully saved.`,
+            },
+          ],
+        };
       }
 
-      const res = await dbPool.query(
-        `SELECT id, title, content, status, metadata, created_at, updated_at
+      if (name === "get_plans") {
+        let status = "active";
+        if (args !== undefined && args.status !== undefined) {
+          if (typeof args.status !== "string") {
+            throw new Error('Argument "status" must be a string');
+          }
+          status = args.status;
+        }
+
+        const res = await dbPool.query(
+          `SELECT id, title, content, status, metadata, created_at, updated_at
            FROM project_plans
-          WHERE status = $1
+          WHERE project = $1 AND status = $2
           ORDER BY updated_at DESC`,
-        [status],
-      );
+          [project, status],
+        );
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-      };
-    }
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
 
-    if (name === "get_file_hash") {
-      const relPath = requireString(args, "rel_path");
-      const res = await dbPool.query(
-        `SELECT hash, updated_at
+      if (name === "get_file_hash") {
+        const relPath = requireString(args, "rel_path");
+        const res = await dbPool.query(
+          `SELECT hash, updated_at
            FROM file_hashes
-          WHERE file_path = $1`,
-        [relPath],
-      );
+          WHERE project = $1 AND file_path = $2`,
+          [project, relPath],
+        );
 
-      return {
-        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-      };
-    }
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
 
-    if (name === "clear_file_hash") {
-      const relPath = requireString(args, "rel_path");
-      await dbPool.query(`DELETE FROM file_hashes WHERE file_path = $1`, [
-        relPath,
-      ]);
+      if (name === "clear_file_hash") {
+        const relPath = requireString(args, "rel_path");
+        await dbPool.query(
+          `DELETE FROM file_hashes WHERE project = $1 AND file_path = $2`,
+          [project, relPath],
+        );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Hash cleared for file: ${relPath}. Re-indexing will now pick it up.`,
-          },
-        ],
-      };
-    }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Hash cleared for file: ${relPath}. Re-indexing will now pick it up.`,
+            },
+          ],
+        };
+      }
 
-    if (name === "set_file_hash") {
-      const relPath = requireString(args, "rel_path");
-      const hash = requireString(args, "hash");
-      await dbPool.query(
-        `INSERT INTO file_hashes (file_path, hash, updated_at)
-         VALUES ($1, $2, CURRENT_TIMESTAMP)
-         ON CONFLICT (file_path) DO UPDATE SET
+      if (name === "set_file_hash") {
+        const relPath = requireString(args, "rel_path");
+        const hash = requireString(args, "hash");
+        await dbPool.query(
+          `INSERT INTO file_hashes (project, file_path, hash, updated_at)
+         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+         ON CONFLICT (project, file_path) DO UPDATE SET
            hash = EXCLUDED.hash,
            updated_at = CURRENT_TIMESTAMP`,
-        [relPath, hash],
-      );
+          [project, relPath, hash],
+        );
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Hash set for file: ${relPath}.`,
-          },
-        ],
-      };
-    }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Hash set for file: ${relPath}.`,
+            },
+          ],
+        };
+      }
 
-    if (name === "list_indexed_files") {
-      const res = await dbPool.query(
-        `SELECT file_path, hash, updated_at
+      if (name === "list_indexed_files") {
+        const res = await dbPool.query(
+          `SELECT file_path, hash, updated_at
            FROM file_hashes
+          WHERE project = $1
           ORDER BY updated_at DESC`,
-      );
+          [project],
+        );
 
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
+
+      throw new Error(`Tool ${name} not found`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Tool ${name} failed:`, message);
       return {
-        content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        content: [{ type: "text", text: `Error: ${message}` }],
+        isError: true,
       };
     }
-
-    throw new Error(`Tool ${name} not found`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`Tool ${name} failed:`, message);
-    return {
-      content: [{ type: "text", text: `Error: ${message}` }],
-      isError: true,
-    };
-  }
-};
+  };
+}
 
 // A Server keeps a single transport of its own, so one shared instance would let
 // a second client's connection steal the first one's responses. Every session
-// gets its own Server; the handlers themselves are stateless and reused.
-function createServer(): Server {
+// gets its own Server, which is also where the session's project is held: it
+// comes from the address the client connected to and never changes afterwards.
+function createServer(sessionProject: string | null): Server {
   const server = new Server(
     {
       name: "claude-pg-graph-mcp",
@@ -548,8 +654,13 @@ function createServer(): Server {
     },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, listToolsHandler);
-  server.setRequestHandler(CallToolRequestSchema, callToolHandler);
+  server.setRequestHandler(ListToolsRequestSchema, () =>
+    listToolsHandler(sessionProject),
+  );
+  server.setRequestHandler(
+    CallToolRequestSchema,
+    makeCallToolHandler(sessionProject),
+  );
 
   return server;
 }
@@ -566,6 +677,18 @@ const transports = new Map<string, SSEServerTransport>();
 const httpTransports = new Map<string, StreamableHTTPServerTransport>();
 
 const PORT = Number(process.env.PORT ?? 3000);
+
+// The project a client gets when it connects to a bare /mcp or /sse. Left
+// unset, such a session has no default and every tool call has to name one;
+// the address is the better place to say it, since one server now answers for
+// every indexed codebase.
+const DEFAULT_PROJECT = process.env.DEFAULT_PROJECT ?? null;
+
+/** Read the project out of a route parameter, falling back to the default. */
+function routeProject(req: Request): string | null {
+  const value = req.params.project;
+  return typeof value === "string" && value !== "" ? value : DEFAULT_PROJECT;
+}
 
 function csv(value: string | undefined): string[] {
   return (value ?? "")
@@ -618,10 +741,15 @@ function guardDnsRebinding(
 
 app.get("/health", async (_req: Request, res: Response) => {
   try {
-    await dbPool.query("SELECT 1");
+    // Naming the indexed projects here is what lets `make status` answer the
+    // question one server for many codebases raises: which ones are in there.
+    const indexed = await dbPool.query(
+      `SELECT name FROM projects ORDER BY name`,
+    );
     res.json({
       status: "ok",
       sessions: transports.size + httpTransports.size,
+      projects: indexed.rows.map((row) => row.name as string),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -634,11 +762,21 @@ app.get("/health", async (_req: Request, res: Response) => {
 // address to remember rather than two ports.
 const VIEWER_URL = process.env.VIEWER_URL ?? "http://localhost:3001/graph";
 
-app.get("/graph", (_req: Request, res: Response) => {
-  res.redirect(302, VIEWER_URL);
-});
+// `/graph/<project>` and `/graph?project=<project>` both reach the viewer,
+// which draws the one it is given and lists them all when it is given none.
+function graphRedirect(req: Request, res: Response): void {
+  const project = req.params.project ?? req.query.project;
+  const suffix =
+    typeof project === "string" && project !== ""
+      ? `?project=${encodeURIComponent(project)}`
+      : "";
+  res.redirect(302, `${VIEWER_URL}${suffix}`);
+}
 
-app.get("/sse", guardDnsRebinding, async (_req: Request, res: Response) => {
+app.get("/graph", graphRedirect);
+app.get("/graph/:project", graphRedirect);
+
+async function handleSse(req: Request, res: Response): Promise<void> {
   const transport = new SSEServerTransport("/message", res);
   transports.set(transport.sessionId, transport);
   res.on("close", () => {
@@ -646,12 +784,15 @@ app.get("/sse", guardDnsRebinding, async (_req: Request, res: Response) => {
   });
 
   try {
-    await createServer().connect(transport);
+    await createServer(routeProject(req)).connect(transport);
   } catch (error) {
     console.error("Failed to establish SSE session:", error);
     transports.delete(transport.sessionId);
   }
-});
+}
+
+app.get("/sse", guardDnsRebinding, handleSse);
+app.get("/sse/:project", guardDnsRebinding, handleSse);
 
 app.post("/message", guardDnsRebinding, async (req: Request, res: Response) => {
   const sessionId = req.query.sessionId;
@@ -709,7 +850,7 @@ async function handleStreamableHttp(
   };
 
   try {
-    await createServer().connect(transport);
+    await createServer(routeProject(req)).connect(transport);
     await transport.handleRequest(req, res);
   } catch (error) {
     console.error("Failed to establish Streamable HTTP session:", error);
@@ -725,6 +866,9 @@ async function handleStreamableHttp(
 app.post("/mcp", guardDnsRebinding, handleStreamableHttp);
 app.get("/mcp", guardDnsRebinding, handleStreamableHttp);
 app.delete("/mcp", guardDnsRebinding, handleStreamableHttp);
+app.post("/mcp/:project", guardDnsRebinding, handleStreamableHttp);
+app.get("/mcp/:project", guardDnsRebinding, handleStreamableHttp);
+app.delete("/mcp/:project", guardDnsRebinding, handleStreamableHttp);
 
 const httpServer = app.listen(PORT, "0.0.0.0", () => {
   console.log(`MCP Server running on port ${PORT}`);

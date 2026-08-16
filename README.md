@@ -3,10 +3,11 @@
 A Dockerized GraphRAG and vector context service for Claude CLI (`claude-code`)
 and Gemini CLI.
 
-It runs an isolated PostgreSQL database with `pgvector`, indexes a codebase into
-a graph of files, entities and their relations, and serves that graph to both
-agents over MCP. The indexed codebase is mounted read-only, so nothing in this
-stack can modify your sources.
+It runs an isolated PostgreSQL database with `pgvector`, indexes codebases into
+graphs of files, entities and their relations, and serves those graphs to both
+agents over MCP. One stack holds as many codebases as you index, and an agent
+working in one of them can read the graph of another. Every indexed codebase is
+mounted read-only, so nothing in this stack can modify your sources.
 
 ## Architecture
 
@@ -30,8 +31,10 @@ stack can modify your sources.
                             :3000
 ```
 
-- **postgres** stores the graph (`graph_nodes`, `graph_edges`), the plans
-  (`project_plans`) and the vector embeddings table (`code_embeddings`).
+- **postgres** stores the graphs (`graph_nodes`, `graph_edges`), the plans
+  (`project_plans`) and the vector embeddings table (`code_embeddings`). Every
+  one of those is scoped to a row of `projects`, and `graph_nodes` is keyed on
+  `(project, id)`, since `README.md` is a node id in every codebase there is.
 - **graphify** walks the mounted project and writes what it finds, then exits.
   It never writes to the host. Two producers share the pass: code goes through
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
@@ -48,8 +51,9 @@ stack can modify your sources.
 A second MCP server is configured alongside: the upstream stdio server, started
 through `docker compose run`, serving the same graph from a `graph.json` written
 at index time. It brings its own tools (`query_graph`, `god_nodes`,
-`graph_stats`, `get_community`) and lags until the next `make index`, while
-`mcp-server` reads the database directly.
+`graph_stats`, `get_community`) and lags until the next `make index`. That file
+also holds whichever project was indexed last and has no notion of projects at
+all, while `mcp-server` reads the database directly and does.
 
 ## Prerequisites
 
@@ -63,31 +67,134 @@ at index time. It brings its own tools (`query_graph`, `god_nodes`,
 make init                 # virtualenv, pre-commit hooks, .env from the template
 $EDITOR .env              # set PROJECT_PATH and POSTGRES_PASSWORD
 make build                # build both service images
-make up                   # start postgres and mcp-server
+make up                   # start postgres, the MCP server and the viewer
 make index                # index PROJECT_PATH into the graph
 curl -fsS localhost:3000/health
 ```
 
-Then register the server with Claude CLI:
+Then register the server with the agents, as described below.
+
+## Several codebases, one database
+
+One stack serves every codebase you index, and any tree can be indexed without
+being touched:
 
 ```bash
-claude mcp add --transport sse context http://localhost:3000/sse
+make index PROJECT=/home/you/work/api
+make index PROJECT=/home/you/work/infra
 ```
+
+Each lands under a name taken from the last segment of its path (`api`,
+`infra`; override with `PROJECT_NAME=`). The indexed repository needs nothing
+of its own for this - no checkout of this project inside it, no `.env`, no
+Makefile - because the path is an argument of the indexing job rather than a
+setting. All it may optionally carry is `.ctxignore` / `.ctxkeep`, described
+below.
+
+An agent connects to one project and can read the others:
+
+```bash
+claude mcp add --transport http --scope project context http://localhost:3000/mcp/api
+```
+
+Every tool then works on `api` without being told, and takes an optional
+`project` argument to reach another graph in the same database - which is what
+answers a question spanning two repositories, an Ansible role and the service
+it deploys, an API and its client. `list_projects` returns what is indexed.
+
+Node ids are unique within a project, not across the database: `README.md` is a
+node in every one of them. Edges stay inside one project, because the indexer
+is handed a single tree and resolves every target within it.
+
+## Connecting the agents
+
+The server speaks Streamable HTTP at `/mcp`, and at `/mcp/<project>` to bind a
+session to one of the indexed codebases. The older SSE pair (`/sse` plus
+`/message`, `/sse/<project>`) is still served for clients that cannot do
+better, but nothing should be pointed at it by choice.
+
+Name the project in the address whenever more than one is indexed. A session
+opened on a bare `/mcp` has no default, and every tool call then has to carry a
+`project` argument of its own; `DEFAULT_PROJECT` in the environment of the
+server gives those sessions one.
+
+### Claude Code
+
+Registering it per project is usually what you want, since the graph belongs to
+one codebase. That writes `.mcp.json` at the project root, which can be
+committed:
+
+```bash
+claude mcp add --transport http --scope project context http://localhost:3000/mcp/myproject
+```
+
+The file it writes is short enough to keep by hand instead:
+
+```json
+{
+  "mcpServers": {
+    "context": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp/myproject"
+    }
+  }
+}
+```
+
+Drop `--scope project` to register the server for yourself across every
+project (`~/.claude.json`), which suits the case where one stack indexes one
+codebase you always work in.
+
+### Gemini CLI
+
+Gemini reads `.gemini/settings.json` at the project root. There is no `add`
+subcommand; write the file:
+
+```json
+{
+  "mcpServers": {
+    "context": {
+      "type": "http",
+      "httpUrl": "http://localhost:3000/mcp/myproject",
+      "trust": true
+    }
+  }
+}
+```
+
+`trust` skips the per-call confirmation prompt. It is reasonable here because
+the server only reads a graph of your own code, and unreasonable for anything
+that reaches the network.
+
+This repository's own `.mcp.json` and `.gemini/settings.json` are working
+examples, and both register a second server alongside: the upstream stdio one,
+described at the end of the architecture section.
+
+Whether the client actually attached is what the `sessions` count in `make
+status` answers; see the Make targets section.
 
 ## Configuration
 
 Copy `.env.example` to `.env`. `make up` and `make index` refuse to run without
 it.
 
-| Variable            | Default    | Purpose                                                                      |
-| ------------------- | ---------- | ---------------------------------------------------------------------------- |
-| `PROJECT_PATH`      | required   | Absolute host path of the codebase to index, mounted read-only at `/project` |
-| `POSTGRES_PASSWORD` | required   | Database password; compose fails fast when unset                             |
-| `POSTGRES_USER`     | `user`     | Database user                                                                |
-| `POSTGRES_DB`       | `context`  | Database name                                                                |
-| `DATA_DIR`          | `./pgdata` | Host location of the PostgreSQL data directory                               |
-| `MCP_PORT`          | `3000`     | Host port the MCP server is published on                                     |
-| `TAG`               | `dev`      | Tag applied to the images built by `make build`                              |
+| Variable            | Default    | Purpose                                                                                         |
+| ------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
+| `PROJECT_PATH`      | required   | Absolute host path of the codebase to index, mounted read-only at `/project`                    |
+| `PROJECT_NAME`      | derived    | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
+| `POSTGRES_PASSWORD` | required   | Database password; compose fails fast when unset                                                |
+| `POSTGRES_USER`     | `user`     | Database user                                                                                   |
+| `POSTGRES_DB`       | `context`  | Database name                                                                                   |
+| `DATA_DIR`          | `./pgdata` | Host location of the PostgreSQL data directory                                                  |
+| `MCP_PORT`          | `3000`     | Host port the MCP server is published on                                                        |
+| `TAG`               | `dev`      | Tag applied to the images built by `make build`                                                 |
+
+`COMPOSE_PROJECT_NAME` is optional and normally left out. Compose would
+otherwise name the project after this directory, and every checkout of this
+repository is called `claude-context-mcp`, so two codebases vendoring it would
+share one set of containers, one network and one database. The Makefile derives
+the name from `PROJECT_PATH` instead (`/srv/balor` gives `ctx-balor`); set the
+variable in `.env` to pin one by hand.
 
 The MCP server also reads two optional variables:
 
@@ -176,9 +283,9 @@ Run `make` for the full list, including the per-service subdivisions.
 make init        create the virtualenv and install the pre-commit hooks
 make lint        run every pre-commit hook over every file
 make build       build both service images
-make up          start postgres and mcp-server
+make up          start postgres, mcp-server and the viewer
 make down        stop the stack, keeping the database volume
-make index       run the indexing job against PROJECT_PATH
+make index       index PROJECT=<path>, or PROJECT_PATH from .env
 make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database

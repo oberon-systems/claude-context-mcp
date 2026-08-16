@@ -7,6 +7,16 @@ of the package, so it stays importable from anywhere.
 import os
 
 PROJECT_PATH = os.getenv("TARGET_PROJECT_PATH", "/project")
+# The host path of the tree being indexed. Inside the container the mount is
+# always at PROJECT_PATH, which says nothing about where it came from, so the
+# real location is passed separately and recorded in the projects table. That
+# is what lets a project name be traced back to a checkout, and what stops two
+# checkouts sharing a basename from merging into one graph.
+PROJECT_ROOT = os.getenv("PROJECT_ROOT", "")
+# What the project is addressed by everywhere else: the `project` argument of
+# the MCP tools, and the /mcp/<name> endpoint a client connects to. Derived
+# from the last segment of PROJECT_ROOT when not set.
+PROJECT_NAME = os.getenv("PROJECT_NAME", "")
 IGNORE_FILE = ".ctxignore"
 KEEP_FILE = ".ctxkeep"
 
@@ -44,6 +54,9 @@ MAX_NAME_LENGTH = 255
 # graph_nodes.type is VARCHAR(50), and every parser is free to name an entity
 # kind of its own.
 MAX_TYPE_LENGTH = 50
+# projects.name is VARCHAR(64). It also travels in a URL path, so the
+# characters it may contain are narrower than the column would allow.
+MAX_PROJECT_NAME_LENGTH = 64
 # Generated files (minified bundles, vendored blobs) cost minutes of parsing
 # and contribute nothing but noise.
 MAX_FILE_BYTES = 1_000_000

@@ -53,11 +53,25 @@ gone.
 User have to build images each time. Better way to pull images from some
 public storage instead of.
 
-## 6. Multi-projects support
+## 6. Multi-projects support [COMPLETED]
 
-In some cases we have to use multiple projects in context, e.g. code base, CI part and
-infrastructure deps, but now we could index only one project. Better way use
-coma separated project path and index all of them.
+One database holds every indexed codebase. `projects` names them, every other
+table carries a `project` column, and `graph_nodes` is keyed on
+`(project, id)`, since `README.md` is a node id in every codebase there is.
+
+`make index PROJECT=/path/to/anything` indexes a tree under a name taken from
+its last path segment, and needs nothing inside the target: no checkout of this
+repository, no `.env`, no Makefile. A client binds to a project through the
+address it connects to (`/mcp/<project>`), and every tool takes an optional
+`project` to read a neighbour's graph from the same session. `list_projects`
+says what is there.
+
+Edges stay inside one project, which is not a limitation so much as a fact
+about the producer: the indexer is handed a single tree and resolves every
+target within it, so a cross-project edge has no way to be discovered. Giving
+`graph_edges` a second project column would only add one that is always equal.
+Relating two codebases needs a resolver that sees both, which is its own piece
+of work.
 
 ## 7. Git hook for re-indexing
 

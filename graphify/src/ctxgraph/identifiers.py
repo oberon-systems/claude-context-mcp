@@ -6,7 +6,18 @@ here rather than in either of them.
 
 from __future__ import annotations
 
-from ctxgraph.config import ENTITY_SEPARATOR, MAX_NODE_ID_LENGTH
+import posixpath
+import re
+
+from ctxgraph.config import (
+    ENTITY_SEPARATOR,
+    MAX_NODE_ID_LENGTH,
+    MAX_PROJECT_NAME_LENGTH,
+)
+
+# A project name travels in the /mcp/<name> endpoint as well as in the
+# database, so it is kept to what survives a URL path segment untouched.
+_PROJECT_NAME_ALLOWED = re.compile(r"[^a-z0-9._-]+")
 
 
 def truncate(value: str, limit: int) -> str:
@@ -22,3 +33,20 @@ def entity_node_id(rel_path: str, name: str) -> str:
 def owner_path(node_id: str) -> str:
     """Return the file part of an entity node id."""
     return node_id.split(ENTITY_SEPARATOR, 1)[0]
+
+
+def project_name(explicit: str, root_path: str) -> str:
+    """Settle on the name a project is addressed by.
+
+    An explicit name wins; otherwise the last segment of the root path is
+    used, which is what makes indexing a neighbour a matter of naming its
+    directory and nothing else.
+    """
+    candidate = explicit.strip() or posixpath.basename(root_path.rstrip("/"))
+    cleaned = _PROJECT_NAME_ALLOWED.sub("-", candidate.lower()).strip("-")
+    if not cleaned:
+        raise RuntimeError(
+            f"cannot derive a project name from {root_path!r}; "
+            "pass PROJECT_NAME explicitly"
+        )
+    return truncate(cleaned, MAX_PROJECT_NAME_LENGTH)
