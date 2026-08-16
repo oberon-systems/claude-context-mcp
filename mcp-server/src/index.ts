@@ -1,8 +1,15 @@
+import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import type {
+  CallToolRequest,
+  CallToolResult,
+  ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import express from "express";
 import type { Request, Response } from "express";
@@ -21,20 +28,12 @@ dbPool.on("error", (err) => {
 
 const MAX_RESULTS = 50;
 const DEFAULT_RESULTS = 20;
+// A path search walks the edge table once per hop, so the ceiling is what
+// keeps a question about two unrelated nodes from scanning the whole graph.
+const MAX_HOPS = 10;
+const DEFAULT_HOPS = 6;
 
-const server = new Server(
-  {
-    name: "claude-pg-graph-mcp",
-    version: "1.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-    },
-  },
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => {
+const listToolsHandler = async (): Promise<ListToolsResult> => {
   return {
     tools: [
       {
@@ -68,6 +67,30 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
           },
           required: ["query"],
+        },
+      },
+      {
+        name: "shortest_path",
+        description:
+          "Find the shortest chain of relations between two nodes of the graph",
+        inputSchema: {
+          type: "object",
+          properties: {
+            source_id: {
+              type: "string",
+              description:
+                "Node the path starts from, for example src/index.ts",
+            },
+            target_id: {
+              type: "string",
+              description: "Node the path should reach",
+            },
+            max_hops: {
+              type: "number",
+              description: `Longest path to consider (default ${DEFAULT_HOPS}, max ${MAX_HOPS})`,
+            },
+          },
+          required: ["source_id", "target_id"],
         },
       },
       {
@@ -202,7 +225,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
     ],
   };
-});
+};
 
 /** Read a required string argument, rejecting missing and blank values. */
 function requireString(
@@ -218,6 +241,15 @@ function requireString(
   return value;
 }
 
+/** Clamp an optional hop budget into [1, MAX_HOPS]. */
+function readHops(args: Record<string, unknown> | undefined): number {
+  const value = args?.max_hops;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_HOPS;
+  }
+  return Math.min(Math.max(Math.trunc(value), 1), MAX_HOPS);
+}
+
 /** Clamp an optional numeric limit into [1, MAX_RESULTS]. */
 function readLimit(args: Record<string, unknown> | undefined): number {
   const value = args?.limit;
@@ -227,7 +259,9 @@ function readLimit(args: Record<string, unknown> | undefined): number {
   return Math.min(Math.max(Math.trunc(value), 1), MAX_RESULTS);
 }
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+const callToolHandler = async (
+  request: CallToolRequest,
+): Promise<CallToolResult> => {
   const { name, arguments: args } = request.params;
 
   // Errors are reported back through the tool result rather than thrown, so a
@@ -272,6 +306,57 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       return {
         content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+      };
+    }
+
+    if (name === "shortest_path") {
+      const sourceId = requireString(args, "source_id");
+      const targetId = requireString(args, "target_id");
+
+      // Breadth first, in the database. Edges are followed in both
+      // directions because the graph records who imports whom, not which way
+      // a reader wants to travel, and the visited path is carried along so a
+      // walk cannot loop back through a node it already used.
+      const res = await dbPool.query(
+        `WITH RECURSIVE walk(node_id, path, depth) AS (
+             SELECT $1::VARCHAR, ARRAY[$1::VARCHAR], 0
+           UNION ALL
+             SELECT next.id, walk.path || next.id, walk.depth + 1
+               FROM walk
+               JOIN LATERAL (
+                 SELECT CASE
+                          WHEN e.source_id = walk.node_id THEN e.target_id
+                          ELSE e.source_id
+                        END AS id
+                   FROM graph_edges e
+                  WHERE e.source_id = walk.node_id
+                     OR e.target_id = walk.node_id
+               ) AS next ON TRUE
+              WHERE walk.depth < $3
+                AND walk.node_id <> $2
+                AND NOT (next.id = ANY (walk.path))
+         )
+         SELECT path, depth
+           FROM walk
+          WHERE node_id = $2
+          ORDER BY depth
+          LIMIT 1`,
+        [sourceId, targetId, readHops(args)],
+      );
+
+      if (res.rows.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No path from ${sourceId} to ${targetId} within the hop limit`,
+            },
+          ],
+        };
+      }
+
+      return {
+        content: [{ type: "text", text: JSON.stringify(res.rows[0], null, 2) }],
       };
     }
 
@@ -445,13 +530,40 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
-});
+};
+
+// A Server keeps a single transport of its own, so one shared instance would let
+// a second client's connection steal the first one's responses. Every session
+// gets its own Server; the handlers themselves are stateless and reused.
+function createServer(): Server {
+  const server = new Server(
+    {
+      name: "claude-pg-graph-mcp",
+      version: "1.0.0",
+    },
+    {
+      capabilities: {
+        tools: {},
+      },
+    },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, listToolsHandler);
+  server.setRequestHandler(CallToolRequestSchema, callToolHandler);
+
+  return server;
+}
 
 const app = express();
 
 // One transport per SSE connection. A single shared variable would let a second
 // client overwrite the first one's stream, silently breaking its session.
 const transports = new Map<string, SSEServerTransport>();
+
+// Streamable HTTP sessions, keyed by the mcp-session-id header the transport
+// assigns on initialize. Kept apart from the SSE map because the two transports
+// use different session identifiers.
+const httpTransports = new Map<string, StreamableHTTPServerTransport>();
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -507,11 +619,23 @@ function guardDnsRebinding(
 app.get("/health", async (_req: Request, res: Response) => {
   try {
     await dbPool.query("SELECT 1");
-    res.json({ status: "ok", sessions: transports.size });
+    res.json({
+      status: "ok",
+      sessions: transports.size + httpTransports.size,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     res.status(503).json({ status: "error", error: message });
   }
+});
+
+// The page itself is rendered by the viewer service, which shares the
+// indexer image because the renderer lives there. Redirecting keeps one
+// address to remember rather than two ports.
+const VIEWER_URL = process.env.VIEWER_URL ?? "http://localhost:3001/graph";
+
+app.get("/graph", (_req: Request, res: Response) => {
+  res.redirect(302, VIEWER_URL);
 });
 
 app.get("/sse", guardDnsRebinding, async (_req: Request, res: Response) => {
@@ -522,7 +646,7 @@ app.get("/sse", guardDnsRebinding, async (_req: Request, res: Response) => {
   });
 
   try {
-    await server.connect(transport);
+    await createServer().connect(transport);
   } catch (error) {
     console.error("Failed to establish SSE session:", error);
     transports.delete(transport.sessionId);
@@ -545,6 +669,63 @@ app.post("/message", guardDnsRebinding, async (req: Request, res: Response) => {
   await transport.handlePostMessage(req, res);
 });
 
+// Streamable HTTP, the transport that replaces SSE in the current MCP spec.
+// No body parser is mounted anywhere in this app: handleRequest reads the raw
+// stream itself, and SSEServerTransport above breaks on an already consumed
+// body, so both endpoints are left to parse their own requests.
+async function handleStreamableHttp(
+  req: Request,
+  res: Response,
+): Promise<void> {
+  const sessionId = req.headers["mcp-session-id"];
+
+  if (typeof sessionId === "string") {
+    const existing = httpTransports.get(sessionId);
+    if (!existing) {
+      res.status(404).send("Unknown session");
+      return;
+    }
+    await existing.handleRequest(req, res);
+    return;
+  }
+
+  // Only an initialize POST may arrive without a session id. A GET or DELETE
+  // without one has no session to stream from or tear down.
+  if (req.method !== "POST") {
+    res.status(400).send("Missing mcp-session-id header");
+    return;
+  }
+
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: (id) => {
+      httpTransports.set(id, transport);
+    },
+  });
+  transport.onclose = () => {
+    if (transport.sessionId !== undefined) {
+      httpTransports.delete(transport.sessionId);
+    }
+  };
+
+  try {
+    await createServer().connect(transport);
+    await transport.handleRequest(req, res);
+  } catch (error) {
+    console.error("Failed to establish Streamable HTTP session:", error);
+    if (transport.sessionId !== undefined) {
+      httpTransports.delete(transport.sessionId);
+    }
+    if (!res.headersSent) {
+      res.status(500).send("Failed to establish session");
+    }
+  }
+}
+
+app.post("/mcp", guardDnsRebinding, handleStreamableHttp);
+app.get("/mcp", guardDnsRebinding, handleStreamableHttp);
+app.delete("/mcp", guardDnsRebinding, handleStreamableHttp);
+
 const httpServer = app.listen(PORT, "0.0.0.0", () => {
   console.log(`MCP Server running on port ${PORT}`);
 });
@@ -556,6 +737,10 @@ async function shutdown(signal: string): Promise<void> {
     await transport.close().catch(() => undefined);
   }
   transports.clear();
+  for (const transport of httpTransports.values()) {
+    await transport.close().catch(() => undefined);
+  }
+  httpTransports.clear();
   await dbPool.end().catch(() => undefined);
   process.exit(0);
 }
