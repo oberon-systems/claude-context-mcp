@@ -52,6 +52,35 @@ MAX_FILE_BYTES = 1_000_000
 ENTITY_SEPARATOR = "::"
 # Extensions worth a file node even though no parser looks inside them.
 EXTRA_SOURCE_EXTENSIONS = (".sql",)
+# Extensions handed to the graphifyy extractor instead of a parser of our own.
+# It covers more languages than we do and tags every edge with a confidence,
+# so code goes to it and the infrastructure formats it cannot read stay here.
+GRAPHIFYY_EXTENSIONS = frozenset(
+    {
+        ".c",
+        ".cpp",
+        ".cs",
+        ".go",
+        ".java",
+        ".js",
+        ".kt",
+        ".php",
+        ".py",
+        ".rb",
+        ".rs",
+        ".scala",
+        ".ts",
+    }
+)
+# Where the graph is materialized for the tools that read a file rather than
+# the database. graphifyy's own security check refuses anything outside a
+# `graphify-out` directory next to the working directory, so the name is not
+# ours to choose.
+GRAPHIFY_OUT_DIR = os.getenv("GRAPHIFY_OUT_DIR", "graphify-out")
+# Marks which producer wrote a node or an edge, so re-running one of them
+# never clears what the other found.
+SOURCE_NATIVE = "native"
+SOURCE_GRAPHIFYY = "graphifyy"
 # Suffixes tried when resolving a path-like import to an indexed file.
 MODULE_EXTENSIONS = (
     ".ts",

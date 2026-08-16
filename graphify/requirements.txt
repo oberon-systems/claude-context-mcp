@@ -1,6 +1,15 @@
 # Pinned on purpose. tree-sitter changed its Python API twice in the 0.2x line
 # (Parser.set_language removed, Language.query replaced by Query/QueryCursor),
 # so an unpinned rebuild used to break the indexer without a code change.
+# The code extractor. Pulled in with the `mcp` extra so its stdio server can
+# be started from this image; the neo4j and pdf extras stay out because
+# nothing here uses them. Its tree-sitter pins agree with ours below, which is
+# the only reason the two can share an environment.
+graphifyy[mcp]==0.1.14
+# graphifyy's stdio server registers its tools with `@server.list_tools()`,
+# a decorator the MCP SDK dropped in 2.0. Its own `mcp` extra is unpinned, so
+# the ceiling has to be set here or the server dies on import.
+mcp<2
 pathspec==1.1.1
 psycopg2-binary==2.9.12
 # Ansible structure lives in the YAML values, not in the tree-sitter tree.

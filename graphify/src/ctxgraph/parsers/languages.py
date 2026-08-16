@@ -18,7 +18,7 @@ import tree_sitter_toml
 import tree_sitter_typescript
 import tree_sitter_yaml
 
-from graphify.parsers.base import CodeParser, node_text, unique_pairs
+from ctxgraph.parsers.base import CodeParser, node_text, unique_pairs
 
 
 class PythonParser(CodeParser):

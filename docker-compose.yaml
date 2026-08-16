@@ -27,8 +27,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # Code graph indexer. Runs to completion and exits.
-  # https://github.com/Graphify-Labs/graphify
+  # Code graph indexer. Runs to completion and exits. Code is extracted by
+  # graphifyy (https://github.com/Graphify-Labs/graphify), used as a library;
+  # the infrastructure formats it does not read are parsed by the ctxgraph
+  # package in ./graphify/src. Both write to the same database.
   graphify:
     build:
       context: ./graphify
@@ -39,9 +41,26 @@ services:
       TARGET_PROJECT_PATH: /project
     volumes:
       # Read-only by contract: the indexer must never mutate host sources.
-      - ${PROJECT_PATH:?PROJECT_PATH is required, see .env.example}:/project:ro
+      - ${PROJECT_PATH}:/project:ro
+      - graph-out:/app/graphify-out
     networks: [base]
     profiles: [index]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Renders the graph as a page, from the database, on every request. Shares
+  # the indexer image because it calls the same rendering code.
+  viewer:
+    image: claude-context-mcp/graphify:${TAG:-dev}
+    restart: unless-stopped
+    command: ["python", "-m", "ctxgraph.viewer"]
+    ports:
+      - "${VIEWER_PORT:-3001}:3001"
+    environment:
+      DATABASE_URL: *database-url
+      VIEWER_PORT: 3001
+    networks: [base]
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,6 +92,9 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+volumes:
+  graph-out:
 
 networks:
   base:

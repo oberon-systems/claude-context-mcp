@@ -1,10 +1,15 @@
-"""Entry point of the indexing job: `python -m graphify`."""
+"""Entry point of the indexing job: `python -m ctxgraph`.
+
+The package is named `ctxgraph` rather than `graphify` because the extractor
+it now drives installs itself under `graphify`, and PYTHONPATH would shadow
+it here.
+"""
 
 from __future__ import annotations
 
 import logging
 
-from graphify.indexer import scan_and_build_graph
+from ctxgraph.indexer import scan_and_build_graph
 
 
 def main() -> None:

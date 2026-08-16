@@ -15,8 +15,8 @@ from typing import Any
 
 import yaml
 
-from graphify.parsers.base import unique_pairs
-from graphify.parsers.languages import YAMLParser
+from ctxgraph.parsers.base import unique_pairs
+from ctxgraph.parsers.languages import YAMLParser
 
 # Ansible: the directories a role is made of, used to find the role a file
 # belongs to and to resolve what its tasks refer to.

@@ -9,13 +9,13 @@ from collections.abc import Iterator
 
 import pathspec
 
-from graphify.config import (
+from ctxgraph.config import (
     DEFAULT_IGNORED_DIRS,
     IGNORE_FILE,
     KEEP_FILE,
     MAX_FILE_BYTES,
 )
-from graphify.parsers import is_default_source
+from ctxgraph.parsers import is_default_source
 
 LOG = logging.getLogger(__name__)
 

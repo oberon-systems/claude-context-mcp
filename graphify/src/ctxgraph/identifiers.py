@@ -6,7 +6,7 @@ here rather than in either of them.
 
 from __future__ import annotations
 
-from graphify.config import ENTITY_SEPARATOR, MAX_NODE_ID_LENGTH
+from ctxgraph.config import ENTITY_SEPARATOR, MAX_NODE_ID_LENGTH
 
 
 def truncate(value: str, limit: int) -> str:

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import posixpath
 
-from graphify.config import (
+from ctxgraph.config import (
     COMMENT_MARKERS,
     MAX_SUMMARY_LENGTH,
     SUMMARY_ENTITY_LIMIT,
     SUMMARY_SCAN_LINES,
 )
-from graphify.identifiers import truncate
-from graphify.parsers import MarkdownParser, parser_class
+from ctxgraph.identifiers import truncate
+from ctxgraph.parsers import MarkdownParser, parser_class
 
 
 def markdown_title(content: str) -> str:

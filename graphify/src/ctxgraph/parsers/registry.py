@@ -5,10 +5,10 @@ from __future__ import annotations
 import posixpath
 from functools import cache
 
-from graphify.config import EXTRA_SOURCE_EXTENSIONS
-from graphify.parsers.ansible import AnsibleParser
-from graphify.parsers.base import CodeParser
-from graphify.parsers.languages import (
+from ctxgraph.config import EXTRA_SOURCE_EXTENSIONS
+from ctxgraph.parsers.ansible import AnsibleParser
+from ctxgraph.parsers.base import CodeParser
+from ctxgraph.parsers.languages import (
     BashParser,
     DockerfileParser,
     GoParser,

@@ -4,9 +4,9 @@ The rest of the package talks to this facade rather than to the individual
 grammar modules, so adding a language stays a change inside `parsers`.
 """
 
-from graphify.parsers.base import CodeParser, node_text, strip_literal, unique_pairs
-from graphify.parsers.languages import MarkdownParser
-from graphify.parsers.registry import (
+from ctxgraph.parsers.base import CodeParser, node_text, strip_literal, unique_pairs
+from ctxgraph.parsers.languages import MarkdownParser
+from ctxgraph.parsers.registry import (
     DEFAULT_SOURCE_EXTENSIONS,
     get_parser,
     is_default_source,

@@ -8,14 +8,14 @@ from __future__ import annotations
 
 import posixpath
 
-from graphify.config import (
+from ctxgraph.config import (
     MAX_NODE_ID_LENGTH,
     MODULE_EXTENSIONS,
     REWRITABLE_IMPORT_EXTENSIONS,
 )
-from graphify.identifiers import entity_node_id, owner_path, truncate
-from graphify.parsers import language_family, strip_literal
-from graphify.parsers.ansible import role_root
+from ctxgraph.identifiers import entity_node_id, owner_path, truncate
+from ctxgraph.parsers import language_family, strip_literal
+from ctxgraph.parsers.ansible import role_root
 
 # Where each edge looks inside the owning role when the target is a bare name.
 ANSIBLE_RELATION_DIRS = {
