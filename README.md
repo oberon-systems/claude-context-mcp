@@ -1,11 +1,12 @@
 # claude-context-mcp
 
-A Dockerized GraphRAG and vector context service for Claude CLI (`claude-code`).
+A Dockerized GraphRAG and vector context service for Claude CLI (`claude-code`)
+and Gemini CLI.
 
 It runs an isolated PostgreSQL database with `pgvector`, indexes a codebase into
-a graph of files and their imports, and serves that graph to Claude CLI through
-an MCP server over SSE. The indexed codebase is mounted read-only, so nothing in
-this stack can modify your sources.
+a graph of files, entities and their relations, and serves that graph to both
+agents over MCP. The indexed codebase is mounted read-only, so nothing in this
+stack can modify your sources.
 
 ## Architecture
 
@@ -21,18 +22,34 @@ this stack can modify your sources.
                                +-----------+
                                | postgres  |  pgvector/pgvector:pg16
                                +-----------+
-                                     ^  reads
-                                     |
-                               +-----------+
-   Claude CLI  <--- SSE --->   | mcp-server|  :3000
-                               +-----------+
+                                  ^      ^  read
+                                  |      |
+                       +-----------+    +--------+
+   Claude, Gemini <--> | mcp-server|    | viewer |  :3001, the graph page
+                       +-----------+    +--------+
+                            :3000
 ```
 
-- **postgres** stores the graph (`graph_nodes`, `graph_edges`) and the vector
-  embeddings table (`code_embeddings`).
-- **graphify** walks the mounted project, creates a node per source file and an
-  `imports` edge per import line, then exits. It never writes to the host.
-- **mcp-server** exposes the graph to Claude CLI as MCP tools.
+- **postgres** stores the graph (`graph_nodes`, `graph_edges`), the plans
+  (`project_plans`) and the vector embeddings table (`code_embeddings`).
+- **graphify** walks the mounted project and writes what it finds, then exits.
+  It never writes to the host. Two producers share the pass: code goes through
+  the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
+  used as a library, and the infrastructure formats it does not read - Ansible,
+  Terraform, Dockerfiles, Makefiles, YAML, Markdown, shell, SQL - go through the
+  Tree-sitter parsers in `ctxgraph`. Every node records which one found it in
+  `metadata.source`.
+- **mcp-server** exposes the graph over Streamable HTTP at `/mcp`, and redirects
+  `/graph` to the viewer.
+- **viewer** renders the graph as an interactive page, from the database, on
+  every request. The drawing library is vendored into the image rather than
+  loaded from a CDN, so the page works with no route to the internet.
+
+A second MCP server is configured alongside: the upstream stdio server, started
+through `docker compose run`, serving the same graph from a `graph.json` written
+at index time. It brings its own tools (`query_graph`, `god_nodes`,
+`graph_stats`, `get_community`) and lags until the next `make index`, while
+`mcp-server` reads the database directly.
 
 ## Prerequisites
 
@@ -166,7 +183,18 @@ make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database
 make clean       remove containers, the database directory and the built images
+
+make skill-install    register the graphify skill for Claude and Gemini
+make skill-uninstall  remove it from both
+make skill-status     show where it is registered
 ```
+
+The skill lives in `skills/graphify/SKILL.md` and is registered from there
+rather than copied: Claude gets a relative symlink under `.claude/skills`, and
+Gemini is linked to the working copy with `gemini skills link`. Editing the file
+takes effect without a reinstall, and nothing of this project lands in `$HOME`.
+The targets refuse to run under `sudo`, since the agents' own state belongs to
+the user who runs them.
 
 `make status` prints the running services, the `/health` payload and the number of
 indexed nodes. The `sessions` field in that payload is the count of connected MCP
@@ -187,6 +215,7 @@ make mcp help
 | -------------------------- | ------------------------------------------------ | ------------------------------------------------------------- |
 | `get_code_graph_neighbors` | `node_id`                                        | Incoming and outgoing edges of a node, with the relation type |
 | `search_code_nodes`        | `query`, optional `limit`                        | Nodes whose name or id matches the substring                  |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`    | Shortest chain of relations between two nodes                 |
 | `save_node_summary`        | `node_id`, `summary`                             | Saves or updates a summary for a specific node                |
 | `get_node_summary`         | `node_id`                                        | Retrieves summary, file path, and type for a node             |
 | `save_plan`                | `plan_id`, `title`, `content`, optional `status` | Creates or updates a persistent project plan                  |
@@ -276,8 +305,9 @@ config file. `make init` installs them; `make mcp install` does it on its own.
 ```text
 init-db/       schema initialization replayed by the postgres entrypoint
 graphify/      Python indexer, its image and its Makefile
-  src/graphify/  the indexer package, run as `python -m graphify`
+  src/ctxgraph/  the indexer package, run as `python -m ctxgraph`
 mcp-server/    TypeScript MCP server, its image and its Makefile
+skills/        the agent skill, registered by `make skill-install`
 scripts/       helper scripts invoked by pre-commit
 docker-compose.yaml
 Makefile       root entry point, delegates to the service Makefiles

@@ -5,7 +5,7 @@
 You are working on a Dockerized GraphRAG & Vector Context MCP Service for Claude CLI (`claude-code`).
 
 - **Goal:** Provide an isolated PostgreSQL + pgvector database, a Python-based Graphify code-graph parser, and a TypeScript MCP server in a single Docker Compose stack to index codebases and supply graph/vector context tools to Claude CLI.
-- **Architecture:** Microservices approach orchestrated via Docker Compose. Host project codebase is mounted read-only (`:ro`), AST graph and vector embeddings are stored in PostgreSQL, and tools are exposed over MCP (SSE/HTTP).
+- **Architecture:** Microservices approach orchestrated via Docker Compose. Host project codebase is mounted read-only (`:ro`), AST graph and vector embeddings are stored in PostgreSQL, and tools are exposed over MCP (Streamable HTTP, with SSE kept for older clients).
 
 ## 2. New Features: Summarization & Planning
 
@@ -29,7 +29,8 @@ You are working on a Dockerized GraphRAG & Vector Context MCP Service for Claude
 
 - **Orchestration & Infrastructure:** Docker, Docker Compose.
 - **Database:** PostgreSQL 16 (`pgvector/pgvector:pg16`), SQL init scripts.
-- **Graphify Engine:** Python 3.11+, `tree-sitter`, `networkx`, `psycopg2-binary`.
+- **Graphify Engine:** Python 3.11+, `graphifyy` (upstream code extractor, used
+  as a library), `tree-sitter`, `networkx`, `psycopg2-binary`.
 - **MCP Server:** Node.js 20+, TypeScript, `@modelcontextprotocol/sdk`, Express, `pg`.
 - **Code Quality & Tooling:** `pre-commit`, `commitizen` (`wyld-cz`), `ruff`, `eslint`, `prettier`, `typescript` (`tsc`), `shellcheck`.
 
@@ -42,7 +43,11 @@ Refer to `ROADMAP.md` or task tracking for current state.
 ### Project Directory Layout
 
 - `/init-db/` - Database schema initialization scripts (`01-init.sql`).
-- `/graphify/` - Python code-graph parser service (`src/graphify/` package, `Dockerfile`, `requirements.txt`).
+- `/graphify/` - Python indexing service (`src/ctxgraph/` package, `Dockerfile`,
+  `requirements.txt`). The package is named `ctxgraph` because the upstream
+  extractor it drives installs itself as `graphify`.
+- `/skills/graphify/` - the agent skill, registered for Claude and Gemini by
+  `make skill-install`.
 - `/mcp-server/` - TypeScript MCP Server (`src/index.ts`, `Dockerfile`, `package.json`, `tsconfig.json`).
 - `docker-compose.yml` - Container orchestration.
 - `.pre-commit-config.yaml` - Pre-commit rules configuration.
@@ -52,7 +57,9 @@ Refer to `ROADMAP.md` or task tracking for current state.
 
 1. Maintain root `.pre-commit-config.yaml` and `.cz.yaml` (`wyld-cz`).
 2. Finalize SQL schema in `init-db/01-init.sql` for node graphs, edge relationships, and vector embeddings.
-3. Extend the Tree-sitter parsers in `graphify/src/graphify/parsers/` as new languages are needed.
+3. Extend the Tree-sitter parsers in `graphify/src/ctxgraph/parsers/` as new
+   infrastructure formats are needed. Programming languages go to the upstream
+   extractor instead, through `GRAPHIFYY_EXTENSIONS` in `config.py`.
 4. Extend MCP tools in `mcp-server/src/index.ts` to expose vector similarity search alongside graph queries.
 
 ---

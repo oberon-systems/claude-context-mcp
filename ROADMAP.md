@@ -6,9 +6,12 @@ deliberately deferred work, in the order it should be picked up.
 
 ## 1. Tree-sitter AST parsing [COMPLETED]
 
-The `graphify` package (`graphify/src/graphify/`) uses tree-sitter for TS, TSX,
-JS, PY, GO, RS, SH,
-MD, MAKE, DOCKERFILE, HCL/TF, YAML, TOML.
+The `ctxgraph` package (`graphify/src/ctxgraph/`) uses tree-sitter for SH, MD,
+MAKE, DOCKERFILE, HCL/TF, YAML, TOML. Programming languages moved to the
+upstream graphifyy extractor, which covers more of them and tags every edge
+with a confidence; the parsers for TS, TSX, JS, PY, GO, RS are kept as a
+fallback but are no longer reached. The split is `GRAPHIFYY_EXTENSIONS` in
+`config.py`.
 
 - emits `function`, `method`, `class` and per-language entity nodes, scoped to
   their file as `path::name`
@@ -66,3 +69,19 @@ We use dump analyst, better to use some local model
 just for this, for reduce token usage.
 
 Model should be part of compose deployment.
+
+## 9. Implement MCP support for Gemini [COMPLETED]
+
+`.gemini/settings.json` registers both servers, and the skill in `skills/` is
+registered for Claude and Gemini by `make skill-install`. The transport moved
+from SSE to Streamable HTTP (`/mcp`) along the way; `/sse` is still served for
+older clients.
+
+## 10. Incremental extraction for the code half
+
+The Tree-sitter parsers skip a file whose hash is unchanged. The graphifyy pass
+does not: it re-extracts the whole code corpus on every run, because an
+extraction over a subset loses the edges between the files left out. Its own
+per-file cache absorbs most of the cost, but the merge into the database is
+still full. Worth revisiting with `graphify.detect.detect_incremental` once the
+graph is large enough for it to matter.
