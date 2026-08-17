@@ -5,6 +5,7 @@ Each class is a pair of queries; the behaviour lives in CodeParser.
 
 from __future__ import annotations
 
+import posixpath
 from typing import Any
 
 import tree_sitter_bash
@@ -13,6 +14,7 @@ import tree_sitter_embedded_template
 import tree_sitter_go
 import tree_sitter_hcl
 import tree_sitter_javascript
+import tree_sitter_json
 import tree_sitter_make
 import tree_sitter_markdown
 import tree_sitter_puppet
@@ -381,6 +383,176 @@ class YAMLParser(CodeParser):
     def __init__(self) -> None:
         """Initialize YAML parser."""
         super().__init__(tree_sitter_yaml.language())
+
+
+# JSON keeps its meaning in the values rather than in the syntax, so the
+# helpers below take a captured pair apart instead of matching ever deeper
+# query patterns.
+def pair_key(node: Node) -> str:
+    """Return the key of a `pair` node, unquoted."""
+    key_node = node.child_by_field_name("key")
+    return strip_literal(node_text(key_node)) if key_node is not None else ""
+
+
+def pair_value(node: Node) -> Node | None:
+    """Return the value of a `pair` node."""
+    return node.child_by_field_name("value")
+
+
+def object_pairs(node: Node | None) -> list[Node]:
+    """Return the `pair` children of an object node."""
+    if node is None or node.type != "object":
+        return []
+    return [child for child in node.named_children if child.type == "pair"]
+
+
+def object_keys(node: Node | None) -> list[str]:
+    """Return the keys an object node declares."""
+    return [pair_key(pair) for pair in object_pairs(node)]
+
+
+def string_value(node: Node | None) -> str:
+    """Return the text of a string node, unquoted, and "" for anything else."""
+    if node is None or node.type != "string":
+        return ""
+    return strip_literal(node_text(node))
+
+
+def local_target(node: Node | None) -> str:
+    """Return a string value when it names a path inside the project.
+
+    Only a relative target can resolve to a file of the tree. A bare specifier
+    such as `@tsconfig/node20/tsconfig.json` names a package, and keeping it
+    would add a placeholder node pointing at nothing.
+    """
+    target = string_value(node)
+    return target if target.startswith((".", "/")) else ""
+
+
+def extends_targets(value: Node | None) -> list[str]:
+    """Return what an `extends` key points at, in either form it takes."""
+    if value is None:
+        return []
+    if value.type == "array":
+        candidates = [local_target(child) for child in value.named_children]
+    else:
+        candidates = [local_target(value)]
+    return [target for target in candidates if target]
+
+
+def reference_targets(value: Node | None) -> list[str]:
+    """Return the paths of a tsconfig `references` array."""
+    if value is None or value.type != "array":
+        return []
+    targets: list[str] = []
+    for entry in value.named_children:
+        for pair in object_pairs(entry):
+            if pair_key(pair) == "path":
+                target = local_target(pair_value(pair))
+                if target:
+                    targets.append(target)
+    return targets
+
+
+# The dependency sections worth reading, with the prefix their targets carry,
+# keyed by file name so the keys of one ecosystem are never read out of
+# another file's JSON.
+#
+# The prefix is not decoration. Without it `resolve_symbol` would bind a
+# dependency called `typescript` to a top level key node of that name in some
+# other JSON file of the same family. Prefixed, it matches no declared symbol,
+# so one external node is written per package - the same shape the Ansible
+# `role:` placeholders have.
+DEPENDENCY_SECTIONS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "package.json": (
+        "npm:",
+        (
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+        ),
+    ),
+    "composer.json": ("composer:", ("require", "require-dev")),
+}
+# The sections descended into for entities, and the type their keys become.
+# The list is closed on purpose: descending into every second level turns a
+# data file into hundreds of nodes named after its keys.
+SECTION_ENTITIES = {
+    "mcpServers": "mcp_server",
+    "scripts": "script",
+    "servers": "mcp_server",
+}
+
+
+class JsonParser(CodeParser):
+    """JSON specific AST parser.
+
+    JSON declares nothing, so its syntax alone yields no entity worth a node.
+    Top level keys become nodes for any file, and the manifests that do carry
+    structure - `package.json`, `tsconfig.json`, `composer.json`, `.mcp.json` -
+    are read one level deeper, by name.
+    """
+
+    FAMILY = "json"
+    # Each top level pair is captured whole and taken apart in Python. Deep
+    # patterns over nested pairs are brittle, and the query already does the
+    # one thing worth doing declaratively: anchoring to the top level, so a
+    # document whose root is an array yields nothing.
+    ENTITY_QUERY = "(document (object (pair) @entry))"
+
+    def __init__(self) -> None:
+        """Initialize JSON parser."""
+        super().__init__(tree_sitter_json.language())
+
+    def top_level_pairs(self, content: str) -> list[Node]:
+        """Return the pairs of the top level object of a document."""
+        if self.entity_query is None:
+            return []
+        captures = self.capture_nodes(self.entity_query, self.parse(content))
+        return captures.get("entry", [])
+
+    def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return the top level keys, and the keys of the known sections."""
+        pairs: list[tuple[str, str]] = []
+        for pair in self.top_level_pairs(content):
+            key = pair_key(pair)
+            pairs.append((key, "key"))
+            entity_type = SECTION_ENTITIES.get(key)
+            if entity_type is not None:
+                pairs.extend(
+                    (name, entity_type) for name in object_keys(pair_value(pair))
+                )
+        return unique_pairs(iter(pairs))
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return what a manifest depends on and what it extends."""
+        prefix, sections = DEPENDENCY_SECTIONS.get(
+            posixpath.basename(rel_path), ("", ())
+        )
+        pairs: list[tuple[str, str]] = []
+        for pair in self.top_level_pairs(content):
+            key = pair_key(pair)
+            value = pair_value(pair)
+            if key in sections:
+                pairs.extend(
+                    (f"{prefix}{name}", "depends_on") for name in object_keys(value)
+                )
+            elif key == "extends":
+                pairs.extend((target, "extends") for target in extends_targets(value))
+            elif key == "references":
+                pairs.extend((target, "extends") for target in reference_targets(value))
+        return [
+            {
+                "target": entry["name"],
+                "type": entry["type"],
+                # A dependency is a name; an `extends` target is a path, which
+                # resolve_file_target tries against this file's directory and
+                # then the project root.
+                "scope": "symbol" if entry["type"] == "depends_on" else "file",
+            }
+            for entry in unique_pairs(iter(pairs))
+        ]
 
 
 class PuppetParser(CodeParser):

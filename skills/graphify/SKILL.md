@@ -46,7 +46,7 @@ Two producers write to the same database in one pass. Code goes through the
 graphifyy extractor (`.py .ts .js .go .rs .java .c .cpp .rb .cs .kt .scala
 .php`), everything else through the parsers in `graphify/src/ctxgraph`
 (Ansible, Puppet and its `.erb`/`.epp` templates, YAML, Terraform, Dockerfile,
-Make, Markdown, shell, TOML, SQL).
+Make, Markdown, shell, TOML, SQL, JSON).
 Report the counts from the last two log lines and stop. Do not read the
 indexed files to "check" the result.
 

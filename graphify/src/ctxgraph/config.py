@@ -47,6 +47,14 @@ DEFAULT_IGNORED_DIRS = frozenset(
     }
 )
 
+# Generated files that parse as a supported format but say nothing their
+# source file does not. Skipped when the project has no .ctxkeep; an
+# explicit .ctxkeep still wins, since that is the project asking for them
+# by name.
+IGNORED_FILE_NAMES = frozenset(
+    {"composer.lock", "npm-shrinkwrap.json", "package-lock.json", "yarn.lock"}
+)
+
 # graph_nodes.id and graph_nodes.name are VARCHAR(255). Longer values are
 # truncated here so one deep path cannot abort the transaction.
 MAX_NODE_ID_LENGTH = 255

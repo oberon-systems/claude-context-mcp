@@ -8,7 +8,7 @@ Extraction has two producers over one corpus. The upstream graphifyy extractor
 reads the programming languages listed in `GRAPHIFYY_EXTENSIONS`
 (`graphify/src/ctxgraph/config.py`), including C and C++ and Ruby; the
 `ctxgraph` parsers read the infrastructure formats it does not - SH, MD, MAKE,
-DOCKERFILE, HCL/TF, YAML, TOML, Ansible, and Puppet with its ERB and EPP
+DOCKERFILE, HCL/TF, YAML, TOML, JSON, Ansible, and Puppet with its ERB and EPP
 templates. One database holds every indexed codebase: `projects` names them,
 every other table carries a `project` column, and a client binds to one through
 the address it connects to (`/mcp/<project>`). Re-indexing skips a file whose
@@ -208,9 +208,7 @@ onboarding question, but it is a standing change to how the target repository
 behaves on every commit, where everything above is configuration the agent
 reads. Installing it should stay a separate decision, made by name.
 
-## 11. Add support for JSON (.json)
-
-## 12. Integrate Git commit history at index time
+## 11. Integrate Git commit history at index time
 
 Extend the indexing process (`make index`) to extract relevant commit history
 from the project's Git repository using `git log`. Store commit metadata
@@ -218,7 +216,7 @@ from the project's Git repository using `git log`. Store commit metadata
 commit to provide temporal context and evolution details for the code graph
 during the initial indexing phase.
 
-## 13. Cross-project lookups and relations
+## 12. Cross-project lookups and relations
 
 Edges stay inside one project, which is not a limitation so much as a fact
 about the producer: the indexer is handed a single tree and resolves every
@@ -227,7 +225,7 @@ target within it, so a cross-project edge has no way to be discovered. Giving
 Relating two codebases needs a resolver that sees both, which is its own piece
 of work. Useful for infrastructure projects, e.g. ansible, puppet, terraform.
 
-## 14. Semantic conventions and architectural patterns store
+## 13. Semantic conventions and architectural patterns store
 
 AST graphs track strict syntax dependencies (imports, class inheritance), but
 remain blind to cross-file conventions, deployment patterns, and configuration
@@ -244,7 +242,7 @@ data structures) per project.
   stored project patterns (e.g., `category="docker_compose"`) before reading raw
   code/templates.
 
-## 15. Summaries produced at index time
+## 14. Summaries produced at index time
 
 Summaries are written by whichever agent happens to ask, which is the most
 expensive way to get them. A small CPU-driven local model, deployed as part of
@@ -259,7 +257,7 @@ structural schemas in `graph_nodes.metadata` / `summary`, so `search_code_nodes`
 answers with them and the raw read is not needed. That half is structural and
 needs no model at all; the model is for the prose summary of a node.
 
-## 16. Fix graph visualization error 503 for large graphs
+## 15. Fix graph visualization error 503 for large graphs
 
 The endpoint `http://localhost:3001/graph?project=<project>` returns a 503
 error for large projects (e.g., Puppet with 34k+ nodes). Implement either:
@@ -268,7 +266,7 @@ error for large projects (e.g., Puppet with 34k+ nodes). Implement either:
 - A `--no-viz` option to skip expensive rendering.
 - Client-side pagination/lazy loading.
 
-## 17. Web interface for project status
+## 16. Web interface for project status
 
 The viewer draws the graph and nothing else. There is no page that answers what
 is indexed, when it was last indexed, and what is known about a project beyond

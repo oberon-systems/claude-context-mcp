@@ -5,7 +5,11 @@ from __future__ import annotations
 import posixpath
 from functools import cache
 
-from ctxgraph.config import EXTRA_SOURCE_EXTENSIONS, GRAPHIFYY_EXTENSIONS
+from ctxgraph.config import (
+    EXTRA_SOURCE_EXTENSIONS,
+    GRAPHIFYY_EXTENSIONS,
+    IGNORED_FILE_NAMES,
+)
 from ctxgraph.parsers.ansible import AnsibleParser
 from ctxgraph.parsers.base import CodeParser
 from ctxgraph.parsers.languages import (
@@ -16,6 +20,7 @@ from ctxgraph.parsers.languages import (
     GoParser,
     HCLParser,
     JavaScriptParser,
+    JsonParser,
     MakeParser,
     MarkdownParser,
     PuppetParser,
@@ -36,6 +41,7 @@ EXTENSION_PARSERS: dict[str, type[CodeParser]] = {
     ".hcl": HCLParser,
     ".js": JavaScriptParser,
     ".jsx": JavaScriptParser,
+    ".json": JsonParser,
     ".markdown": MarkdownParser,
     ".md": MarkdownParser,
     ".mjs": JavaScriptParser,
@@ -91,6 +97,10 @@ def get_parser(file_path: str) -> CodeParser | None:
 
 def is_default_source(file_name: str) -> bool:
     """Report whether a file is indexed when the project has no .ctxkeep."""
+    # Refused here rather than in parser_class, on purpose: a project whose
+    # .ctxkeep names *.json has asked for its lock files by name and gets them.
+    if file_name.lower() in IGNORED_FILE_NAMES:
+        return False
     _, extension = posixpath.splitext(file_name.lower())
     return (
         file_name.endswith(DEFAULT_SOURCE_EXTENSIONS)

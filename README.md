@@ -39,7 +39,8 @@ mounted read-only, so nothing in this stack can modify your sources.
   It never writes to the host. Two producers share the pass: code goes through
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
   used as a library, and the infrastructure formats it does not read - Ansible,
-  Puppet, Terraform, Dockerfiles, Makefiles, YAML, Markdown, shell, SQL - go
+  Puppet, Terraform, Dockerfiles, Makefiles, YAML, JSON, Markdown, shell, SQL -
+  go
   through the Tree-sitter parsers in `ctxgraph`. Every node records which one
   found it in `metadata.source`.
 - **mcp-server** exposes the graph over Streamable HTTP at `/mcp`, and redirects
@@ -251,8 +252,8 @@ skip list (`.git`, `.venv`, `node_modules`, `dist`, `target` and friends), so a
 
 Without these files the built-in defaults apply: every extension a parser
 understands (`.py`, `.ts`, `.tsx`, `.js`, `.go`, `.rs`, `.rb`, `.sh`, `.md`,
-`.toml`, `.yaml`, `.tf`, `.hcl`, `.pp`, `.erb`, `.epp`, plus `Dockerfile` and
-`Makefile` by name) and `.sql`,
+`.toml`, `.yaml`, `.json`, `.tf`, `.hcl`, `.pp`, `.erb`, `.epp`, plus
+`Dockerfile` and `Makefile` by name) and `.sql`,
 which becomes a file node without being parsed. Files above 1 MB are skipped
 whichever way they were selected, since they are generated bundles in practice.
 
@@ -321,6 +322,34 @@ puts `@port` in the graph next to the manifest that renders the file.
 Ruby itself (`.rb`) goes to the upstream extractor rather than to a parser
 here: classes, methods and the call graph inside a file. It reports no
 `require` edges, so Ruby files do not link to each other.
+
+### JSON
+
+Every top level key of a JSON file becomes a node, and nothing below it does.
+The depth is deliberate: a second level taken indiscriminately turns one data
+file into hundreds of nodes named `type` or `url`.
+
+The manifests that carry structure are read a level deeper, by file name. The
+keys of `scripts` in a `package.json` become `script` nodes, the keys of
+`mcpServers` in an `.mcp.json` become `mcp_server` nodes, and the dependency
+sections become edges:
+
+| Edge         | Source                                                     |
+| ------------ | ---------------------------------------------------------- |
+| `depends_on` | `dependencies` and friends, `require` in a `composer.json` |
+| `extends`    | `extends`, and the `path` of each `references` entry       |
+
+A dependency is recorded under the name of its ecosystem - `npm:express`,
+`composer:monolog/monolog` - so it cannot be confused with a key of the same
+name declared somewhere else in the tree. An `extends` target is a path and
+resolves to the file it names, when that file is relative and indexed; a bare
+specifier such as `@tsconfig/node20/tsconfig.json` names a package rather than
+a file and is left out.
+
+Lock files - `package-lock.json`, `npm-shrinkwrap.json`, `composer.lock`,
+`yarn.lock` - are skipped. They are generated, and they say nothing the
+manifest next to them does not. A `.ctxkeep` that names them explicitly still
+gets them.
 
 ## Make targets
 
