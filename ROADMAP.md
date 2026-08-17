@@ -276,3 +276,7 @@ Update `GRAPHIFYY_EXTENSIONS` in `config.py` to include Puppet and Ruby extensio
 ## 18. Integrate Git commit history at index time
 
 Extend the indexing process (`make index`) to extract relevant commit history from the project's Git repository using `git log`. Store commit metadata (short/long hashes, commit message) and the list of files modified in each commit to provide temporal context and evolution details for the code graph during the initial indexing phase.
+
+## 19. Added cross-project lookups and relations
+
+Useful for infrastructure project e.g. ansible, puppet, terraform etc.
