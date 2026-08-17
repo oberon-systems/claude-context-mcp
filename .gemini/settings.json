@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "context": {
-      "httpUrl": "http://localhost:3000/mcp",
+      "httpUrl": "http://localhost:3000/mcp/claude-context-mcp",
       "type": "http",
       "trust": true
     },

@@ -2,7 +2,7 @@
   "mcpServers": {
     "context": {
       "type": "http",
-      "url": "http://localhost:3000/mcp"
+      "url": "http://localhost:3000/mcp/claude-context-mcp"
     },
     "graph": {
       "command": "docker",
