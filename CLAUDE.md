@@ -79,3 +79,40 @@ Always keep `.pre-commit-config.yaml` at the root level updated for all active f
 - **Python:** PEP 8 compliant, explicit type hints required, robust exception handling.
 - **TypeScript:** Strict type checking enabled (`"strict": true` in `tsconfig.json`), no implicit `any`.
 - **Git Commit Format:** Must be generated via `cz c` using `commitizen` with `wyld-cz`.
+
+## 7. Delegating Work to Gemini
+
+Ordinary implementation work may be handed to the Gemini CLI on
+`gemini-3.1-flash-lite` and reviewed afterwards. The loop is fixed:
+
+1. **Clean tree first.** `git status --short` must be empty, on `main`. What
+   `git diff` shows afterwards is then exactly what the delegate wrote.
+2. **Run it headless.** Put the task in a file to avoid quoting problems:
+   `gemini -m gemini-3.1-flash-lite --approval-mode yolo -p "$(cat task.txt)"`.
+   `yolo` is required - a headless run has nobody to answer a prompt, and
+   `auto_edit` stalls on the first shell command.
+3. **Re-index.** `make index PROJECT=<path>`, so the review reads a graph that
+   matches the tree rather than the one from before the edit.
+4. **Verify from the graph, never from the report.** Use the `context` MCP
+   tools. The delegate's summary is a claim to be checked, not a result.
+5. **Fix on top, then commit** with `cz commit` as always. Local commit only;
+   pushing is the user's call.
+
+The task prompt must always carry these standing rules: do not commit or run
+any writing git command; pure ASCII English; edits must pass
+`.venv/bin/pre-commit run --files <paths>`; state an acceptance test the
+delegate has to check itself; and name any tree that is off limits.
+
+Two failure modes seen repeatedly, worth pre-empting in the prompt:
+
+- **A test that measured nothing.** The indexer source is baked into the image
+  by `COPY src ./src`, so a change under `until
+`make -C graphify TAG=dev build`. A delegate that skips the rebuild is
+  measuring the previous version and will
+- **A substituted acceptance criterion.** Asked for nodes in the graph, it
+  answers with a file count, a log line, o
+  persist". Ask for the node list, and query it yourself regardless.
+
+Give the delegate the facts already established rather than letting it
+rediscover them - the free tier throttles r minute,
+and every wasted turn costs a minute of backoff.
