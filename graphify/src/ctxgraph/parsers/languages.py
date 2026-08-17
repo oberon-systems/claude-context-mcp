@@ -22,7 +22,7 @@ import tree_sitter_rust
 import tree_sitter_toml
 import tree_sitter_typescript
 import tree_sitter_yaml
-from tree_sitter import Language, Node, Parser, Query
+from tree_sitter import Language, Node, Parser, Query, QueryCursor
 
 from ctxgraph.parsers.base import CodeParser, node_text, strip_literal, unique_pairs
 
@@ -232,10 +232,111 @@ class MakeParser(CodeParser):
 
     FAMILY = "make"
     ENTITY_QUERY = "(rule (targets (word) @target))"
+    RELATION_QUERY = """
+        (rule (targets (word) @target) (prerequisites (word) @prerequisite))
+    """
+    # Directives that read as targets. `.PHONY: help init` names three other
+    # targets, and taking it for a rule leaves a false node in every Makefile.
+    # Matched by name rather than by the leading dot: `.venv:` and `.env:` are
+    # ordinary rules and keep their nodes.
+    SPECIAL_MAKE_TARGETS = frozenset(
+        {
+            ".PHONY",
+            ".SUFFIXES",
+            ".DEFAULT",
+            ".PRECIOUS",
+            ".INTERMEDIATE",
+            ".SECONDARY",
+            ".SECONDEXPANSION",
+            ".DELETE_ON_ERROR",
+            ".IGNORE",
+            ".SILENT",
+            ".EXPORT_ALL_VARIABLES",
+            ".NOTPARALLEL",
+            ".ONESHELL",
+            ".POSIX",
+        }
+    )
 
     def __init__(self) -> None:
         """Initialize Makefile parser."""
         super().__init__(tree_sitter_make.language())
+
+    @staticmethod
+    def blank_recipes(content: str) -> str:
+        """Replace every recipe line with an empty one.
+
+        A recipe is shell, and the grammar reads it as make. One unbalanced
+        quote in it - `psql -tAc "select ..."` continued over four lines - and
+        the parse turns into a single string node that swallows the rest of
+        the file: the root Makefile here yielded 11 of its 23 targets, the
+        ones declared above the first such recipe. Nothing in a recipe is
+        wanted anyway, since only targets and prerequisites become nodes.
+
+        The lines are blanked rather than dropped so the line numbering of
+        what is left still matches the file on disk. A physical line starting
+        with a tab is only a recipe when it starts a logical line: the
+        continuation of a `.PHONY` list broken over several lines is indented
+        the same way and has to survive, or the trailing backslash left
+        hanging swallows the rule below it.
+        """
+        blanked: list[str] = []
+        continued = False
+        in_recipe = False
+        for line in content.split("\n"):
+            if not continued:
+                in_recipe = line.startswith("\t")
+            continued = line.endswith("\\")
+            blanked.append("" if in_recipe else line)
+        return "\n".join(blanked)
+
+    def parse(self, content: str) -> Node:
+        """Parse the file with its recipes blanked out."""
+        return super().parse(self.blank_recipes(content))
+
+    def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Filter out GNU make special targets."""
+        entities = super().get_entities(content, rel_path)
+        return [e for e in entities if e["name"] not in self.SPECIAL_MAKE_TARGETS]
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return one depends_on relation per prerequisite of a rule.
+
+        The base implementation flattens every capture of the file into one
+        bag, which loses the rule a prerequisite belonged to. Matches keep the
+        two captures paired, and that pairing is the whole content of the
+        edge: the source is the target being defined, not the file.
+
+        A `$(OBJS)` prerequisite is a `variable_reference` in the grammar
+        rather than a `word`, so the pattern already leaves it out.
+        """
+        if self.relation_query is None:
+            return []
+        seen: set[tuple[str, str]] = set()
+        relations: list[dict[str, str]] = []
+        for _, captures in QueryCursor(self.relation_query).matches(
+            self.parse(content)
+        ):
+            for target_node in captures.get("target", ()):
+                target = node_text(target_node)
+                if target in self.SPECIAL_MAKE_TARGETS:
+                    continue
+                for prerequisite_node in captures.get("prerequisite", ()):
+                    prerequisite = node_text(prerequisite_node)
+                    if "$(" in prerequisite or "${" in prerequisite:
+                        continue
+                    if (target, prerequisite) in seen:
+                        continue
+                    seen.add((target, prerequisite))
+                    relations.append(
+                        {
+                            "source": target,
+                            "target": prerequisite,
+                            "type": "depends_on",
+                            "scope": "symbol",
+                        }
+                    )
+        return relations
 
 
 class MarkdownParser(CodeParser):
