@@ -1,3 +1,13 @@
+## v0.9.1 (2026-08-17)
+
+### Bug Fixes
+
+- **mcp**: bind both clients to the per-project endpoint
+
+### Documentation
+
+- **roadmap**: record the work the neighbouring projects exposed
+
 ## v0.9.0 (2026-08-16)
 
 ### Features
