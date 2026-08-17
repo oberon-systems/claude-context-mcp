@@ -81,6 +81,36 @@ Four rules, all mandatory:
    `active` filter. Don't leave finished plans sitting as `active` - that's what makes
    rule 1 trustworthy for the next session instead of surfacing stale, already-done work.
 
+## Recap: report how the work was actually done
+
+Every time a task ends - implementation, review, research, anything that took more than
+a single answer - close the reply with a **Recap** section stating how the answer was
+produced, not just what it concluded. Counts, not adjectives. Four lines, in this order,
+and skip a line only when its count is genuinely zero:
+
+1. **Graph / `context` MCP** - total calls, broken down by tool and purpose:
+   `get_plans` (the mandatory rule-1 check, and what it returned), `save_plan`
+   (finalized / retired), `search_code_nodes` and `get_code_graph_neighbors` (what was
+   being located), `get_node_summary`, `save_node_summary`, `clear_file_hash`,
+   `list_indexed_files`. Say plainly when a lookup came back empty - that is the part
+   that justifies the Read that followed.
+2. **Direct `Read` / `Write` / `Edit`** - how many of each, on which files, **and why the
+   graph was not enough**. The valid reasons are the ones the research policy above
+   names: the question was about literal file content, the entity is not indexed, the
+   index predates the tree, or the file was being written rather than researched. A Read
+   with no reason given is a Read that should not have happened.
+3. **Subagents** - one line each: name, model, what it was asked for, what it returned.
+   Write "none" when none were spawned rather than omitting the line, since spawning one
+   is a decision the user wants to see either way.
+4. **External delegates** - the Gemini CLI runs: model, how many invocations, what the
+   task file asked for, and how much of the result survived review. A delegate is not a
+   subagent; keep the two counts separate and never merge them into one number.
+
+The point is auditability of method: the user is comparing what the graph answered
+against what was re-derived by hand, and cannot see the tool calls. So the recap is
+written from what actually happened in the turn, never rounded, never reconstructed
+from what the workflow says should have happened.
+
 ## Model routing across the workflow
 
 - **Research/exploration** (Explore agents, graph queries, reading files to gather material
