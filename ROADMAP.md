@@ -1,29 +1,22 @@
 # Roadmap
 
-Current state: the stack builds, starts, indexes a mounted codebase into a
-file/import graph, and serves that graph to Claude CLI over SSE. What follows is
-deliberately deferred work, in the order it should be picked up.
+Current state: the stack builds, starts, and indexes a mounted codebase into a
+graph of files, entities and their relations, which it serves to Claude CLI and
+Gemini CLI over Streamable HTTP (`/mcp`, with `/sse` kept for older clients).
 
-## 1. Tree-sitter AST parsing [COMPLETED]
+Extraction has two producers over one corpus. The upstream graphifyy extractor
+reads the programming languages listed in `GRAPHIFYY_EXTENSIONS`
+(`graphify/src/ctxgraph/config.py`), including C and C++ and Ruby; the
+`ctxgraph` parsers read the infrastructure formats it does not - SH, MD, MAKE,
+DOCKERFILE, HCL/TF, YAML, TOML, Ansible, and Puppet with its ERB and EPP
+templates. One database holds every indexed codebase: `projects` names them,
+every other table carries a `project` column, and a client binds to one through
+the address it connects to (`/mcp/<project>`). Re-indexing skips a file whose
+content hash is unchanged and prunes what a deleted file left behind.
 
-The `ctxgraph` package (`graphify/src/ctxgraph/`) uses tree-sitter for SH, MD,
-MAKE, DOCKERFILE, HCL/TF, YAML, TOML. Programming languages moved to the
-upstream graphifyy extractor, which covers more of them and tags every edge
-with a confidence; the parsers for TS, TSX, JS, PY, GO, RS are kept as a
-fallback but are no longer reached. The split is `GRAPHIFYY_EXTENSIONS` in
-`config.py`.
+What follows is deliberately deferred work, in the order it should be picked up.
 
-- emits `function`, `method`, `class` and per-language entity nodes, scoped to
-  their file as `path::name`
-- emits `calls`, `inherits`, `imports` edges, resolved against the entities of
-  the same language family in a second pass
-- resolves relative import targets to file nodes, and everything else to
-  `external_import` / `external_symbol` placeholders
-- reads Ansible YAML by its values rather than its syntax: plays, tasks,
-  handlers and role variables, plus `includes`, `uses_role`, `depends_on`,
-  `reads_vars`, `uses_template`, `uses_file` and `notifies` edges
-
-## 2. Embedding generation
+## 1. Embedding generation
 
 `code_embeddings` exists with a `vector(1536)` column and an HNSW cosine index,
 but nothing writes to it.
@@ -31,73 +24,31 @@ but nothing writes to it.
 Open decision: a local model (`fastembed` or `sentence-transformers`, no key
 needed, large image) versus an API provider (matches 1536 dimensions directly,
 needs a key and network egress from the container). Whichever is chosen, chunk
-on the AST node boundaries from step 1 rather than on fixed line windows.
+on the AST node boundaries rather than on fixed line windows.
 
-## 3. Semantic search MCP tool
+## 2. Semantic search MCP tool
 
 Once embeddings exist, add `search_code_semantic` to
 `mcp-server/src/index.ts`, querying `embedding <=> $1` against the HNSW index
 and returning the owning nodes. The tool is not worth adding before then, since
 it would return nothing.
 
-## 4. Incremental indexing [COMPLETED]
-
-`make index` rewrites every node on every run. A re-index now clears what it
-previously derived from each file it visits, but a file deleted from the tree is
-never visited again and its nodes stay. Track file content hashes in
-`graph_nodes.metadata` to skip unchanged files, and prune nodes whose file is
-gone.
-
-## 5. Use public registry for built images
+## 3. Use public registry for built images
 
 User have to build images each time. Better way to pull images from some
 public storage instead of.
 
-## 6. Multi-projects support [COMPLETED]
-
-One database holds every indexed codebase. `projects` names them, every other
-table carries a `project` column, and `graph_nodes` is keyed on
-`(project, id)`, since `README.md` is a node id in every codebase there is.
-
-`make index PROJECT=/path/to/anything` indexes a tree under a name taken from
-its last path segment, and needs nothing inside the target: no checkout of this
-repository, no `.env`, no Makefile. A client binds to a project through the
-address it connects to (`/mcp/<project>`), and every tool takes an optional
-`project` to read a neighbour's graph from the same session. `list_projects`
-says what is there.
-
-Edges stay inside one project, which is not a limitation so much as a fact
-about the producer: the indexer is handed a single tree and resolves every
-target within it, so a cross-project edge has no way to be discovered. Giving
-`graph_edges` a second project column would only add one that is always equal.
-Relating two codebases needs a resolver that sees both, which is its own piece
-of work.
-
-## 7. Git hook for re-indexing
+## 4. Git hook for re-indexing
 
 Implement git-hook for run re-indexing for each commit.
 
-## 8. Use some CPU-Driven local model for generate summary
-
-We use dump analyst, better to use some local model
-just for this, for reduce token usage.
-
-Model should be part of compose deployment.
-
-## 9. Implement MCP support for Gemini [COMPLETED]
-
-`.gemini/settings.json` registers both servers, and the skill in `skills/` is
-registered for Claude and Gemini by `make skill-install`. The transport moved
-from SSE to Streamable HTTP (`/mcp`) along the way; `/sse` is still served for
-older clients.
-
-## 10. Move the database out of the working tree
+## 5. Move the database out of the working tree
 
 `DATA_DIR` defaults to `./pgdata`, which puts the database inside the checkout.
 The directory is gitignored, which is exactly what makes it reachable by
 `git clean -xfd` - a routine command in a repository that is also a development
-tree. Losing the graph is cheap to recover from today, but it stops being cheap
-once one database holds every project's graph (item 6).
+tree. Losing the graph is cheap to recover from today, but it stopped being
+cheap once one database began holding every project's graph.
 
 Default it outside instead, `$XDG_DATA_HOME/claude-context-mcp/pgdata` or
 similar, and keep the in-tree path only as an explicit choice.
@@ -125,7 +76,7 @@ is down" apart from "the stack is up but this password does not open a cluster
 initialized with another one", and name the two ways out (`make clean`, or
 `ALTER USER`). Both read as `unreachable` today.
 
-## 11. Incremental extraction for the code half
+## 6. Incremental extraction for the code half
 
 The Tree-sitter parsers skip a file whose hash is unchanged. The graphifyy pass
 does not: it re-extracts the whole code corpus on every run, because an
@@ -142,31 +93,7 @@ graph as nodes. `file_hashes` tracks what the Tree-sitter parsers touched and
 nothing else, so the one half of the corpus that would most benefit from change
 detection is the half that has none.
 
-## 12. Add support for C/C++ (.c, .cpp, .h) [COMPLETED]
-
-`GRAPHIFYY_EXTENSIONS` in `config.py` now carries the full set the upstream
-extractor reads: `.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hpp`. Headers belong in it
-alongside the sources, since that is where the shared structs live and they are
-the definitions the rest of the tree is matched against.
-
-The extension set was never the whole of it, and the double extension of eBPF
-sources - `bpf/event.bpf.c` - turned out not to be the problem: the match uses
-`posixpath.splitext`, which reads the last suffix and yields `.c` correctly.
-`.c` and `.cpp` were already in the set and still produced no nodes at all.
-
-What dropped them was the walker. `iter_source_files` in `discovery.py` skips a
-file that `is_default_source` rejects, and that predicate was built only from
-the extensions our own parsers claim, so it never consulted
-`GRAPHIFYY_EXTENSIONS`. Code files survived it by accident: `.py` and `.ts` have
-fallback parsers registered, while `.c` never had one, so C was discarded before
-the indexer had any say. `is_default_source` now accepts an extension either
-producer can read.
-
-One thing this does not override: a project shipping a `.ctxkeep` is filtered by
-that file alone, so a tree that lists neither `*.c` nor `*.h` there stays
-without them by its own choice.
-
-## 13. Resolve dotted relative imports
+## 7. Resolve dotted relative imports
 
 A relative import of one segment resolves to its file node; anything deeper is
 flattened into an underscore identifier and recorded as `external_import`. In
@@ -187,7 +114,7 @@ per `GRAPHIFYY_EXTENSIONS` in `config.py`, so the resolver to fix is there
 rather than in `ctxgraph`. The already-indexed `py-net-events-collector` graph
 is a small enough reproducer to work against directly.
 
-## 14. Make parser emits targets without edges
+## 8. Make parser emits targets without edges
 
 `Makefile::all`, `::check`, `::install`, `::clean` and `::test` are all present
 as nodes carrying `file_path: Makefile`, but `get_code_graph_neighbors` on
@@ -202,7 +129,29 @@ node. And a prerequisite list is dropped entirely: `all: check $(OBJS)` says
 `all` depends on `check`, which is exactly the kind of edge the graph exists to
 hold.
 
-## 15. One command should onboard a codebase
+## 9. Cross-file edges for Ruby
+
+Ruby extraction yields classes, instance and singleton methods, and a call
+graph inside a file. It yields no modules, no `inherits` edge, and nothing from
+`require`: upstream walks only the `class` node and emits only `calls`, and the
+cross-file import pass it runs for Python is not run for Ruby. A Ruby graph is
+therefore a set of unconnected per-file islands, which is the same shape of
+defect as item 7 and fixed in the same place - the upstream extractor rather
+than `ctxgraph`.
+
+## 10. Enhanced qualified variable resolver for Puppet
+
+`PuppetParser` currently misses qualified variable references like
+`$::package_repo::user` or `$package_repo::base_dir` between manifests (e.g.,
+`keeper.pp` to `init.pp`), resulting in disconnected nodes and empty neighbor
+queries.
+
+- Extend `PuppetParser` to parse qualified global/module variable usages
+  (`$::scope::var`).
+- Emit `reads_var` / `references` edges from the consuming manifest to the
+  defining class/manifest during the edge-resolution pass.
+
+## 11. One command should onboard a codebase
 
 Indexing a tree and making an agent able to use the result are two separate
 commands today, and only the first one takes a path. `make index PROJECT=/x`
@@ -244,77 +193,107 @@ merge the one key, and leave it alone when it is already there and matches.
 on it; the agent files are what actually oblige it. Both need a section saying
 the graph is the first place to look for structure - what uses this, how these
 connect, what a change reaches - and that the file should be opened after the
-graph has narrowed it down, not instead. Add the section when the file does not
-exist, and update it in place when it does, which means the block needs a
-marker to find itself by rather than being appended on every run.
+graph has narrowed it down, not instead. Spell that out as a two-pass rule the
+agent can be held to: query the graph, narrow to the nodes that matter, and
+only then read those files, rather than sweeping whole files to get oriented.
+The same section is where the obligation to persist what was synthesized
+belongs - summaries back into the graph, patterns into the conventions store of
+item 15 - so that the second agent to ask a question reads the answer instead
+of deriving it again. Add the section when the file does not exist, and update
+it in place when it does, which means the block needs a marker to find itself
+by rather than being appended on every run.
 
 The `graph` server is the awkward one and may be better left out. Its command
-assumes the working directory is this repository twice over: without
-`-f <this repo>/docker-compose.yaml` compose finds no file at all, and without
-`-p` it invents a project name from the target directory instead of the
-`ctx-<codebase>` name the Makefile derives in `COMPOSE_PROJECT_NAME`, so it
-attaches to a second, empty stack. Both are renderable - `@COMPOSE@` alongside
-`@MAKE@` and `@ROOT@` - but the deeper problem is not. That server reads the
-file written at index time, which holds whichever project was indexed last and
-has no notion of projects at all, so a second codebase gets right answers only
-until the next `make index` on another tree. Rendering a registration that goes
-quietly wrong is worse than rendering none: either it carries that caveat where
-the agent will read it, or `index` registers only `context` and the skill drops
-the mention when it is not being installed here.
+assumes the working directory is this repository: without
+`-f <this repo>/docker-compose.yaml` compose finds no file at all. That path is
+renderable - `@COMPOSE@` alongside `@MAKE@` and `@ROOT@` - and it is now the
+only thing needed, because `docker-compose.yaml` pins the project name itself
+with a `name:` key, so compose no longer invents one from the target directory
+and `-p` can be left off. The deeper problem is not
+renderable. That server reads the file written at index time, which holds
+whichever project was indexed last and has no notion of projects at all, so a
+second codebase gets right answers only until the next `make index` on another
+tree. Rendering a registration that goes quietly wrong is worse than rendering
+none: either it carries that caveat where the agent will read it, or `index`
+registers only `context` and the skill drops the mention when it is not being
+installed here.
 
-The git hook of item 7 is deliberately not part of this. It looks like the same
+The git hook of item 4 is deliberately not part of this. It looks like the same
 onboarding question, but it is a standing change to how the target repository
 behaves on every commit, where everything above is configuration the agent
 reads. Installing it should stay a separate decision, made by name.
 
-## 16. Add support for Puppet (.pp, .erb, .epp) and Ruby (.rb) [COMPLETED]
+## 12. Add support for JSON (.json)
 
-The premise of this item was wrong in both halves, and checking it against the
-installed extractor was most of the work.
+## 13. Integrate Git commit history at index time
 
-Ruby needed nothing. `.rb` was already in `GRAPHIFYY_EXTENSIONS`, upstream has
-a real `extract_ruby` dispatched on that suffix, and `tree-sitter-ruby` is a
-hard dependency of `graphifyy`, so it was already in the image. It has been
-working since item 12 taught `is_default_source` to consult that set. What it
-yields is classes, instance and singleton methods, and a call graph inside a
-file. What it does not yield is modules, an `inherits` edge, or anything from
-`require` - upstream walks only the `class` node and emits only `calls`, and
-the cross-file import pass it runs for Python is not run for Ruby. A Ruby
-graph is therefore a set of unconnected per-file islands, which is a separate
-item rather than a gap in this one.
+Extend the indexing process (`make index`) to extract relevant commit history
+from the project's Git repository using `git log`. Store commit metadata
+(short/long hashes, commit message) and the list of files modified in each
+commit to provide temporal context and evolution details for the code graph
+during the initial indexing phase.
 
-Puppet could not go the way this item proposed. `graphify.extract.extract()`
-dispatches on the suffix through an if/elif chain that has no `.pp`, `.erb` or
-`.epp` branch, and an unmatched suffix falls off the end and is dropped in
-silence. The indexer partitions the corpus exclusively, so a file routed to
-the extractor is never offered to a parser here. Adding those extensions to
-`GRAPHIFYY_EXTENSIONS` would have produced zero nodes for them - not even a
-file node - while looking like the language was covered.
+## 14. Cross-project lookups and relations
 
-Puppet is therefore three native parsers. `PuppetParser` names a resource
-after its type and title, the way `HCLParser` names a Terraform block, so
-`package { 'nginx': }` becomes `package.nginx` and a `Package['nginx']`
-reference elsewhere resolves to it. `require =>`, `notify =>` and the `->` and
-`~>` chains all become edges. `ErbParser` and `EppParser` share a base that
-works around the embedded-template grammar leaving the code inside `<% %>`
-opaque: re-parsing one span alone fails, because `<% items.each do |i| %>` is
-a half-open block, so every span is reassembled in source order into a single
-buffer and handed to the inner grammar once - Ruby for `.erb`, Puppet for
-`.epp`. The EPP parameter block is not manifest syntax and does leave an error
-node, but recovery still yields every variable.
+Edges stay inside one project, which is not a limitation so much as a fact
+about the producer: the indexer is handed a single tree and resolves every
+target within it, so a cross-project edge has no way to be discovered. Giving
+`graph_edges` a second project column would only add one that is always equal.
+Relating two codebases needs a resolver that sees both, which is its own piece
+of work. Useful for infrastructure projects, e.g. ansible, puppet, terraform.
 
-One trap worth recording: `uses_template` was already an Ansible relation, and
-`resolve_file_target` sent every non-`imports` relation to the Ansible
-candidates. A Puppet template reference would have been resolved against role
-layout and quietly missed, so the two are now told apart by the extension of
-the file the edge leaves.
+## 15. Semantic conventions and architectural patterns store
 
-## 17. Add support for JSON (.json)
+AST graphs track strict syntax dependencies (imports, class inheritance), but
+remain blind to cross-file conventions, deployment patterns, and configuration
+styles (e.g., comparing 4-5 Puppet modules, ERB template standards, or Hiera
+data structures) per project.
 
-## 18. Integrate Git commit history at index time
+- Create a `conventions` table in PostgreSQL keyed by
+  `(project, category, scope)` containing `summary`, `sample_files` (JSON array
+  of file paths), and `metadata`.
+- Implement `save_convention` MCP tool: allows agents (e.g., Gemini Flash or
+  Claude) to write synthesized patterns after analyzing 3-5 representative
+  files.
+- Implement `get_conventions` / `search_conventions` MCP tool: lets agents query
+  stored project patterns (e.g., `category="docker_compose"`) before reading raw
+  code/templates.
 
-Extend the indexing process (`make index`) to extract relevant commit history from the project's Git repository using `git log`. Store commit metadata (short/long hashes, commit message) and the list of files modified in each commit to provide temporal context and evolution details for the code graph during the initial indexing phase.
+## 16. Summaries produced at index time
 
-## 19. Added cross-project lookups and relations
+Summaries are written by whichever agent happens to ask, which is the most
+expensive way to get them. A small CPU-driven local model, deployed as part of
+the compose stack, should produce them instead, purely to cut token usage.
 
-Useful for infrastructure project e.g. ansible, puppet, terraform etc.
+The templates and data files need the same treatment for a different reason:
+ERB/EPP templates and Hiera YAML/JSON have no AST call trees, so an agent that
+wants to know what a template takes has no option but to read the file whole.
+Add a post-processing pass during indexing for `.erb`, `.epp` and
+`.yaml`/`.json`, and store the extracted variable lists, required env keys and
+structural schemas in `graph_nodes.metadata` / `summary`, so `search_code_nodes`
+answers with them and the raw read is not needed. That half is structural and
+needs no model at all; the model is for the prose summary of a node.
+
+## 17. Fix graph visualization error 503 for large graphs
+
+The endpoint `http://localhost:3001/graph?project=<project>` returns a 503
+error for large projects (e.g., Puppet with 34k+ nodes). Implement either:
+
+- Server-side reduction/sampling/clustering for the visualization.
+- A `--no-viz` option to skip expensive rendering.
+- Client-side pagination/lazy loading.
+
+## 18. Web interface for project status
+
+The viewer draws the graph and nothing else. There is no page that answers what
+is indexed, when it was last indexed, and what is known about a project beyond
+its nodes and edges.
+
+Start with the plans, which are the most immediately useful and already stored:
+`save_plan` writes them and `get_plans` reads them back, but nothing displays
+one. Per project, list the plans with their `plan_id`, status and date, and open
+the full text of the one that is clicked.
+
+Same page, as each lands: the conventions of item 15, and the template and data
+summaries of item 16. Everything that is stored about a project but does not fit
+the graph belongs on it.
