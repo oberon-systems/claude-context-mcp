@@ -1,3 +1,18 @@
+## v0.10.0 (2026-08-17)
+
+### Features
+
+- **graphify**: index Puppet manifests and their templates
+- **graphify**: index C and C++ sources
+
+### Build
+
+- **CLAUDE.md**: added instractions for delegating tasks to gemini light
+
+### Documentation
+
+- **ROADMAP.md**: added task for add cross-projects relations and queries
+
 ## v0.9.1 (2026-08-17)
 
 ### Bug Fixes
