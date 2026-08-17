@@ -53,8 +53,18 @@ Four rules, all mandatory:
      mode to produce the same plan again;
    - read files the current step does not touch.
 
-   Reads and graph queries are allowed only in service of the step being implemented -
-   the file being edited, the callers of the entity being changed. Nothing wider.
+   **Once a plan is loaded, the plan defines the file set, and NOTHING OUTSIDE IT MAY
+   BE TOUCHED. No Read, no Write, no Edit, no Grep sweep, no Explore agent doing any of
+   those on a file the plan does not name.** The permitted set is exactly two things:
+   the files the current step names, and the nodes the graph returns for the entity
+   that step changes. That is the whole of it. Wandering the tree "to be sure" is the
+   behaviour this rule exists to stop - the plan already did that work, and redoing it
+   is how a finished plan turns back into an open-ended exploration.
+
+   If a step genuinely cannot be implemented without a file the plan never names, that
+   is a defect in the plan, not a licence to go browsing: name the file, say why it is
+   needed, amend that one step, and continue from there. Ask first, read after - never
+   the other way round.
 
    The single escape hatch is staleness: if a specific step no longer matches the tree
    (the file, class or parameter it names is gone or renamed), verify **that one step**,
