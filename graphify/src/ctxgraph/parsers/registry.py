@@ -5,7 +5,7 @@ from __future__ import annotations
 import posixpath
 from functools import cache
 
-from ctxgraph.config import EXTRA_SOURCE_EXTENSIONS
+from ctxgraph.config import EXTRA_SOURCE_EXTENSIONS, GRAPHIFYY_EXTENSIONS
 from ctxgraph.parsers.ansible import AnsibleParser
 from ctxgraph.parsers.base import CodeParser
 from ctxgraph.parsers.languages import (
@@ -85,8 +85,10 @@ def get_parser(file_path: str) -> CodeParser | None:
 
 def is_default_source(file_name: str) -> bool:
     """Report whether a file is indexed when the project has no .ctxkeep."""
+    _, extension = posixpath.splitext(file_name.lower())
     return (
         file_name.endswith(DEFAULT_SOURCE_EXTENSIONS)
+        or extension in GRAPHIFYY_EXTENSIONS
         or parser_class(file_name) is not None
     )
 

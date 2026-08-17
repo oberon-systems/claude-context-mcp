@@ -142,16 +142,29 @@ graph as nodes. `file_hashes` tracks what the Tree-sitter parsers touched and
 nothing else, so the one half of the corpus that would most benefit from change
 detection is the half that has none.
 
-## 12. Add support for C/C++ (.c, .cpp, .h)
+## 12. Add support for C/C++ (.c, .cpp, .h) [COMPLETED]
 
-Update `GRAPHIFYY_EXTENSIONS` in `config.py` to include C and C++ extensions to leverage the upstream graphifyy extractor for these languages.
+`GRAPHIFYY_EXTENSIONS` in `config.py` now carries the full set the upstream
+extractor reads: `.c`, `.cc`, `.cpp`, `.cxx`, `.h`, `.hpp`. Headers belong in it
+alongside the sources, since that is where the shared structs live and they are
+the definitions the rest of the tree is matched against.
 
-eBPF sources carry a double extension - `bpf/event.bpf.c`, `bpf/event.bpf.h` -
-so whatever matches the extension has to read the last suffix rather than
-everything after the first dot, or a CO-RE project ends up with its kernel-side
-code unindexed while looking as though the language is covered. `.h` belongs in
-the set alongside `.c`: it is where the shared event structs live, and those are
-the definitions the userspace side is matched against.
+The extension set was never the whole of it, and the double extension of eBPF
+sources - `bpf/event.bpf.c` - turned out not to be the problem: the match uses
+`posixpath.splitext`, which reads the last suffix and yields `.c` correctly.
+`.c` and `.cpp` were already in the set and still produced no nodes at all.
+
+What dropped them was the walker. `iter_source_files` in `discovery.py` skips a
+file that `is_default_source` rejects, and that predicate was built only from
+the extensions our own parsers claim, so it never consulted
+`GRAPHIFYY_EXTENSIONS`. Code files survived it by accident: `.py` and `.ts` have
+fallback parsers registered, while `.c` never had one, so C was discarded before
+the indexer had any say. `is_default_source` now accepts an extension either
+producer can read.
+
+One thing this does not override: a project shipping a `.ctxkeep` is filtered by
+that file alone, so a tree that lists neither `*.c` nor `*.h` there stays
+without them by its own choice.
 
 ## 13. Resolve dotted relative imports
 

@@ -71,9 +71,13 @@ EXTRA_SOURCE_EXTENSIONS = (".sql",)
 GRAPHIFYY_EXTENSIONS = frozenset(
     {
         ".c",
+        ".cc",
         ".cpp",
+        ".cxx",
         ".cs",
         ".go",
+        ".h",
+        ".hpp",
         ".java",
         ".js",
         ".kt",
