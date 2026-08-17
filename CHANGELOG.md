@@ -1,3 +1,18 @@
+## v0.10.1 (2026-08-17)
+
+### Bug Fixes
+
+- **compose**: pin the stack to a single compose project again
+
+### Build
+
+- **CLAUDE.local.md**: forbid reading anything the loaded plan does not name
+- **CLAUDE.local.md**: add the local agent instructions
+
+### Documentation
+
+- **ROADMAP.md**: drop the completed items and renumber what is left
+
 ## v0.10.0 (2026-08-17)
 
 ### Features
