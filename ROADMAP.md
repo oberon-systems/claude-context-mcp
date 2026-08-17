@@ -114,22 +114,7 @@ per `GRAPHIFYY_EXTENSIONS` in `config.py`, so the resolver to fix is there
 rather than in `ctxgraph`. The already-indexed `py-net-events-collector` graph
 is a small enough reproducer to work against directly.
 
-## 8. Make parser emits targets without edges
-
-`Makefile::all`, `::check`, `::install`, `::clean` and `::test` are all present
-as nodes carrying `file_path: Makefile`, but `get_code_graph_neighbors` on
-`Makefile` returns an empty list, where the same call on any `.py` file returns
-the entities it contains. The nodes are written and the `contains` edges are
-not, which makes the targets findable by name and invisible to every question
-about structure.
-
-Two smaller repairs belong with it. `.PHONY` is emitted as a target when it is
-a directive naming other targets, so every indexed Makefile carries one false
-node. And a prerequisite list is dropped entirely: `all: check $(OBJS)` says
-`all` depends on `check`, which is exactly the kind of edge the graph exists to
-hold.
-
-## 9. Cross-file edges for Ruby
+## 8. Cross-file edges for Ruby
 
 Ruby extraction yields classes, instance and singleton methods, and a call
 graph inside a file. It yields no modules, no `inherits` edge, and nothing from
@@ -139,7 +124,7 @@ therefore a set of unconnected per-file islands, which is the same shape of
 defect as item 7 and fixed in the same place - the upstream extractor rather
 than `ctxgraph`.
 
-## 10. Enhanced qualified variable resolver for Puppet
+## 9. Enhanced qualified variable resolver for Puppet
 
 `PuppetParser` currently misses qualified variable references like
 `$::package_repo::user` or `$package_repo::base_dir` between manifests (e.g.,
@@ -151,7 +136,7 @@ queries.
 - Emit `reads_var` / `references` edges from the consuming manifest to the
   defining class/manifest during the edge-resolution pass.
 
-## 11. One command should onboard a codebase
+## 10. One command should onboard a codebase
 
 Indexing a tree and making an agent able to use the result are two separate
 commands today, and only the first one takes a path. `make index PROJECT=/x`
@@ -198,7 +183,7 @@ agent can be held to: query the graph, narrow to the nodes that matter, and
 only then read those files, rather than sweeping whole files to get oriented.
 The same section is where the obligation to persist what was synthesized
 belongs - summaries back into the graph, patterns into the conventions store of
-item 15 - so that the second agent to ask a question reads the answer instead
+item 14 - so that the second agent to ask a question reads the answer instead
 of deriving it again. Add the section when the file does not exist, and update
 it in place when it does, which means the block needs a marker to find itself
 by rather than being appended on every run.
@@ -223,9 +208,9 @@ onboarding question, but it is a standing change to how the target repository
 behaves on every commit, where everything above is configuration the agent
 reads. Installing it should stay a separate decision, made by name.
 
-## 12. Add support for JSON (.json)
+## 11. Add support for JSON (.json)
 
-## 13. Integrate Git commit history at index time
+## 12. Integrate Git commit history at index time
 
 Extend the indexing process (`make index`) to extract relevant commit history
 from the project's Git repository using `git log`. Store commit metadata
@@ -233,7 +218,7 @@ from the project's Git repository using `git log`. Store commit metadata
 commit to provide temporal context and evolution details for the code graph
 during the initial indexing phase.
 
-## 14. Cross-project lookups and relations
+## 13. Cross-project lookups and relations
 
 Edges stay inside one project, which is not a limitation so much as a fact
 about the producer: the indexer is handed a single tree and resolves every
@@ -242,7 +227,7 @@ target within it, so a cross-project edge has no way to be discovered. Giving
 Relating two codebases needs a resolver that sees both, which is its own piece
 of work. Useful for infrastructure projects, e.g. ansible, puppet, terraform.
 
-## 15. Semantic conventions and architectural patterns store
+## 14. Semantic conventions and architectural patterns store
 
 AST graphs track strict syntax dependencies (imports, class inheritance), but
 remain blind to cross-file conventions, deployment patterns, and configuration
@@ -259,7 +244,7 @@ data structures) per project.
   stored project patterns (e.g., `category="docker_compose"`) before reading raw
   code/templates.
 
-## 16. Summaries produced at index time
+## 15. Summaries produced at index time
 
 Summaries are written by whichever agent happens to ask, which is the most
 expensive way to get them. A small CPU-driven local model, deployed as part of
@@ -274,7 +259,7 @@ structural schemas in `graph_nodes.metadata` / `summary`, so `search_code_nodes`
 answers with them and the raw read is not needed. That half is structural and
 needs no model at all; the model is for the prose summary of a node.
 
-## 17. Fix graph visualization error 503 for large graphs
+## 16. Fix graph visualization error 503 for large graphs
 
 The endpoint `http://localhost:3001/graph?project=<project>` returns a 503
 error for large projects (e.g., Puppet with 34k+ nodes). Implement either:
@@ -283,7 +268,7 @@ error for large projects (e.g., Puppet with 34k+ nodes). Implement either:
 - A `--no-viz` option to skip expensive rendering.
 - Client-side pagination/lazy loading.
 
-## 18. Web interface for project status
+## 17. Web interface for project status
 
 The viewer draws the graph and nothing else. There is no page that answers what
 is indexed, when it was last indexed, and what is known about a project beyond
@@ -294,6 +279,6 @@ Start with the plans, which are the most immediately useful and already stored:
 one. Per project, list the plans with their `plan_id`, status and date, and open
 the full text of the one that is clicked.
 
-Same page, as each lands: the conventions of item 15, and the template and data
-summaries of item 16. Everything that is stored about a project but does not fit
+Same page, as each lands: the conventions of item 14, and the template and data
+summaries of item 15. Everything that is stored about a project but does not fit
 the graph belongs on it.
