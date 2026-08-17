@@ -189,12 +189,20 @@ it.
 | `MCP_PORT`          | `3000`     | Host port the MCP server is published on                                                        |
 | `TAG`               | `dev`      | Tag applied to the images built by `make build`                                                 |
 
-`COMPOSE_PROJECT_NAME` is optional and normally left out. Compose would
-otherwise name the project after this directory, and every checkout of this
-repository is called `claude-context-mcp`, so two codebases vendoring it would
-share one set of containers, one network and one database. The Makefile derives
-the name from `PROJECT_PATH` instead (`/srv/balor` gives `ctx-balor`); set the
-variable in `.env` to pin one by hand.
+`COMPOSE_PROJECT_NAME` is optional and normally left out. The stack is a
+singleton - one database holds the graph of every indexed codebase - so
+`docker-compose.yaml` pins the name with a `name: claude-context-mcp` key
+rather than deriving it from the codebase being indexed. `make index
+PROJECT=/somewhere/else` therefore reuses the one stack instead of starting a
+second. An explicit `COMPOSE_PROJECT_NAME` in `.env` is what overrides that key.
+
+Setting the variable in `.env` means taking on `DATA_DIR` as well: two stacks
+must never bind the same data directory. Two postgres containers over one
+`DATA_DIR` corrupt it beyond a normal restart, and nothing stops them - the
+`postmaster.pid` lock cannot see a postmaster in another container. The same
+applies to renaming the project: the containers under the old name keep running
+on `restart: unless-stopped`, and `make down` no longer addresses them, so
+remove them by hand before starting the stack under a new name.
 
 The MCP server also reads two optional variables:
 

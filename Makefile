@@ -17,28 +17,6 @@ MCP_DIR := mcp-server
 # Process substitution in the shell target needs bash, not sh.
 SHELL := /bin/bash
 
-# Every checkout of this repository sits in a directory called
-# claude-context-mcp, and compose names the project after that directory. Two
-# codebases vendoring this repository would then share one set of containers,
-# one network and one database, and a `down` in either would fail on a network
-# the other still holds. Name the compose project after the codebase being
-# indexed instead. An explicit COMPOSE_PROJECT_NAME in .env still wins.
-#
-# Written without a `case`: make counts parentheses inside $(shell ...), and a
-# case arm's closing one would end the call halfway through.
-COMPOSE_PROJECT_NAME := $(shell \
-	name=$$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' .env 2> /dev/null | tail -1); \
-	if [ -z "$$name" ]; then \
-		path=$$(sed -n 's/^PROJECT_PATH=//p' .env 2> /dev/null | tail -1); \
-		base=$$(basename "$${path%/}" 2> /dev/null); \
-		if [ -z "$$base" ] || [ "$$base" = . ] || [ "$$base" = / ]; then \
-			base='$(NAME)'; \
-		fi; \
-		name=ctx-$$(printf %s "$$base" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9_-' '-'); \
-	fi; \
-	printf %s "$$name")
-export COMPOSE_PROJECT_NAME
-
 .DEFAULT_GOAL := help
 
 # `make mcp build` reads as a subcommand, but make sees two goals. Absorb

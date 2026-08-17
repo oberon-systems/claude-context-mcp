@@ -1,7 +1,4 @@
-# Stack layout:
-#   postgres + mcp-server are the long running services, started by `make up`.
-#   graphify is a one-shot indexing job behind the `index` profile, so a plain
-#   `up` does not try to run it. Start it with `make index`.
+name: claude-context-mcp
 
 x-database-url: &database-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}
 
@@ -15,8 +12,6 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see .env.example}
     volumes:
       - ${DATA_DIR:-./pgdata}:/var/lib/postgresql/data
-      # Only replayed when the data directory is empty. Recreate the volume
-      # after changing the schema, or apply the change by hand.
       - ./init-db:/docker-entrypoint-initdb.d:ro
     networks: [base]
     healthcheck:
