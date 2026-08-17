@@ -89,26 +89,37 @@ def link_file(
     content: str,
     known_files: set[str],
     symbols: dict[str, list[str]],
+    entities: list[dict[str, str]],
 ) -> int:
     """Store the edges leaving a file. Returns the edge count.
 
     Runs after every file has been indexed, so a call to something defined
     further down the tree still resolves.
     """
+    source_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
+    edges = 0
+    for entity in entities:
+        target_id = entity_node_id(rel_path, entity["name"])
+        insert_edge(cursor, project, source_id, target_id, "contains")
+        edges += 1
+
     parser = get_parser(rel_path)
     if parser is None:
-        return 0
+        return edges
 
-    source_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
     relations = parser.get_relations(content, rel_path)
     # File relations come first: knowing which files this one pulls in is what
     # makes a call or a handler name resolve to the right definition below.
     relations.sort(key=lambda relation: relation["scope"] != "file")
     imported: set[str] = set()
-    edges = 0
     for relation in relations:
         target = relation["target"]
         relation_type = relation["type"]
+        if relation.get("source"):
+            edge_source_id = entity_node_id(rel_path, relation["source"])
+        else:
+            edge_source_id = source_id
+
         if relation["scope"] == "file":
             target_id = resolve_file_target(
                 relation_type, target, rel_path, known_files
@@ -123,9 +134,9 @@ def link_file(
             if target_id is None:
                 target_id = truncate(target, MAX_NODE_ID_LENGTH)
                 ensure_external_node(cursor, project, target_id, "external_symbol")
-        if target_id == source_id:
+        if target_id == edge_source_id:
             continue
-        insert_edge(cursor, project, source_id, target_id, relation_type)
+        insert_edge(cursor, project, edge_source_id, target_id, relation_type)
         edges += 1
     return edges
 
@@ -254,6 +265,7 @@ def scan_and_build_graph() -> None:
         # becoming an external placeholder next to it.
         known_files: set[str] = {rel_path for _, rel_path in code_sources}
         symbols: dict[str, list[str]] = {}
+        all_entities: dict[str, list[dict[str, str]]] = {}
         entity_total = 0
         edge_total = 0
         failures = 0
@@ -282,6 +294,7 @@ def scan_and_build_graph() -> None:
                         continue
                     conn.commit()
 
+                all_entities[rel_path] = entities
                 known_files.add(rel_path)
                 entity_total += len(entities)
                 for entity in entities:
@@ -297,7 +310,13 @@ def scan_and_build_graph() -> None:
                     continue
                 try:
                     edge_total += link_file(
-                        cursor, project, rel_path, content, known_files, symbols
+                        cursor,
+                        project,
+                        rel_path,
+                        content,
+                        known_files,
+                        symbols,
+                        all_entities.get(rel_path, []),
                     )
                 except Exception:
                     conn.rollback()
