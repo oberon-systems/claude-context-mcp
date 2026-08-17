@@ -29,8 +29,9 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     -- What the node stands for: file, or an entity kind reported by the
     -- parser (function, method, class, interface, type, struct, trait, enum,
     -- block, target, table, key, heading, image, stage, and play, task,
-    -- handler, variable for Ansible), or a placeholder for something outside
-    -- the tree (external_import, external_symbol).
+    -- handler, variable for Ansible, and define, node, resource for Puppet),
+    -- or a placeholder for something outside the tree (external_import,
+    -- external_symbol).
     type VARCHAR(50) NOT NULL,
     file_path TEXT,
     content TEXT,
@@ -55,7 +56,8 @@ CREATE TABLE IF NOT EXISTS graph_edges (
     target_id VARCHAR(255) NOT NULL,
     -- What the source does with the target: imports, calls, inherits, or,
     -- for Ansible, includes, uses_role, depends_on, reads_vars, uses_template,
-    -- uses_file, notifies.
+    -- uses_file, notifies. Puppet reuses includes, uses_template and notifies,
+    -- and adds requires for both `require` and the -> ordering chains.
     relation_type VARCHAR(50) NOT NULL,
     metadata JSONB DEFAULT '{}'::JSONB,
     FOREIGN KEY (project, source_id) REFERENCES graph_nodes (

@@ -45,7 +45,8 @@ Run the indexer. It is a one-shot container job, so it prints and exits:
 Two producers write to the same database in one pass. Code goes through the
 graphifyy extractor (`.py .ts .js .go .rs .java .c .cpp .rb .cs .kt .scala
 .php`), everything else through the parsers in `graphify/src/ctxgraph`
-(Ansible, YAML, Terraform, Dockerfile, Make, Markdown, shell, TOML, SQL).
+(Ansible, Puppet and its `.erb`/`.epp` templates, YAML, Terraform, Dockerfile,
+Make, Markdown, shell, TOML, SQL).
 Report the counts from the last two log lines and stop. Do not read the
 indexed files to "check" the result.
 

@@ -267,9 +267,47 @@ onboarding question, but it is a standing change to how the target repository
 behaves on every commit, where everything above is configuration the agent
 reads. Installing it should stay a separate decision, made by name.
 
-## 16. Add support for Puppet (.pp, .erb, .epp) and Ruby (.rb)
+## 16. Add support for Puppet (.pp, .erb, .epp) and Ruby (.rb) [COMPLETED]
 
-Update `GRAPHIFYY_EXTENSIONS` in `config.py` to include Puppet and Ruby extensions to leverage the upstream graphifyy extractor for these languages.
+The premise of this item was wrong in both halves, and checking it against the
+installed extractor was most of the work.
+
+Ruby needed nothing. `.rb` was already in `GRAPHIFYY_EXTENSIONS`, upstream has
+a real `extract_ruby` dispatched on that suffix, and `tree-sitter-ruby` is a
+hard dependency of `graphifyy`, so it was already in the image. It has been
+working since item 12 taught `is_default_source` to consult that set. What it
+yields is classes, instance and singleton methods, and a call graph inside a
+file. What it does not yield is modules, an `inherits` edge, or anything from
+`require` - upstream walks only the `class` node and emits only `calls`, and
+the cross-file import pass it runs for Python is not run for Ruby. A Ruby
+graph is therefore a set of unconnected per-file islands, which is a separate
+item rather than a gap in this one.
+
+Puppet could not go the way this item proposed. `graphify.extract.extract()`
+dispatches on the suffix through an if/elif chain that has no `.pp`, `.erb` or
+`.epp` branch, and an unmatched suffix falls off the end and is dropped in
+silence. The indexer partitions the corpus exclusively, so a file routed to
+the extractor is never offered to a parser here. Adding those extensions to
+`GRAPHIFYY_EXTENSIONS` would have produced zero nodes for them - not even a
+file node - while looking like the language was covered.
+
+Puppet is therefore three native parsers. `PuppetParser` names a resource
+after its type and title, the way `HCLParser` names a Terraform block, so
+`package { 'nginx': }` becomes `package.nginx` and a `Package['nginx']`
+reference elsewhere resolves to it. `require =>`, `notify =>` and the `->` and
+`~>` chains all become edges. `ErbParser` and `EppParser` share a base that
+works around the embedded-template grammar leaving the code inside `<% %>`
+opaque: re-parsing one span alone fails, because `<% items.each do |i| %>` is
+a half-open block, so every span is reassembled in source order into a single
+buffer and handed to the inner grammar once - Ruby for `.erb`, Puppet for
+`.epp`. The EPP parameter block is not manifest syntax and does leave an error
+node, but recovery still yields every variable.
+
+One trap worth recording: `uses_template` was already an Ansible relation, and
+`resolve_file_target` sent every non-`imports` relation to the Ansible
+candidates. A Puppet template reference would have been resolved against role
+layout and quietly missed, so the two are now told apart by the extension of
+the file the edge leaves.
 
 ## 17. Add support for JSON (.json)
 

@@ -33,6 +33,14 @@ ANSIBLE_ROLE_ENTRY_POINTS = (
     "meta/main.yml",
     "meta/main.yaml",
 )
+# The two fixed directories of a Puppet module, which is what makes a template
+# reference resolvable from the path of the manifest naming it.
+PUPPET_MANIFEST_DIR = "/manifests/"
+PUPPET_TEMPLATE_DIR = "templates"
+# Puppet is the only other producer of `uses_template`, and Ansible already
+# claims that name in ANSIBLE_RELATION_DIRS, so the two are told apart by the
+# file the edge leaves rather than by the relation alone.
+PUPPET_SOURCE_EXTENSIONS = (".pp",)
 
 
 def python_import_candidates(target: str, base_dir: str) -> list[str]:
@@ -123,13 +131,42 @@ def ansible_candidates(relation_type: str, target: str, rel_path: str) -> list[s
     ]
 
 
+def puppet_candidates(target: str, rel_path: str) -> list[str]:
+    """Return the file paths a Puppet template reference may point at.
+
+    A manifest lives at `<modules>/<module>/manifests/<name>.pp` and names a
+    template by the module it belongs to rather than by its path, so
+    `template('profile/nginx.conf.erb')` means
+    `<modules>/profile/templates/nginx.conf.erb`. The module in the reference
+    is not necessarily the one holding the manifest, which is why only the
+    directory the modules sit in is taken from the manifest path.
+    """
+    candidates: list[str] = []
+    root, separator, _ = rel_path.partition(PUPPET_MANIFEST_DIR)
+    module, _, tail = target.partition("/")
+    if separator and tail:
+        modules_dir = posixpath.dirname(root)
+        candidates.append(
+            posixpath.normpath(
+                posixpath.join(modules_dir, module, PUPPET_TEMPLATE_DIR, tail)
+            )
+        )
+    # The target may already be written from the project root.
+    candidates.append(posixpath.normpath(target))
+    return candidates
+
+
 def resolve_file_target(
     relation_type: str, target: str, rel_path: str, known_files: set[str]
 ) -> str | None:
     """Resolve a file scoped relation to the id of an indexed file node."""
     if relation_type == "imports":
         return resolve_import(target, rel_path, known_files)
-    for candidate in ansible_candidates(relation_type, target, rel_path):
+    if rel_path.endswith(PUPPET_SOURCE_EXTENSIONS):
+        candidates = puppet_candidates(target, rel_path)
+    else:
+        candidates = ansible_candidates(relation_type, target, rel_path)
+    for candidate in candidates:
         if candidate in known_files:
             return truncate(candidate, MAX_NODE_ID_LENGTH)
     return None

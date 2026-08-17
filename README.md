@@ -39,9 +39,9 @@ mounted read-only, so nothing in this stack can modify your sources.
   It never writes to the host. Two producers share the pass: code goes through
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
   used as a library, and the infrastructure formats it does not read - Ansible,
-  Terraform, Dockerfiles, Makefiles, YAML, Markdown, shell, SQL - go through the
-  Tree-sitter parsers in `ctxgraph`. Every node records which one found it in
-  `metadata.source`.
+  Puppet, Terraform, Dockerfiles, Makefiles, YAML, Markdown, shell, SQL - go
+  through the Tree-sitter parsers in `ctxgraph`. Every node records which one
+  found it in `metadata.source`.
 - **mcp-server** exposes the graph over Streamable HTTP at `/mcp`, and redirects
   `/graph` to the viewer.
 - **viewer** renders the graph as an interactive page, from the database, on
@@ -242,8 +242,9 @@ skip list (`.git`, `.venv`, `node_modules`, `dist`, `target` and friends), so a
 `.ctxignore` that forgets `.git/` still does not walk into git's internals.
 
 Without these files the built-in defaults apply: every extension a parser
-understands (`.py`, `.ts`, `.tsx`, `.js`, `.go`, `.rs`, `.sh`, `.md`, `.toml`,
-`.yaml`, `.tf`, `.hcl`, plus `Dockerfile` and `Makefile` by name) and `.sql`,
+understands (`.py`, `.ts`, `.tsx`, `.js`, `.go`, `.rs`, `.rb`, `.sh`, `.md`,
+`.toml`, `.yaml`, `.tf`, `.hcl`, `.pp`, `.erb`, `.epp`, plus `Dockerfile` and
+`Makefile` by name) and `.sql`,
 which becomes a file node without being parsed. Files above 1 MB are skipped
 whichever way they were selected, since they are generated bundles in practice.
 
@@ -274,6 +275,44 @@ still templated is skipped, since only Ansible could expand it. A `notify:`
 that no handler answers stays in the graph as an unresolved external node,
 which is usually a typo worth seeing. YAML that is not Ansible - CI configs,
 compose files, linter settings - falls back to top level keys as before.
+
+### Puppet
+
+Classes, defined types, node definitions and functions become nodes under their
+full name, so `class profile::web` is one node whatever file it lives in. Every
+resource declaration becomes a node too, named after its type and its title:
+
+| Manifest               | Node            |
+| ---------------------- | --------------- |
+| `package { 'nginx': }` | `package.nginx` |
+| `service { 'nginx': }` | `service.nginx` |
+
+That naming is what lets a reference resolve. `Package['nginx']` in a
+`require =>` finds the `package.nginx` declared above it, and `Class['a::b']`
+finds the class rather than a resource.
+
+| Edge            | Source                                             |
+| --------------- | -------------------------------------------------- |
+| `inherits`      | `inherits` on a class                              |
+| `includes`      | `include`                                          |
+| `requires`      | `require`, both the statement and the `require =>` |
+| `requires`      | the `->` and `~>` ordering chains                  |
+| `notifies`      | `notify =>`                                        |
+| `uses_template` | `template(...)` and `epp(...)`                     |
+
+`include ::stdlib` and `include stdlib` name the same class and land on the
+same node. A template reference is resolved through the module layout, so
+`template('profile/nginx.conf.erb')` in any manifest finds
+`modules/profile/templates/nginx.conf.erb`.
+
+Templates are read as well. The code inside `<% %>` is reassembled in source
+order and parsed by the language it is actually written in - Ruby for `.erb`,
+Puppet for `.epp` - and the variables it reads become nodes, so `<%= @port %>`
+puts `@port` in the graph next to the manifest that renders the file.
+
+Ruby itself (`.rb`) goes to the upstream extractor rather than to a parser
+here: classes, methods and the call graph inside a file. It reports no
+`require` edges, so Ruby files do not link to each other.
 
 ## Make targets
 
