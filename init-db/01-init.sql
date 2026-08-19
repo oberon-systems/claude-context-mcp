@@ -36,9 +36,9 @@ CREATE TABLE IF NOT EXISTS graph_nodes (
     file_path TEXT,
     content TEXT,
     summary TEXT,
-    -- summary_source is 'auto' for generated summaries and 'manual' for ones
-    -- written through the MCP save_node_summary tool. The indexer only
-    -- overwrites the former.
+    -- metadata carries 'summary_source' - 'auto' for a generated summary,
+    -- 'manual' for one written through the MCP save_node_summary tool, and the
+    -- indexer only overwrites the former - plus 'source' ('native'/'graphifyy').
     metadata JSONB DEFAULT '{}'::JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (project, id)
