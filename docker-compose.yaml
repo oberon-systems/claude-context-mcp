@@ -27,9 +27,7 @@ services:
   # the infrastructure formats it does not read are parsed by the ctxgraph
   # package in ./graphify/src. Both write to the same database.
   graphify:
-    build:
-      context: ./graphify
-    image: claude-context-mcp/graphify:${TAG:-dev}
+    image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
     restart: "no"
     environment:
       DATABASE_URL: *database-url
@@ -53,7 +51,7 @@ services:
   # Renders the graph as a page, from the database, on every request. Shares
   # the indexer image because it calls the same rendering code.
   viewer:
-    image: claude-context-mcp/graphify:${TAG:-dev}
+    image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
     restart: unless-stopped
     command: ["python", "-m", "ctxgraph.viewer"]
     ports:
@@ -68,9 +66,7 @@ services:
 
   # MCP server exposed to Claude CLI over SSE.
   mcp-server:
-    build:
-      context: ./mcp-server
-    image: claude-context-mcp/mcp-server:${TAG:-dev}
+    image: ghcr.io/oberon-systems/claude-context-mcp/mcp-server:latest
     restart: unless-stopped
     ports:
       - "${MCP_PORT:-3000}:3000"
