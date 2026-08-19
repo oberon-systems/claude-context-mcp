@@ -203,31 +203,33 @@ status` answers; see the Make targets section.
 Copy `.env.example` to `.env`. `make up` and `make index` refuse to run without
 it.
 
-| Variable            | Default    | Purpose                                                                                         |
-| ------------------- | ---------- | ----------------------------------------------------------------------------------------------- |
-| `PROJECT_PATH`      | required   | Absolute host path of the codebase to index, mounted read-only at `/project`                    |
-| `PROJECT_NAME`      | derived    | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
-| `POSTGRES_PASSWORD` | required   | Database password; compose fails fast when unset                                                |
-| `POSTGRES_USER`     | `user`     | Database user                                                                                   |
-| `POSTGRES_DB`       | `context`  | Database name                                                                                   |
-| `DATA_DIR`          | `./pgdata` | Host location of the PostgreSQL data directory                                                  |
-| `MCP_PORT`          | `3000`     | Host port the MCP server is published on                                                        |
-| `TAG`               | `dev`      | Tag applied to the images built by `make build`                                                 |
+| Variable            | Default   | Purpose                                                                                         |
+| ------------------- | --------- | ----------------------------------------------------------------------------------------------- |
+| `PROJECT_PATH`      | required  | Absolute host path of the codebase to index, mounted read-only at `/project`                    |
+| `PROJECT_NAME`      | derived   | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
+| `POSTGRES_PASSWORD` | required  | Database password; compose fails fast when unset                                                |
+| `POSTGRES_USER`     | `user`    | Database user                                                                                   |
+| `POSTGRES_DB`       | `context` | Database name                                                                                   |
+| `MCP_PORT`          | `3000`    | Host port the MCP server is published on                                                        |
+| `TAG`               | `dev`     | Tag applied to the images built by `make build`                                                 |
 
-`COMPOSE_PROJECT_NAME` is optional and normally left out. The stack is a
-singleton - one database holds the graph of every indexed codebase - so
-`docker-compose.yaml` pins the name with a `name: claude-context-mcp` key
-rather than deriving it from the codebase being indexed. `make index
-PROJECT=/somewhere/else` therefore reuses the one stack instead of starting a
-second. An explicit `COMPOSE_PROJECT_NAME` in `.env` is what overrides that key.
+The stack is a singleton, and nothing about the codebase being indexed changes
+that. `docker-compose.yaml` pins the compose project name with a
+`name: claude-context-mcp` key, and the database always lives at
+`~/.local/share/context-mcp/db`. Neither is configurable, on purpose: one
+database holds the graph of every indexed codebase, so `make index
+PROJECT=/somewhere/else` reuses the one stack instead of starting a second.
 
-Setting the variable in `.env` means taking on `DATA_DIR` as well: two stacks
-must never bind the same data directory. Two postgres containers over one
-`DATA_DIR` corrupt it beyond a normal restart, and nothing stops them - the
-`postmaster.pid` lock cannot see a postmaster in another container. The same
-applies to renaming the project: the containers under the old name keep running
-on `restart: unless-stopped`, and `make down` no longer addresses them, so
-remove them by hand before starting the stack under a new name.
+`PROJECT_PATH` and `PROJECT_NAME` are arguments to the indexing job and nothing
+more. They decide which tree is mounted read-only at `/project` and under which
+name its graph is stored, and they never reach the stack: not the compose
+project, not the containers, not the data directory.
+
+Running a second stack from this compose file is unsupported and destroys data.
+Two postgres containers over one data directory corrupt it beyond a normal
+restart, and nothing stops them - the `postmaster.pid` lock cannot see a
+postmaster in another container. There is no per-stack data directory to keep
+them apart, because there is only one path and it is not a setting.
 
 The MCP server also reads two optional variables:
 
@@ -527,15 +529,15 @@ written summaries come back from nowhere else.
 
 `init-db/01-init.sql` is replayed by the PostgreSQL entrypoint **only when the
 data directory is empty**. After changing the schema, either apply the change by
-hand or run `make clean` to empty `DATA_DIR` and start over. That target asks
-for confirmation first, since it destroys the index; `make clean FORCE=1` skips
-the prompt for scripted use. To remove a single codebase rather than the whole
+hand or run `make clean` to empty the data directory and start over. That
+target asks for confirmation first, since it destroys the index; `make clean
+FORCE=1` skips the prompt for scripted use. To remove a single codebase rather than the whole
 database, use `make unindex` - everything cascades from the row in `projects`,
 so one `DELETE` there takes that project's nodes, edges, hashes, embeddings and
 plans, and nothing of any other project. Both are worth a `make backup` first.
 
-`DATA_DIR` is emptied from inside the postgres service rather than from the
-host: its files belong to the container's postgres uid, so a host-side `rm`
+The data directory is emptied from inside the postgres service rather than from
+the host: its files belong to the container's postgres uid, so a host-side `rm`
 fails on permissions.
 
 The database is a bind mount rather than a volume, so `docker compose down -v`

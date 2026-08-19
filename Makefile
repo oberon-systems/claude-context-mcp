@@ -201,7 +201,7 @@ psql: require-env  ## Open a psql session against the context database
 #
 # The files belong to the postgres uid, so the host user cannot remove them.
 # Compose runs the deletion as root inside the postgres service itself, which
-# also means DATA_DIR stays resolved by compose rather than parsed again here.
+# also means the path stays resolved by compose rather than parsed again here.
 clean: require-env  ## Remove the containers, the database and the built images
 	@test -n "$(FORCE)" || { \
 		echo "This empties the database, and the index goes with it."; \
