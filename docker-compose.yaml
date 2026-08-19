@@ -95,6 +95,39 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # The dashboard: indexed projects, their nodes, and every plan in the
+  # database. The graph itself is the viewer's page, proxied through here so it
+  # and the API share one origin.
+  web:
+    image: ghcr.io/oberon-systems/claude-context-mcp/web:latest
+    restart: unless-stopped
+    ports:
+      # Loopback only: this is the one service that writes to the database on
+      # behalf of a browser, and it has no authentication of its own.
+      - "127.0.0.1:${WEB_PORT:-3002}:3002"
+    networks: [base]
+    environment:
+      DATABASE_URL: *database-url
+      PORT: 3002
+      VIEWER_URL: http://viewer:3001
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      viewer:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3002/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # MCP server exposed to Claude CLI over SSE.
   mcp-server:
     image: ghcr.io/oberon-systems/claude-context-mcp/mcp-server:latest

@@ -1,10 +1,10 @@
-# Hooks cover every extension present in the repo: .py, .ts, .mjs, .json,
-# .yaml, .sql, .toml, .md and Dockerfile. Adding a new file type to the project
-# means adding its hook here (see CLAUDE.md section 5).
+# Hooks cover every extension present in the repo: .py, .ts, .tsx, .mjs, .json,
+# .yaml, .sql, .toml, .md, .css, .html and Dockerfile. Adding a new file type to
+# the project means adding its hook here (see CLAUDE.md section 5).
 
 default_install_hook_types: [pre-commit, commit-msg]
 
-exclude: '^mcp-server/package-lock\.json$'
+exclude: '^(mcp-server|web)/package-lock\.json$'
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -55,6 +55,13 @@ repos:
         entry: scripts/mcp-check.sh
         files: ^mcp-server/(src/.*\.ts|package(-lock)?\.json|tsconfig\.json|eslint\.config\.mjs)$
         pass_filenames: false
+      - id: web-check
+        name: eslint and tsc (web)
+        description: Lint and type-check the dashboard sources
+        language: script
+        entry: scripts/web-check.sh
+        files: ^web/(src/.*\.tsx?|package(-lock)?\.json|tsconfig(\.client)?\.json|eslint\.config\.mjs|vite\.config\.ts)$
+        pass_filenames: false
 
   # The upstream pre-commit/mirrors-prettier repo is archived; this fork tracks
   # current prettier releases.
@@ -62,7 +69,7 @@ repos:
     rev: v3.5.1
     hooks:
       - id: prettier
-        types_or: [ts, javascript, json, yaml, markdown]
+        types_or: [ts, tsx, javascript, jsx, json, yaml, markdown, css, html]
         # .cz.yaml is rewritten by `cz bump` through PyYAML, which sorts the
         # keys and does not indent block sequences. Prettier disagrees on both,
         # so leaving it in would break every release commit.

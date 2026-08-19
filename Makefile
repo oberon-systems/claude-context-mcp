@@ -21,9 +21,11 @@ export TAG
 
 GRAPHIFY_IMAGE := $(REGISTRY)/$(NAMESPACE)/graphify
 MCP_IMAGE := $(REGISTRY)/$(NAMESPACE)/mcp-server
+WEB_IMAGE := $(REGISTRY)/$(NAMESPACE)/web
 
 GRAPHIFY_DIR := graphify
 MCP_DIR := mcp-server
+WEB_DIR := web
 MIGRATIONS_DIR := migrations
 
 # Process substitution in the shell target needs bash, not sh.
@@ -35,7 +37,7 @@ SHELL := /bin/bash
 # everything after the subdivision name into do-nothing rules so only the
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
-SUBS := graphify mcp db
+SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
 	logs ps status index unindex backup restore psql clean skill-install \
 	skill-uninstall skill-status $(SUBS)
@@ -45,8 +47,9 @@ $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init install shell lint check build pull up down restart logs ps \
-	status index unindex backup restore psql clean graphify mcp db skill-install \
-	skill-uninstall skill-status require-venv require-env require-not-root
+	status index unindex backup restore psql clean graphify mcp db web \
+	skill-install skill-uninstall skill-status require-venv require-env \
+	require-not-root
 
 help:  ## Show the current version and the available targets
 	@echo "$(NAME) $(VERSION)"
@@ -65,6 +68,11 @@ help:  ## Show the current version and the available targets
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' help | sed 's/^\(.\)/      \1/'
 	@echo
+	@echo "  web <target>"
+	@echo
+	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
+		IMAGE='$(WEB_IMAGE)' help | sed 's/^\(.\)/      \1/'
+	@echo
 	@echo "  db <target>"
 	@echo
 	@$(MAKE) --no-print-directory -C $(MIGRATIONS_DIR) \
@@ -80,11 +88,12 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	-$(PIP) install 'wyld-cz>=0.2.1'
 	$(VENV)/bin/pre-commit install --install-hooks
 	@test -f .env || cp .env.example .env
-	# The eslint/tsc hook runs from mcp-server/node_modules, so `make lint`
-	# needs them present.
+	# The eslint/tsc hooks run from each tree's own node_modules, so
+	# `make lint` needs both present.
 	@command -v npm > /dev/null \
 		&& $(MAKE) --no-print-directory -C $(MCP_DIR) deps \
-		|| echo "npm not found, run 'make mcp deps' before 'make lint'"
+		&& $(MAKE) --no-print-directory -C $(WEB_DIR) deps \
+		|| echo "npm not found, run 'make mcp deps' and 'make web deps' first"
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
@@ -131,7 +140,10 @@ build:  ## Build every service image
 		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
-	@for ref in $(GRAPHIFY_IMAGE):$(TAG) $(MCP_IMAGE):$(TAG); do \
+	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
+		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' build
+	@for ref in $(GRAPHIFY_IMAGE):$(TAG) $(MCP_IMAGE):$(TAG) \
+			$(WEB_IMAGE):$(TAG); do \
 		$(DOCKER) image ls --format \
 			'{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Size}}' "$$ref" \
 			| sed 's/^/  /'; \
@@ -149,7 +161,7 @@ pull:  ## Pull the published images, discarding a local build
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the MCP server redirects to, answers on a stack this target started.
 up: require-env  ## Start postgres, the MCP server and the viewer in the background
-	$(COMPOSE) up -d postgres mcp-server viewer
+	$(COMPOSE) up -d postgres mcp-server viewer web
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
 # graphify container left over from `make index` keeps the network alive and
@@ -187,6 +199,10 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 	port=$${port:-3000}; \
 	health=$$(curl -sS localhost:$$port/health 2> /dev/null); \
 	echo "health:     $${health:-unreachable on localhost:$$port}"; \
+	web=$$(sed -n 's/^WEB_PORT=//p' .env | tail -1); \
+	web=$${web:-3002}; \
+	dash=$$(curl -sS localhost:$$web/api/health 2> /dev/null); \
+	echo "dashboard:  $${dash:-unreachable on localhost:$$web}"; \
 	graph=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
 		-d "$${POSTGRES_DB:-context}" -tAc "select string_agg( \
 			p.name || ' (' || c.nodes || ')', ', ' order by p.name) \
@@ -289,6 +305,8 @@ clean: require-env  ## Remove the containers, the database and the built images
 		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' clean
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' clean
+	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
+		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' clean
 
 # The skill is one file, and both agents read the same format. What it cannot
 # know from here is where it is being installed, which decides three things:
@@ -354,6 +372,10 @@ graphify:
 mcp:
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' $(SUBARGS)
+
+web:
+	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
+		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' $(SUBARGS)
 
 db:
 	@$(MAKE) --no-print-directory -C $(MIGRATIONS_DIR) \

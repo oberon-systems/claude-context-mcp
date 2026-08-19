@@ -55,3 +55,14 @@ jobs:
             ${{ env.REGISTRY }}/${{ github.repository }}/mcp-server:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build and push web
+        uses: docker/build-push-action@v5
+        with:
+          context: ./web
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/web:${{ inputs.tag || github.ref_name }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
