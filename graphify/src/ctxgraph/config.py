@@ -104,6 +104,7 @@ GRAPHIFYY_EXTENSIONS = frozenset(
         ".rs",
         ".scala",
         ".ts",
+        ".tsx",
     }
 )
 # Where the graph is materialized for the tools that read a file rather than
