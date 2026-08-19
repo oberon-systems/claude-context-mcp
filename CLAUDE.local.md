@@ -31,9 +31,9 @@ outranks exploration - see the plans section below.
 
 ## Plans always get persisted to the graph - full lifecycle
 
-The plan-mode plan file (`/home/zombig/.claude-work/plans/*.md`) is session-local and
-ephemeral - a different session/client can't see it. The graph is the shared source of
-truth for plans across sessions.
+The plan-mode plan file (the path the harness names at the start of the session, under
+`~/.claude/plans/`) is session-local and ephemeral - a different session/client can't
+see it. The graph is the shared source of truth for plans across sessions.
 
 **An active plan in the graph is an approved plan.** It carries `status: active` only
 because the user already approved it via `ExitPlanMode`. Finding one is not an invitation
@@ -42,9 +42,11 @@ to re-check the work behind it - it is the instruction for what to do next. Exec
 Four rules, all mandatory:
 
 1. **Before anything else** on a non-trivial request - before any graph query, any Read,
-   any Explore or Plan agent - call `get_plans` (project `puppet`, default
-   `status: active`). This is the first tool call of the turn, not something to get to
-   eventually.
+   any Explore or Plan agent - call `get_plans` for the project you are working in,
+   with the default `status: active`. The graph names a project after its root
+   directory, and `list_projects` says what is indexed under which name, so check
+   there rather than guessing. This is the first tool call of the turn, not something
+   to get to eventually.
 2. **If an active plan covers the request, act on it.** Follow its steps in order. Do NOT:
 
    - spawn Explore or Plan agents to "get oriented" first;
@@ -173,8 +175,9 @@ the diff in isolation:
 1. Take the real changes from `git diff`: the files, classes, defines, functions and
    parameters that actually moved.
 2. For every changed entity, query the graph (`search_code_nodes`,
-   `get_code_graph_neighbors`) for everything attached to it - callers, includes, hiera
-   keys, templates - and check whether the change breaks any of them.
+   `get_code_graph_neighbors`) for everything attached to it - callers, imports,
+   includes, templates, data keys, whatever relations that language has - and check
+   whether the change breaks any of them.
 3. That impact sweep is exploration, so it runs on Sonnet 5 (Explore agents / graph
    queries). Sonnet gathers evidence; it does not rule.
 4. The verdict - accept, fix on top, or revert - is Opus 5's alone, taken on the
@@ -194,12 +197,16 @@ Every commit is made by the real binary, `.venv/bin/cz commit` - there is no `gi
 alias on this machine. Never `git commit -m`, never a message rendered by hand to look
 like commitizen output, and never a reflow of what it emitted, whitespace included.
 
-The adapter is `wyld_cz` (`.cz.yaml`), and it asks five questions in this order:
+Which adapter answers depends on the repository, so read `.cz.yaml` first: its `name:`
+key names one, and that adapter has to be installed for `cz` to start at all - a
+configured but missing one fails with "The commiter has not been found in the system".
+
+With the `wyld_cz` adapter (`name: wyld_cz`) there are five questions, in this order:
 
 1. `Select the type of change:` - a list in the order `fix`, `feat`, `build`, `docs`,
    `refactor`; move down it with `\x1b[B`.
-2. `What is the scope of this change (e.g. package, tools):` - the one module or file the
-   commit is about, e.g. `PuppetParser`, `ROADMAP.md`.
+2. `What is the scope of this change (e.g. package, tools):` - the one module, script or
+   document the commit is about.
 3. `Write a short description:` - the subject line.
 4. `Provide a longer description (optional):` - a single-line input, so the body is one
    paragraph; the adapter wraps and indents it.
@@ -207,6 +214,14 @@ The adapter is `wyld_cz` (`.cz.yaml`), and it asks five questions in this order:
 
 The result is `[<type>][<scope>]: <subject>`, which `cz check` and the commit-msg hook
 both enforce.
+
+Without it - no `.cz.yaml`, or one naming an adapter this machine does not have -
+commitizen uses its own `cz_conventional_commits`: a longer type list, then scope,
+subject, body and footer, and the result is `<type>(<scope>): <subject>`. Drive that
+form as it comes and do not fake the bracketed shape on top of it; the repository's
+commit-msg hook is the authority on what is valid there. When `.cz.yaml` does ask for an
+adapter that is absent, one `pip install` of it is worth trying, and
+`cz --name cz_conventional_commits commit` is the way through if that fails.
 
 It is interactive and needs a TTY, so drive it under `pty.fork`: strip ANSI from the
 accumulated output, wait for the prompt substring, sleep ~0.5s, write the answer plus
