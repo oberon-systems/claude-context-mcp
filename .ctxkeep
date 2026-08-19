@@ -1,0 +1,15 @@
+*.py
+*.ts
+*.md
+*.sql
+*.mjs
+*.json
+*.yaml
+
+Makefile
+Dockerfile
+
+docker-compose.yaml
+
+# .env.example text parser required
+# requirements.txt text parser required
