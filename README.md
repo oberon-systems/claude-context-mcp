@@ -69,11 +69,49 @@ make init                 # virtualenv, pre-commit hooks, .env from the template
 $EDITOR .env              # set PROJECT_PATH and POSTGRES_PASSWORD
 make build                # build both service images
 make up                   # start postgres, the MCP server and the viewer
-make index                # index PROJECT_PATH into the graph
+make install              # onboard this codebase and index it
 curl -fsS localhost:3000/health
 ```
 
-Then register the server with the agents, as described below.
+## Onboarding a codebase
+
+`make install` is the whole of it, for this repository or for any other tree:
+
+```bash
+make install AGENT_ROOT=/home/you/work/api
+```
+
+Six things, none of which replaces a file that already exists:
+
+| Step                               | What it leaves behind                                                |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `.ctxkeep` / `.ctxignore`          | generated from the file types the tree actually holds, and verified  |
+| `.mcp.json`                        | the `context` server for Claude Code, at `/mcp/<project>`            |
+| `.gemini/settings.json`            | the same address for the Gemini CLI                                  |
+| `.claude/skills/graphify/SKILL.md` | the skill, rendered for that root (`make skill-install` on its own)  |
+| `CLAUDE.local.md`, `GEMINI.md`     | how an agent should use the graph, from `templates/CLAUDE.local.md`  |
+| shell aliases                      | `context-index`, `context-status`, `context-install`, in `~/.bashrc` |
+
+Then it indexes the tree, so the address it just wrote answers immediately.
+
+Every step reports `written`, `merged`, `kept` or `skipped`, and the run ends
+with that list, so a second run is how a codebase picks up a piece added later
+rather than a way to reset one. The project name comes from the same code the
+indexer uses, which is what stops the `/mcp/<project>` address from naming a
+project that will never exist.
+
+| Variable       | Default               | Purpose                                    |
+| -------------- | --------------------- | ------------------------------------------ |
+| `AGENT_ROOT`   | this repository       | the tree being onboarded                   |
+| `PROJECT_NAME` | its last path segment | the name it is stored and addressed under  |
+| `INDEX`        | `1`                   | `INDEX=0` stops before building the graph  |
+| `ALIASES`      | `1`                   | `ALIASES=0` leaves the shell rc file alone |
+| `SHELL_RC`     | `~/.bashrc`           | which rc file the alias block goes to      |
+
+The aliases are fenced by a `# >>> claude-context-mcp >>>` marker and written
+once. Aliases of those names that predate the marker are left alone and the
+block is printed instead, since replacing them is a decision about someone
+else's shell.
 
 `make build` is optional: the images are published to
 `ghcr.io/oberon-systems/claude-context-mcp`, and `make up` pulls them when they
@@ -139,6 +177,11 @@ node in every one of them. Edges stay inside one project, because the indexer
 is handed a single tree and resolves every target within it.
 
 ## Connecting the agents
+
+`make install` writes both files described here, which is the reason to read
+this section rather than follow it: what follows is the manual form, for a
+codebase onboarded by hand or a registration `make install` deliberately left
+alone.
 
 The server speaks Streamable HTTP at `/mcp`, and at `/mcp/<project>` to bind a
 session to one of the indexed codebases. The older SSE pair (`/sse` plus
@@ -255,7 +298,9 @@ the empty default rejects browser traffic while leaving Claude CLI unaffected.
 The indexed project decides for itself, through two optional files at its root.
 Both use gitignore syntax and are read from the mount on every `make index`, so
 changing what a project indexes needs neither an image rebuild nor a new release
-of this repository.
+of this repository. `make install` generates the pair from what the tree holds
+and verifies the result by simulation before writing it, so what follows is
+what that generated file means and how to change it.
 
 | File         | Purpose                                             |
 | ------------ | --------------------------------------------------- |
@@ -390,6 +435,8 @@ Run `make` for the full list, including the per-service subdivisions.
 
 ```text
 make init        create the virtualenv and install the pre-commit hooks
+make install     onboard AGENT_ROOT=<path> onto the stack, then index it
+                 INDEX=0 skips the indexing, ALIASES=0 leaves ~/.bashrc alone
 make lint        run every pre-commit hook over every file
 make build       build both service images
 make pull        pull the published images, discarding a local build
@@ -413,6 +460,9 @@ make skill-install    register the graphify skill for Claude and Gemini
 make skill-uninstall  remove it from both
 make skill-status     show where it is registered
 ```
+
+These three are what `make install` calls for the skill alone; run them
+directly to reinstall it without touching anything else.
 
 The skill lives in `skills/graphify/SKILL.md` and is rendered into
 `.claude/skills/graphify/` at install time; Gemini is linked to that rendered
@@ -620,7 +670,7 @@ which would otherwise reformat them and make every release commit fail.
 The eslint and `tsc` hook runs `scripts/mcp-check.sh`, which uses
 `mcp-server/node_modules` rather than an isolated hook environment, because
 `eslint.config.mjs` imports its plugins and ESM resolves those relative to the
-config file. `make init` installs them; `make mcp install` does it on its own.
+config file. `make init` installs them; `make mcp deps` does it on its own.
 
 ## Layout
 
@@ -630,7 +680,8 @@ graphify/      Python indexer, its image and its Makefile
   src/ctxgraph/  the indexer package, run as `python -m ctxgraph`
 mcp-server/    TypeScript MCP server, its image and its Makefile
 skills/        the agent skill, rendered into place by `make skill-install`
-scripts/       helper scripts invoked by pre-commit
+templates/     the CLAUDE.local.md an onboarded codebase gets
+scripts/       helper scripts: onboarding, backup, restore, pre-commit
 docker-compose.yaml
 Makefile       root entry point, delegates to the service Makefiles
 ```

@@ -36,16 +36,16 @@ SHELL := /bin/bash
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
 SUBS := graphify mcp db
-ROOT_GOALS := help init shell lint check build pull up down restart logs ps \
-	status index unindex backup restore psql clean skill-install skill-uninstall \
-	skill-status $(SUBS)
+ROOT_GOALS := help init install shell lint check build pull up down restart \
+	logs ps status index unindex backup restore psql clean skill-install \
+	skill-uninstall skill-status $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init shell lint check build pull up down restart logs ps status \
-	index unindex backup restore psql clean graphify mcp db skill-install \
+.PHONY: help init install shell lint check build pull up down restart logs ps \
+	status index unindex backup restore psql clean graphify mcp db skill-install \
 	skill-uninstall skill-status require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
@@ -83,9 +83,35 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	# The eslint/tsc hook runs from mcp-server/node_modules, so `make lint`
 	# needs them present.
 	@command -v npm > /dev/null \
-		&& $(MAKE) --no-print-directory -C $(MCP_DIR) install \
-		|| echo "npm not found, run 'make mcp install' before 'make lint'"
+		&& $(MAKE) --no-print-directory -C $(MCP_DIR) deps \
+		|| echo "npm not found, run 'make mcp deps' before 'make lint'"
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
+
+# Everything a codebase needs to be usable from an agent, in one pass: the
+# `context` server registered for both agents, the skill rendered, an
+# instruction file, the .ctxkeep/.ctxignore pair generated from what the tree
+# actually holds, the shell aliases, and finally the graph itself.
+#
+# It reads AGENT_ROOT exactly as the skill targets below do, and their
+# comment is where that variable is explained, so onboarding a neighbour is
+# the same one variable. Nothing it writes replaces a file that exists, which
+# is what makes a second run safe: it fills in whatever is missing and reports
+# the rest as kept.
+#
+# INDEX=0 stops before building the graph, for a large tree that is better
+# indexed later. ALIASES=0 leaves the shell rc file alone; SHELL_RC= names a
+# different one.
+INDEX ?= 1
+ALIASES ?=
+SHELL_RC ?=
+
+install: require-env require-not-root  ## Onboard AGENT_ROOT and index it
+	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
+		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
+		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
+		scripts/install.sh
+	@test '$(INDEX)' = '0' \
+		|| $(MAKE) --no-print-directory index PROJECT='$(abspath $(AGENT_ROOT))'
 
 shell: require-venv  ## Open an interactive subshell with the virtualenv activated
 	@$(SHELL) --rcfile <(cat ~/.bashrc 2> /dev/null; \

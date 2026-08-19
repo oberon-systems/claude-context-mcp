@@ -16,7 +16,7 @@ PORT ?= 3000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build rebuild install run shell lint typecheck format clean
+.PHONY: help build rebuild deps run shell lint typecheck format clean
 
 help:
 	@echo "Image: $(REF)"
@@ -24,7 +24,7 @@ help:
 	@echo "Targets:"
 	@echo "  build      Build the image"
 	@echo "  rebuild    Build the image without the layer cache"
-	@echo "  install    Install the node dependencies from the lockfile"
+	@echo "  deps       Install the node dependencies from the lockfile"
 	@echo "  run        Run the image on port $(PORT) (needs DATABASE_URL)"
 	@echo "  shell      Open a shell inside the image"
 	@echo "  lint       Run eslint over the sources"
@@ -38,7 +38,9 @@ build:
 rebuild:
 	$(DOCKER) build --no-cache --pull -t $(REF) .
 
-install: node_modules
+# Named `deps` rather than `install`: the root Makefile has an `install`
+# of its own, and a shared name makes `make mcp install` run both.
+deps: node_modules
 
 node_modules: package-lock.json package.json
 	$(NPM) ci

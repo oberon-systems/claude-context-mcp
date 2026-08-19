@@ -12,7 +12,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mcp_dir="$repo_root/mcp-server"
 
 if [ ! -x "$mcp_dir/node_modules/.bin/eslint" ]; then
-    echo "mcp-server dependencies are missing, run 'make mcp install' first" >&2
+    echo "mcp-server dependencies are missing, run 'make mcp deps' first" >&2
     exit 1
 fi
 

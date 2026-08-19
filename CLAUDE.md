@@ -43,6 +43,9 @@ Refer to `ROADMAP.md` or task tracking for current state.
   extractor it drives installs itself as `graphify`.
 - `/skills/graphify/` - the agent skill, registered for Claude and Gemini by
   `make skill-install`.
+- `/templates/` - the `CLAUDE.local.md` an onboarded codebase is given.
+- `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;
+  `backup.sh`, `restore.sh` and `unindex.sh` drive the database targets.
 - `/mcp-server/` - TypeScript MCP Server (`src/index.ts`, `Dockerfile`, `package.json`, `tsconfig.json`).
 - `docker-compose.yml` - Container orchestration.
 - `.pre-commit-config.yaml` - Pre-commit rules configuration.

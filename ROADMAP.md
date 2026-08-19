@@ -27,7 +27,6 @@ Simplifying how users interact with the stack and how agents manage project cont
 
 - [ ] **Coss-project plans**: plans should been stored as cross-project, e.g. plans table, but have `project` field.
 - [ ] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'knowledge-base') to enable targeted cross-repository searches.
-- [ ] **Unified Onboarding:** Single `make install` command (configure agents, install skills, CLAUDE.local.md if not present), also generate .ctxignore .ctxkeep somehow
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
 - [x] **Maintenance Tools:** Backup/Restore (`make backup`, `make restore`).
 - [x] **Local Build:** Streamlined `make build` with stable tagging.
@@ -49,6 +48,7 @@ Adding vector context and agent memory.
 
 ## Completed Items
 
+- Unified onboarding: one `make install` registers the `context` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.ctxkeep`/`.ctxignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists
 - Schema management: numbered goose migrations over a `schema_migrations` table, applied to the existing database by the `migrate` service before anything else reads it
 - A re-index invalidates the extractor cache (keyed by project and path, dropped with the project, forced by `make index FRESH=1`, and a run that reports its own shortfall)
 - Move the database out of the working tree
