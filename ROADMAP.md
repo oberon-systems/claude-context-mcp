@@ -6,7 +6,6 @@ This roadmap tracks the development of the Dockerized GraphRAG & Vector Context 
 
 These items are essential for the graph to be authoritative. Agents cannot trust the graph if these are not addressed.
 
-- [ ] **Schema Management:** Replace `init-db/01-init.sql` with a migration-based system (`schema_migrations` table).
 - [ ] **Node ID Collisions:** Key the node ID map by `(producer_id, source_file)` to prevent cross-file edge retargeting.
 - [ ] **Manual Summary Durability:** Ensure manual entity summaries survive producer wipes and line-number changes.
 - [ ] **Visualization Stability:** Implement server-side reduction/lazy loading to fix 503 errors on large graphs.
@@ -50,6 +49,7 @@ Adding vector context and agent memory.
 
 ## Completed Items
 
+- Schema management: numbered goose migrations over a `schema_migrations` table, applied to the existing database by the `migrate` service before anything else reads it
 - A re-index invalidates the extractor cache (keyed by project and path, dropped with the project, forced by `make index FRESH=1`, and a run that reports its own shortfall)
 - Move the database out of the working tree
 - Use public registry for built images

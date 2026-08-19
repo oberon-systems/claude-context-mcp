@@ -1,5 +1,7 @@
 -- Schema for the code graph and its vector embeddings.
--- Replayed by the postgres entrypoint only when the data directory is empty.
+-- Applied by goose; see migrations/Makefile.
+
+-- +goose Up
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -126,3 +128,13 @@ CREATE INDEX IF NOT EXISTS idx_code_embeddings_node ON code_embeddings (
 -- before any embedding rows exist.
 CREATE INDEX IF NOT EXISTS idx_code_embeddings_vector
 ON code_embeddings USING hnsw (embedding vector_cosine_ops);
+
+-- +goose Down
+-- Dropped in reference order. The vector extension stays: dropping it takes
+-- the type with it, and nothing else in this database owns it.
+DROP TABLE IF EXISTS file_hashes;
+DROP TABLE IF EXISTS project_plans;
+DROP TABLE IF EXISTS code_embeddings;
+DROP TABLE IF EXISTS graph_edges;
+DROP TABLE IF EXISTS graph_nodes;
+DROP TABLE IF EXISTS projects;

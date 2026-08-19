@@ -2,6 +2,10 @@ name: claude-context-mcp
 
 x-database-url: &database-url postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}
 
+# The same database, spelled for goose: its driver does not default sslmode
+# the way libpq does, and nothing on this bridge speaks TLS.
+x-goose-dbstring: &goose-dbstring postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-context}?sslmode=disable
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -12,15 +16,39 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required, see .env.example}
     volumes:
       - ${HOME}/.local/share/context-mcp/db:/var/lib/postgresql/data
-      - ./init-db:/docker-entrypoint-initdb.d:ro
     networks: [base]
     healthcheck:
       test:
         - CMD-SHELL
-        - pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-context}
+        # Over TCP, not the socket: while the entrypoint initialises a new
+        # data directory its temporary server listens on the socket alone.
+        - pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-context}
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Owns the schema. Runs to completion before anything else reaches the
+  # database, so a plain `docker compose up` migrates on its own.
+  #
+  # GOOSE_COMMAND is fixed rather than read from the environment: a stray
+  # variable on the host must not change what `up` does to the schema. The
+  # other verbs come from `make db <target>`, which overrides it per run.
+  migrate:
+    image: ghcr.io/kukymbr/goose-docker:3.27.2
+    restart: "no"
+    environment:
+      GOOSE_DRIVER: postgres
+      GOOSE_DBSTRING: *goose-dbstring
+      GOOSE_COMMAND: up
+      # goose calls this table goose_db_version; this is the name ROADMAP
+      # asked for, and renaming it is what GOOSE_TABLE is for.
+      GOOSE_TABLE: schema_migrations
+    volumes:
+      - ./migrations:/migrations:ro
+    networks: [base]
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   # Code graph indexer. Runs to completion and exits. Code is extracted by
   # graphifyy (https://github.com/Graphify-Labs/graphify), used as a library;
@@ -48,8 +76,8 @@ services:
     networks: [base]
     profiles: [index]
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   # Renders the graph as a page, from the database, on every request. Shares
   # the indexer image because it calls the same rendering code.
@@ -64,8 +92,8 @@ services:
       VIEWER_PORT: 3001
     networks: [base]
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   # MCP server exposed to Claude CLI over SSE.
   mcp-server:
@@ -78,8 +106,8 @@ services:
       DATABASE_URL: *database-url
       PORT: 3000
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       test:
         [

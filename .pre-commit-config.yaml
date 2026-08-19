@@ -89,7 +89,7 @@ repos:
     rev: 3.3.1
     hooks:
       - id: sqlfluff-lint
-        files: ^init-db/.*\.sql$
+        files: ^migrations/.*\.sql$
 
   # Rejects commit messages that were not produced by `cz c` (CLAUDE.md
   # section 6).

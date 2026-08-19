@@ -11,7 +11,7 @@ You are working on a Dockerized GraphRAG & Vector Context MCP Service for Claude
 
 ## 2. Core Architectural Rules
 
-1. **Docker-First & IaC:** All services must be fully configured and launchable via `docker-compose.yml`. Database migrations and initial schemas belong in `/init-db/`.
+1. **Docker-First & IaC:** All services must be fully configured and launchable via `docker-compose.yml`. Schema changes are numbered migrations in `/migrations/`, applied by goose.
 2. **Read-Only Codebase Access:** Target repository volumes must ALWAYS be mounted as read-only (`:ro`). Containers must never mutate host source files.
 3. **Strict ASCII & Language Policy:** All code comments, docstrings, documentation, and Git commit messages MUST be written in **pure ASCII English**. No emojis, no non-ASCII Unicode characters allowed anywhere in source code, comments, or docs.
 4. **Pre-Commit Enforcement:** All modules must pass `pre-commit` hooks prior to committing code.
@@ -37,7 +37,7 @@ Refer to `ROADMAP.md` or task tracking for current state.
 
 ### Project Directory Layout
 
-- `/init-db/` - Database schema initialization scripts (`01-init.sql`).
+- `/migrations/` - Numbered goose migrations, and the Makefile driving them.
 - `/graphify/` - Python indexing service (`src/ctxgraph/` package, `Dockerfile`,
   `requirements.txt`). The package is named `ctxgraph` because the upstream
   extractor it drives installs itself as `graphify`.
@@ -51,9 +51,10 @@ Refer to `ROADMAP.md` or task tracking for current state.
 ### Next Actionable Steps
 
 1. Maintain root `.pre-commit-config.yaml` and `.cz.yaml`.
-2. Finalize SQL schema in `init-db/01-init.sql` for node graphs, edge relationships, and vector embeddings.
-   Every table is scoped to a row of `projects`: one database holds the graph of
-   every indexed codebase, and `graph_nodes` is keyed on `(project, id)`.
+2. Evolve the SQL schema through `make db new NAME=<slug>`, never by editing a
+   migration that has already been applied. Every table is scoped to a row of
+   `projects`: one database holds the graph of every indexed codebase, and
+   `graph_nodes` is keyed on `(project, id)`.
 3. Extend the Tree-sitter parsers in `graphify/src/ctxgraph/parsers/` as new
    infrastructure formats are needed. Programming languages go to the upstream
    extractor instead, through `GRAPHIFYY_EXTENSIONS` in `config.py`.

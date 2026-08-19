@@ -24,6 +24,7 @@ MCP_IMAGE := $(REGISTRY)/$(NAMESPACE)/mcp-server
 
 GRAPHIFY_DIR := graphify
 MCP_DIR := mcp-server
+MIGRATIONS_DIR := migrations
 
 # Process substitution in the shell target needs bash, not sh.
 SHELL := /bin/bash
@@ -34,7 +35,7 @@ SHELL := /bin/bash
 # everything after the subdivision name into do-nothing rules so only the
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
-SUBS := graphify mcp
+SUBS := graphify mcp db
 ROOT_GOALS := help init shell lint check build pull up down restart logs ps \
 	status index unindex backup restore psql clean skill-install skill-uninstall \
 	skill-status $(SUBS)
@@ -44,7 +45,7 @@ $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init shell lint check build pull up down restart logs ps status \
-	index unindex backup restore psql clean graphify mcp skill-install \
+	index unindex backup restore psql clean graphify mcp db skill-install \
 	skill-uninstall skill-status require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
@@ -63,6 +64,11 @@ help:  ## Show the current version and the available targets
 	@echo
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' help | sed 's/^\(.\)/      \1/'
+	@echo
+	@echo "  db <target>"
+	@echo
+	@$(MAKE) --no-print-directory -C $(MIGRATIONS_DIR) \
+		help | sed 's/^\(.\)/      \1/'
 	@echo
 
 init:  ## Create the virtualenv and install the pre-commit hooks
@@ -162,7 +168,12 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 				select count(*) as nodes from graph_nodes g \
 				 where g.project = p.name) c" \
 		2> /dev/null | tr -d '\r'); \
-	echo "graph:      $${graph:-unavailable}"
+	echo "graph:      $${graph:-unavailable}"; \
+	schema=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
+		-d "$${POSTGRES_DB:-context}" -tAc "select to_char( \
+			max(version_id), 'FM0000') from schema_migrations \
+			 where is_applied" 2> /dev/null | tr -d '\r'); \
+	echo "schema:     $${schema:-unmigrated}"
 
 # graphify runs to completion and exits, so `run --rm` rather than `up`.
 #
@@ -228,8 +239,9 @@ psql: require-env  ## Open a psql session against the context database
 
 # The database lives in a bind mount, not a volume, so `down -v` never reached
 # it: that flag only drops named and anonymous volumes. Emptying the directory
-# here is what actually lets init-db/ be replayed on the next `up`, and what
-# stops a regenerated POSTGRES_PASSWORD from meeting a database that still
+# here is what makes the next `up` a fresh database - the migrate service
+# rebuilds the schema into it - and what stops a regenerated
+# POSTGRES_PASSWORD from meeting a database that still
 # holds the old one and refuses every connection.
 #
 # The files belong to the postgres uid, so the host user cannot remove them.
@@ -316,6 +328,10 @@ graphify:
 mcp:
 	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
 		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' $(SUBARGS)
+
+db:
+	@$(MAKE) --no-print-directory -C $(MIGRATIONS_DIR) \
+		COMPOSE='$(COMPOSE) -f $(CURDIR)/docker-compose.yaml' $(SUBARGS)
 
 require-venv:
 	@test -x $(PYTHON) || { \

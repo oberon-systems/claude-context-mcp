@@ -404,6 +404,9 @@ make restore     put FILE=<path> back, over the database or over one project
 make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database
+make db migrate  apply every pending schema migration
+make db version  show which migrations are applied and which are pending
+make db new      write the next migration file, NAME=<slug>
 make clean       remove containers, the database directory and the built images
 
 make skill-install    register the graphify skill for Claude and Gemini
@@ -535,14 +538,32 @@ written summaries come back from nowhere else.
 
 ## Database schema
 
-`init-db/01-init.sql` is replayed by the PostgreSQL entrypoint **only when the
-data directory is empty**. After changing the schema, either apply the change by
-hand or run `make clean` to empty the data directory and start over. That
-target asks for confirmation first, since it destroys the index; `make clean
-FORCE=1` skips the prompt for scripted use. To remove a single codebase rather than the whole
-database, use `make unindex` - everything cascades from the row in `projects`,
-so one `DELETE` there takes that project's nodes, edges, hashes, embeddings and
-plans, and nothing of any other project. Both are worth a `make backup` first.
+The schema is owned by [goose](https://github.com/pressly/goose), which keeps
+`migrations/` and the `schema_migrations` table in step. The `migrate` service
+runs to completion before anything else reaches the database, so `make up`
+applies whatever is pending on its own - to the database that is already there,
+without touching its contents. Nothing that queries the database starts if a
+migration fails.
+
+`make db <target>` drives goose directly: `version` for what is applied and what
+is pending, `migrate` to apply it now, `new NAME=<slug>` to write the next
+numbered file. A migration is plain SQL between `-- +goose Up` and
+`-- +goose Down`, and goose runs each one in a transaction.
+
+Two things a migration cannot do for you. `scripts/backup.sh` and
+`scripts/restore.sh` name every column of every table explicitly, so a migration
+that adds or renames one has to update them in the same commit. And a full
+database restored from a backup taken before a migration comes back without its
+`schema_migrations` rows - the next `make up` re-applies from the beginning,
+which is safe because the migrations are idempotent, and records the version
+again.
+
+To remove a single codebase rather than the whole database, use `make unindex` -
+everything cascades from the row in `projects`, so one `DELETE` there takes that
+project's nodes, edges, hashes, embeddings and plans, and nothing of any other
+project. `make clean` is the other end: it empties the data directory and starts
+the database over, asking for confirmation first since it destroys the index
+(`make clean FORCE=1` skips the prompt). Both are worth a `make backup` first.
 
 The data directory is emptied from inside the postgres service rather than from
 the host: its files belong to the container's postgres uid, so a host-side `rm`
@@ -553,7 +574,8 @@ does not remove it. That is also why a regenerated `POSTGRES_PASSWORD` cannot be
 applied on its own: the entrypoint skips initialisation while the directory
 holds a database, and every connection is then refused with
 `password authentication failed`. Run `make clean` to rebuild the database
-around the new password.
+around the new password; `migrate` puts the schema back into the empty
+directory on the next `make up`.
 
 - `graph_nodes` - one row per file, per code entity (`file_path::name`) and per
   unresolved external import or symbol
@@ -603,7 +625,7 @@ config file. `make init` installs them; `make mcp install` does it on its own.
 ## Layout
 
 ```text
-init-db/       schema initialization replayed by the postgres entrypoint
+migrations/    numbered schema migrations and the Makefile driving goose
 graphify/      Python indexer, its image and its Makefile
   src/ctxgraph/  the indexer package, run as `python -m ctxgraph`
 mcp-server/    TypeScript MCP server, its image and its Makefile
