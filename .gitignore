@@ -1,9 +1,6 @@
 # Local environment
 .env
 
-# Database data directory (see DATA_DIR)
-/pgdata/
-
 # Python
 .venv/
 __pycache__/

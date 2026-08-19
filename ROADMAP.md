@@ -26,6 +26,7 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 
 Simplifying how users interact with the stack and how agents manage project context.
 
+- [ ] **DATA_DIR**: param was removed, we must ensure ${HOME}/.local/share/context-mcp
 - [ ] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'knowledge-base') to enable targeted cross-repository searches.
 - [ ] **Unified Onboarding:** Single `make install` command (configure agents, install skills).
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
