@@ -147,7 +147,9 @@ PROJECT ?=
 PROJECT_NAME ?=
 FRESH ?=
 FILE ?=
-KEEP ?=
+# Backups rotate by default: a target that only ever grows is a target nobody
+# prunes. KEEP= empty turns it off for one run and keeps everything.
+KEEP ?= 7
 BACKUP_DIR ?=
 INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 
@@ -172,7 +174,8 @@ unindex: require-env  ## Drop PROJECT= or PROJECT_NAME= from the database
 # next to the database rather than reading a setting for it.
 #
 # FILE= names one file instead of the generated name, and then rotation leaves
-# it alone: KEEP=N only ever prunes files this naming scheme produced.
+# it alone: KEEP=N only ever prunes files this naming scheme produced, and each
+# kind on its own.
 backup: require-env  ## Back up the database, or PROJECT= / PROJECT_NAME= alone
 	@COMPOSE='$(COMPOSE)' BACKUP_PATH='$(INDEXED)' \
 		BACKUP_NAME='$(PROJECT_NAME)' BACKUP_FILE='$(FILE)' \

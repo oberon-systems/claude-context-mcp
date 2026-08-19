@@ -389,7 +389,7 @@ make index       index PROJECT=<path>, or PROJECT_PATH from .env
                  FRESH=1 re-parses every file instead of trusting a cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
 make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
-                 KEEP=<n> keeps the n newest backups of that same kind
+                 KEEP=<n> keeps the n newest backups of that kind, 7 by default
 make restore     put FILE=<path> back, over the database or over one project
 make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
@@ -483,7 +483,8 @@ The system includes dedicated support for tracking project execution roadmaps. P
 make backup                                  # the whole database
 make backup PROJECT_NAME=api                 # one codebase
 make backup PROJECT=/home/you/work/api       # the same, resolved by root path
-make backup KEEP=7                           # and prune older backups of that kind
+make backup KEEP=20                           # keep more than the seven it keeps by default
+make backup KEEP=                            # keep everything, prune nothing
 ```
 
 The two are different files for a reason. The whole database is a `pg_dump`
@@ -496,10 +497,11 @@ order, wrapped in a single transaction, which is the shape `pg_dump
 its final name until it has been read back, so an interrupted dump cannot be
 mistaken for a backup.
 
-`FILE=<path>` writes somewhere else instead, and rotation then leaves that file
-alone: `KEEP=<n>` only ever prunes the timestamped names this scheme produces,
-and prunes each kind on its own, so keeping two database archives never deletes
-a project's only backup.
+Backups rotate: `KEEP` defaults to 7, so each kind keeps its seven newest files
+and the older ones go. Each kind rotates on its own, so seven database archives
+never crowd out a project's only backup, and `KEEP=` empty keeps everything for
+that run. `FILE=<path>` writes somewhere else instead and is never pruned:
+rotation only ever touches the timestamped names this scheme produces.
 
 Restoring names the file and nothing else:
 
