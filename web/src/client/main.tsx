@@ -1,5 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router";
+
+import { App } from "./App.js";
+import "./styles.css";
 
 const root = document.getElementById("root");
 if (root === null) {
@@ -8,6 +12,8 @@ if (root === null) {
 
 createRoot(root).render(
   <StrictMode>
-    <h1>Context dashboard</h1>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
   </StrictMode>,
 );
