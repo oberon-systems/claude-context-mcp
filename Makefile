@@ -55,7 +55,10 @@ help:  ## Show the current version and the available targets
 init:  ## Create the virtualenv and install the pre-commit hooks
 	python3 -m venv --prompt $(NAME) $(VENV)
 	$(PIP) install --upgrade pip
-	$(PIP) install pre-commit commitizen 'wyld-cz>=0.2.1' ruff
+	$(PIP) install pre-commit commitizen ruff
+	# The commit adapter is optional. Where it cannot be installed, commitizen
+	# falls back to its own rules and .cz.yaml has to stop naming this one.
+	-$(PIP) install 'wyld-cz>=0.2.1'
 	$(VENV)/bin/pre-commit install --install-hooks
 	@test -f .env || cp .env.example .env
 	# The eslint/tsc hook runs from mcp-server/node_modules, so `make lint`
