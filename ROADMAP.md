@@ -9,274 +9,551 @@ reads the programming languages listed in `GRAPHIFYY_EXTENSIONS`
 (`graphify/src/ctxgraph/config.py`), including C and C++ and Ruby; the
 `ctxgraph` parsers read the infrastructure formats it does not - SH, MD, MAKE,
 DOCKERFILE, HCL/TF, YAML, TOML, JSON, Ansible, and Puppet with its ERB and EPP
-templates. One database holds every indexed codebase: `projects` names them,
+templates. A Puppet manifest resolves past `include` and `inherits`: `reads_var`
+reaches the class whose parameter a `$::a::b` reference reads, and `references`
+reaches the defined type a resource declares.
+One database holds every indexed codebase: `projects` names them,
 every other table carries a `project` column, and a client binds to one through
 the address it connects to (`/mcp/<project>`). Re-indexing skips a file whose
 content hash is unchanged and prunes what a deleted file left behind.
 
-What follows is deliberately deferred work, in the order it should be picked up.
+What follows is deliberately deferred work, ranked from simple to complex.
 
-## 1. Embedding generation
-
-`code_embeddings` exists with a `vector(1536)` column and an HNSW cosine index,
-but nothing writes to it.
-
-Open decision: a local model (`fastembed` or `sentence-transformers`, no key
-needed, large image) versus an API provider (matches 1536 dimensions directly,
-needs a key and network egress from the container). Whichever is chosen, chunk
-on the AST node boundaries rather than on fixed line windows.
-
-## 2. Semantic search MCP tool
-
-Once embeddings exist, add `search_code_semantic` to
-`mcp-server/src/index.ts`, querying `embedding <=> $1` against the HNSW index
-and returning the owning nodes. The tool is not worth adding before then, since
-it would return nothing.
-
-## 3. Use public registry for built images
-
-User have to build images each time. Better way to pull images from some
-public storage instead of.
-
-## 4. Git hook for re-indexing
-
-Implement git-hook for run re-indexing for each commit.
-
-## 5. Move the database out of the working tree
+## 1. Move the database out of the working tree
 
 `DATA_DIR` defaults to `./pgdata`, which puts the database inside the checkout.
-The directory is gitignored, which is exactly what makes it reachable by
-`git clean -xfd` - a routine command in a repository that is also a development
-tree. Losing the graph is cheap to recover from today, but it stopped being
-cheap once one database began holding every project's graph.
-
 Default it outside instead, `$XDG_DATA_HOME/claude-context-mcp/pgdata` or
-similar, and keep the in-tree path only as an explicit choice.
+similar, and keep the in-tree path only as an explicit choice. This prevents
+accidental data loss via `git clean -xfd`.
 
-This is deliberately no protection against `make clean`, which empties
-`DATA_DIR` wherever it points and asks before doing so. That target is supposed
-to destroy the database; the prompt is the right amount of friction for it.
+The password should move with the data. `postgres` publishes no port and is
+reachable only on the compose network, so a fixed default
+(`POSTGRES_PASSWORD=context` in `.env.example`) is sufficient.
+`make status` should be improved to distinguish between "stack is down" and
+authentication failures, providing clear recovery paths (`make clean` or `ALTER USER`).
 
-The password comes with the move. A cluster bakes in the password it was
-initialized with, so credentials and data have to share a lifetime: today both
-sit in the checkout and die together, while data kept outside it outlives the
-`.env` that describes it, and the surviving cluster then refuses a regenerated
-password with a plain authentication failure that says nothing about why.
+## 2. Use public registry for built images
 
-`postgres` publishes no port and is reachable only on the compose network, so
-the password guards against one thing: another local process reaching the
-bridge address directly. On a single-user machine that is not a threat worth a
-generated secret, and a fixed default (`POSTGRES_PASSWORD=context` in
-`.env.example`, with the `:?` in the compose file relaxed to a default) removes
-the mismatch entirely.
+Users currently have to build images each time. Implement a way to pull pre-built
+images from a public registry instead of requiring local builds.
 
-Whichever default is chosen, the mismatch stays reachable by hand, so the
-diagnosis is worth more than the default: `make status` should tell "the stack
-is down" apart from "the stack is up but this password does not open a cluster
-initialized with another one", and name the two ways out (`make clean`, or
-`ALTER USER`). Both read as `unreachable` today.
+## 3. Drop a project from the graph
 
-## 6. Incremental extraction for the code half
+Nothing removes an indexed codebase. `make clean` empties the whole database, and
+`save_plan` can only re-status a plan, so retiring one project means hand-written
+SQL against the container: `DELETE FROM projects WHERE name = '<name>'`. That
+works only because `graph_nodes`, `project_plans`, `file_hashes` and
+`code_embeddings` all cascade from `projects`, and nothing stops a typo in the
+`WHERE` from taking a different project - or every project, when it is left off
+altogether.
 
-The Tree-sitter parsers skip a file whose hash is unchanged. The graphifyy pass
-does not: it re-extracts the whole code corpus on every run, because an
-extraction over a subset loses the edges between the files left out. Its own
-per-file cache absorbs most of the cost, but the merge into the database is
-still full. Worth revisiting with `graphify.detect.detect_incremental` once the
-graph is large enough for it to matter.
+- `make unindex PROJECT=` / `PROJECT_NAME=`, carrying the confirmation prompt
+  `clean` already has, with `FORCE=` to skip it for scripted use.
+- A `drop_project` MCP tool for the case where the need actually shows up: a tree
+  that was renamed, moved, or absorbed into a parent repository leaves behind a
+  project answering questions about paths that no longer exist.
+- Report before deleting, and separate the derived from the hand-written. Node,
+  edge and file-hash counts cost one `make index` to rebuild; plans and manual
+  summaries (`metadata ->> 'summary_source' = 'manual'`) do not come back at all.
+  A drop that does not name those two counts is a drop taken blind.
+- `drop_plan` belongs here as well. Re-saving a plan as `completed` is right for
+  finished work and wrong for one that was moved or written by mistake, and both
+  leave a row only SQL can remove.
 
-The split is visible from the outside: `list_indexed_files` on
-`py-net-events-collector` returns seven rows - `README.md`, `Makefile`,
-`docker/Dockerfile`, `docker/Dockerfile.test`, `docker/Makefile`, `tests/e2e`
-and `.mcp.json` - and not one of the eight `.py` files that are present in the
-graph as nodes. `file_hashes` tracks what the Tree-sitter parsers touched and
-nothing else, so the one half of the corpus that would most benefit from change
-detection is the half that has none.
+## 4. A re-index must invalidate the extractor cache
 
-## 7. Resolve dotted relative imports
+`redirect_extractor_cache()` (`graphify/src/ctxgraph/interop.py:55-71`) points
+graphifyy's per-file cache at `graphify-out/cache`, and compose mounts that on one
+named volume - `graph-out:/app/graphify-out` - shared by every indexing run of
+every project. The cache is keyed by file content and scoped to nothing else, and
+a hit means the file is skipped entirely: no node is written for it at all, rather
+than a stale one being kept.
 
-A relative import of one segment resolves to its file node; anything deeper is
-flattened into an underscore identifier and recorded as `external_import`. In
-`py-net-events-collector`, `from .collector import Collector` lands on
-`src/net_events_collector/collector.py` correctly, while `from .db.store import
-EventStore` becomes a node called `db_store` and `from ...utils.net import
-format_addr` becomes `utils_net`. Four of the five internal imports in that
-project are lost this way, and the files they point at - `db/store.py`,
-`db/models/event.py`, `utils/net.py`, `utils/proc.py` - end up with no incoming
-edges at all, unreachable by `shortest_path` and indistinguishable from dead
-code.
+So a re-index is not authoritative today. Indexing `kurum` selected 967 files and
+produced 924 file nodes; the 43 missing ones came back in one direction only, so
+the selection was right and the extraction was not. Thirty-three were zero-byte
+`__init__.py`. The other ten split into two causes, both of them the cache: seven
+non-empty modules of `eBPF/py-net-events-collector` - `collector.py`, `store.py`,
+`event.py` and the rest - had been extracted under a project that was since
+dropped from the database, and three were paths whose content is byte-identical to
+another file in the tree.
 
-This is not an unusual layout. A package that keeps its modules in subpackages
-is the ordinary case, and for every such project the graph degrades into the
-`contains` tree plus a scattering of placeholder nodes named after the import
-path that was not walked. Python goes through the upstream graphifyy extractor,
-per `GRAPHIFYY_EXTENSIONS` in `config.py`, so the resolver to fix is there
-rather than in `ctxgraph`. The already-indexed `py-net-events-collector` graph
-is a small enough reproducer to work against directly.
+- Key the cache by project and path as well as by content hash, so one tree's
+  extraction cannot answer for another's.
+- Drop a project's cache entries with the project, which the drop item above has
+  to do as part of removing it.
+- Give `make index` a way to force full re-extraction for the tree it is handed,
+  for the case where the cache is suspected rather than known to be wrong.
+- Report the difference at the end of a run: files selected, nodes written, and
+  what accounts for the gap - empty file, duplicate content, unreadable, over
+  `MAX_FILE_BYTES`. A run that silently writes fewer nodes than it selected files
+  currently looks identical to a clean one.
 
-## 8. Cross-file edges for Ruby
+The invariant behind all of it is the one every agent instruction relies on:
+after `make index`, the graph describes the tree. Agents are told to trust the
+graph instead of re-deriving structure from the filesystem, and that is only
+sound while a re-index is authoritative - so this is a correctness bug, not the
+performance work of the incremental-extraction item further down.
 
-Ruby extraction yields classes, instance and singleton methods, and a call
-graph inside a file. It yields no modules, no `inherits` edge, and nothing from
-`require`: upstream walks only the `class` node and emits only `calls`, and the
-cross-file import pass it runs for Python is not run for Ruby. A Ruby graph is
-therefore a set of unconnected per-file islands, which is the same shape of
-defect as item 7 and fixed in the same place - the upstream extractor rather
-than `ctxgraph`.
+## 5. Read the shebang of extension-less files
 
-## 9. Enhanced qualified variable resolver for Puppet
+`parser_class()` (`graphify/src/ctxgraph/parsers/registry.py`) picks a parser by
+extension, or by an exact name for `Dockerfile` and `Makefile`. A file with no
+extension gets no parser at all, whatever its first line says. In a tools
+repository that is not a corner case: `kurum` holds 86 shell scripts named
+`check-dns`, `add-host`, `build`, `run` - shebang present, suffix absent - each
+of which has to be named in `.ctxkeep` by path just to be seen, and then lands
+as a bare file node with no functions and no calls.
 
-`PuppetParser` currently misses qualified variable references like
-`$::package_repo::user` or `$package_repo::base_dir` between manifests (e.g.,
-`keeper.pp` to `init.pp`), resulting in disconnected nodes and empty neighbor
-queries.
+- Sniff the first line when the extension is empty and map the interpreter onto
+  the parser already registered for it (`sh`, `bash` -> `BashParser`).
+- Keep today's behaviour as the fallback: a file node carrying a summary from
+  its leading comment, which `leading_comment()` already yields since it skips
+  the `#!` line. That is the "treat it as text" case and it needs no new code -
+  only that nothing rejects the file earlier.
+- `is_default_source()` decides by name, so a project without a `.ctxkeep` never
+  reaches the sniff. Gating on the executable bit costs no read and covers most
+  of it - 79 of those 86 scripts - but not all; reading the first two bytes of
+  every extension-less candidate is the honest version.
+- An interpreter whose language lives in `GRAPHIFYY_EXTENSIONS` (`python`,
+  `ruby`, `php`) is the harder half: that extractor selects by extension too, so
+  routing to it means handing it a hint or leaving those files on the text
+  fallback. Worth deciding by name rather than by omission.
 
-- Extend `PuppetParser` to parse qualified global/module variable usages
-  (`$::scope::var`).
-- Emit `reads_var` / `references` edges from the consuming manifest to the
-  defining class/manifest during the edge-resolution pass.
+## 6. Fix graph visualization error 503 for large graphs
 
-## 10. One command should onboard a codebase
+The visualization endpoint returns a 503 error for large projects (e.g., 30k+
+nodes). Implement server-side reduction, sampling, or client-side lazy loading
+to handle massive graphs.
 
-Indexing a tree and making an agent able to use the result are two separate
-commands today, and only the first one takes a path. `make index PROJECT=/x`
-builds the graph; `make skill-install AGENT_ROOT=/x` renders the skill; and the
-registration that connects the two is written by hand. Onboarding
-`py-net-events-collector` took both commands plus a hand-written `.mcp.json`,
-and the hand-written half is where every mistake was. One command -
-`make install PROJECT=/x` - should leave that codebase ready: graph built,
-skill in place, both agents configured, both agent files saying to use it.
+## 7. One command should onboard a codebase
 
-The coupling runs both ways, and both directions are the same failure. A graph
-with no registration gives an agent instructions for tools it cannot reach; a
-registration with no graph gives it tools that answer nothing. So `install`
-runs `index` for the same tree, and does it first - the configuration it writes
-names a project that has to exist in `projects` for any of it to resolve.
+Simplify onboarding with a single command: `make install PROJECT=/path`. It
+should build the graph, install the skill, and configure both Claude
+(`.mcp.json`) and Gemini (`.gemini/settings.json`) agents. This ensures the
+registration, skill, and graph are correctly coupled without manual steps.
 
-That changes what the install costs. `skill-install` is local, quick and needs
-nothing running, which is why it refuses only `sudo`. An `install` that indexes
-needs the stack up and Docker reachable, and it takes as long as the extraction
-does. Worth keeping the pure-configuration path reachable under its own name
-for the case where the graph is already built, rather than making a re-render
-of one file pay for a full re-extraction.
+## 8. Git Integration (Hooks & History)
 
-Four things to render, all derivable from `PROJECT`:
+Implement deep Git integration to provide temporal context:
 
-**The skill.** What `skill-install AGENT_ROOT=` already does. Folding it in
-means `index` grows the same `@MAKE@` / `@ROOT@` substitution, or calls the
-existing target with `AGENT_ROOT=$(PROJECT)`.
+- **Git hooks:** Automatically trigger re-indexing on every commit.
+- **Commit History:** Extract `git log` metadata (hashes, messages, modified
+  files) during indexing to enrich the code graph with evolution details.
 
-**`.mcp.json` for Claude, `.gemini/settings.json` for Gemini.** The `context`
-address is `http://localhost:$(MCP_PORT)/mcp/$(notdir $(PROJECT))`, which is
-already known at index time - it is the same name the indexer records in
-`projects`. The two files disagree on schema (`url` versus `httpUrl`, and
-Gemini takes `trust`), so this is two renderers over one pair of values.
-Neither file can be overwritten: the target may hold servers of its own, so
-merge the one key, and leave it alone when it is already there and matches.
+## 9. Schema changes need a migration path
 
-**`CLAUDE.md` and `GEMINI.md`.** A skill is offered to the agent, not imposed
-on it; the agent files are what actually oblige it. Both need a section saying
-the graph is the first place to look for structure - what uses this, how these
-connect, what a change reaches - and that the file should be opened after the
-graph has narrowed it down, not instead. Spell that out as a two-pass rule the
-agent can be held to: query the graph, narrow to the nodes that matter, and
-only then read those files, rather than sweeping whole files to get oriented.
-The same section is where the obligation to persist what was synthesized
-belongs - summaries back into the graph, patterns into the conventions store of
-item 14 - so that the second agent to ask a question reads the answer instead
-of deriving it again. Add the section when the file does not exist, and update
-it in place when it does, which means the block needs a marker to find itself
-by rather than being appended on every run.
+`init-db/01-init.sql` is replayed by the postgres entrypoint only when the data
+directory is empty, and nothing else in the tree ever runs DDL - there is not one
+`ALTER TABLE` in it. So a schema change is reachable exactly one way: `make
+clean`, which empties the database and takes every project's graph with it.
 
-The `graph` server is the awkward one and may be better left out. Its command
-assumes the working directory is this repository: without
-`-f <this repo>/docker-compose.yaml` compose finds no file at all. That path is
-renderable - `@COMPOSE@` alongside `@MAKE@` and `@ROOT@` - and it is now the
-only thing needed, because `docker-compose.yaml` pins the project name itself
-with a `name:` key, so compose no longer invents one from the target directory
-and `-p` can be left off. The deeper problem is not
-renderable. That server reads the file written at index time, which holds
-whichever project was indexed last and has no notion of projects at all, so a
-second codebase gets right answers only until the next `make index` on another
-tree. Rendering a registration that goes quietly wrong is worse than rendering
-none: either it carries that caveat where the agent will read it, or `index`
-registers only `context` and the skill drops the mention when it is not being
-installed here.
+This already blocks work on this list. The `suggestions` table of the gaps item,
+the `conventions` table of the memory item, and any promotion of a `metadata` key
+to a real column all need a running cluster to change shape. The first item here
+makes it sharper rather than easier: once the data directory lives outside the
+checkout it outlives the checkout, and a cluster built by an older release starts
+meeting code from a newer one.
 
-The git hook of item 4 is deliberately not part of this. It looks like the same
-onboarding question, but it is a standing change to how the target repository
-behaves on every commit, where everything above is configuration the agent
-reads. Installing it should stay a separate decision, made by name.
+- Numbered files in `init-db/`, applied in order and recorded in a
+  `schema_migrations` table. Apply them on server start rather than from the
+  postgres entrypoint, which is what ties the current behaviour to an empty
+  directory.
+- Idempotent by construction - `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT
+EXISTS`. The existing file already reads that way and can become migration 001
+  unchanged.
+- `make status` should report which migration the database is at. A cluster one
+  migration behind the code is precisely the failure it cannot diagnose today.
 
-## 11. Integrate Git commit history at index time
+The `summary_source` key is what surfaced this: the schema documented it as
+though it were a column while every reader and writer treats it as a key inside
+`metadata`. The comment is fixed, but promoting it for real - which is what would
+make it indexable - is the change that has nowhere to go.
 
-Extend the indexing process (`make index`) to extract relevant commit history
-from the project's Git repository using `git log`. Store commit metadata
-(short/long hashes, commit message) and the list of files modified in each
-commit to provide temporal context and evolution details for the code graph
-during the initial indexing phase.
+## 10. Structural Docker Compose Parsing
 
-## 12. Cross-project lookups and relations
+Implement a specialized parser for `docker-compose.yaml` and `compose.yaml`
+to extract services, networks, volumes, and dependencies (`depends_on`) as
+architectural nodes and edges, rather than treating them as generic YAML.
 
-Edges stay inside one project, which is not a limitation so much as a fact
-about the producer: the indexer is handed a single tree and resolves every
-target within it, so a cross-project edge has no way to be discovered. Giving
-`graph_edges` a second project column would only add one that is always equal.
-Relating two codebases needs a resolver that sees both, which is its own piece
-of work. Useful for infrastructure projects, e.g. ansible, puppet, terraform.
+## 11. Terraform and Terragrunt produce nodes and no edges
 
-## 13. Semantic conventions and architectural patterns store
+`HCLParser` (`graphify/src/ctxgraph/parsers/languages.py`) declares an
+`ENTITY_QUERY` and nothing else. There is no `RELATION_QUERY`, and nothing in
+`resolution.py` knows the format, so every `.tf`, `.tfvars` and `.hcl` file in
+an indexed tree yields flat `block` nodes that the graph can list and never
+traverse. It is the largest such gap left: HCL is the default language of an
+infrastructure repository, and the whole point of one is the wiring.
 
-AST graphs track strict syntax dependencies (imports, class inheritance), but
-remain blind to cross-file conventions, deployment patterns, and configuration
-styles (e.g., comparing 4-5 Puppet modules, ERB template standards, or Hiera
-data structures) per project.
+Measured on `homelander` (1593 files indexed, `.terragrunt-cache` and
+`.terraform` excluded). Of its 6487 edges, 6472 are `contains` from a file to
+its own blocks and the remaining 15 are `uses_role` from Ansible. The 5460
+`block` nodes have no edges at all between them:
 
-- Create a `conventions` table in PostgreSQL keyed by
-  `(project, category, scope)` containing `summary`, `sample_files` (JSON array
-  of file paths), and `metadata`.
-- Implement `save_convention` MCP tool: allows agents (e.g., Gemini Flash or
-  Claude) to write synthesized patterns after analyzing 3-5 representative
-  files.
-- Implement `get_conventions` / `search_conventions` MCP tool: lets agents query
-  stored project patterns (e.g., `category="docker_compose"`) before reading raw
-  code/templates.
+    get_code_graph_neighbors(
+      'terragrunt-infra/live/WT/production/aws/us-east-1/ec2-instances/terragrunt.hcl')
+    -> include.common, include.root, locals - three `contains`, nothing else
 
-## 14. Summaries produced at index time
+Both `include` blocks name a file this same tree holds. Neither points at it.
 
-Summaries are written by whichever agent happens to ask, which is the most
-expensive way to get them. A small CPU-driven local model, deployed as part of
-the compose stack, should produce them instead, purely to cut token usage.
+What a `RELATION_QUERY` would resolve, counted as references rather than files,
+since the reference count is what says whether the work pays:
 
-The templates and data files need the same treatment for a different reason:
-ERB/EPP templates and Hiera YAML/JSON have no AST call trees, so an agent that
-wants to know what a template takes has no option but to read the file whole.
-Add a post-processing pass during indexing for `.erb`, `.epp` and
-`.yaml`/`.json`, and store the extracted variable lists, required env keys and
-structural schemas in `graph_nodes.metadata` / `summary`, so `search_code_nodes`
-answers with them and the raw read is not needed. That half is structural and
-needs no model at all; the model is for the prose summary of a node.
+| Reference                                  | Count | Resolves to                                    |
+| ------------------------------------------ | ----: | ---------------------------------------------- |
+| `source =` in `module` / terragrunt blocks |   495 | 181 local paths to a module dir; rest registry |
+| `include` plus `find_in_parent_folders()`  |   590 | the terragrunt configuration inheritance chain |
+| `read_terragrunt_config()`                 |    45 | `env.hcl`, `common.hcl`, `region.hcl` variants |
+| `templatefile()` and `file()`              |   197 | the `.tftpl`, `.tpl` and `.j2` files alongside |
+| `terraform_remote_state` and `dependency`  |    76 | another stack's outputs, across state files    |
 
-## 15. Fix graph visualization error 503 for large graphs
+Against 1366 `resource`, 463 `data`, 928 `variable` and 252 `output` blocks
+spread over 265 `terragrunt.hcl`, 35 `env.hcl`, 29 `common.hcl`, 28 `region.hcl`
+and 6 `root.hcl` files.
 
-The endpoint `http://localhost:3001/graph?project=<project>` returns a 503
-error for large projects (e.g., Puppet with 34k+ nodes). Implement either:
+**The literal half first.** `source = "../../modules/kubernetes"`,
+`include { path = find_in_parent_folders() }` and `templatefile("${path.module}/x.tpl")`
+are plain strings resolvable against the tree by path, and the machinery is the
+one `resolution.py` already applies to Puppet's `template()`. A registry address
+is not a path but is worth an ecosystem-tagged `depends_on terraform:hashicorp/aws`,
+the same convention `JsonParser` uses for npm - 20 of the 495 sources in this one
+tree are `hashicorp/aws` alone, so the reverse question "what pins this provider"
+becomes answerable.
 
-- Server-side reduction/sampling/clustering for the visualization.
-- A `--no-viz` option to skip expensive rendering.
-- Client-side pagination/lazy loading.
+**Interpolation is the hard half**, and this tree really contains
 
-## 16. Web interface for project status
+    source = "${get_terragrunt_dir()}/../../..////live/web-apps/${path_relative_to_include()}"
 
-The viewer draws the graph and nothing else. There is no page that answers what
-is indexed, when it was last indexed, and what is known about a project beyond
-its nodes and edges.
+which is the same failure as the Puppet `puppet:///modules/${module_name}/...`
+case: the constant prefix resolves and the rest does not. The same fallback
+applies - emit an edge to the directory node the constant prefix reaches, rather
+than dropping the reference. Doing this for `source` alone covers the terragrunt
+pattern where one `_envcommon` file is included by every stack in a region.
 
-Start with the plans, which are the most immediately useful and already stored:
-`save_plan` writes them and `get_plans` reads them back, but nothing displays
-one. Per project, list the plans with their `plan_id`, status and date, and open
-the full text of the one that is clicked.
+Left out on purpose: Groovy `Jenkinsfile` (2 files here, and a `Jenkinsfile`
+names stages rather than references that resolve anywhere), and `.repo`,
+`.mirrorlist` and `.sysconfig`, which are data with nothing to follow - the same
+grounds on which item 12 excludes them.
 
-Same page, as each lands: the conventions of item 14, and the template and data
-summaries of item 15. Everything that is stored about a project but does not fit
-the graph belongs on it.
+## 12. Parsers the indexed trees are already asking for
+
+Three formats account for most of what a `.ctxkeep` has to admit today and no
+parser then reads. Counted over `kurum`, with vendored collections and
+virtualenvs excluded:
+
+| Format                    | Files | What it would connect                                    |
+| ------------------------- | ----: | -------------------------------------------------------- |
+| RPM spec `*.spec`         |    63 | 172 `Requires`/`BuildRequires`, 75 `Source*`, 11 subpkgs |
+| Python manifests          |    67 | every dependency of every tool in the tree               |
+| systemd units `*.service` |     7 | `ExecStart` to a binary, `EnvironmentFile` to its config |
+
+**Python manifests first.** The cheap one, and it needs no new grammar.
+`JsonParser` already records a dependency under its ecosystem (`npm:express`,
+`composer:monolog/monolog`), and `requirements.txt` is a line-oriented list of
+the same thing under `pypi:`. Resolve `-r other.txt` and `-c constraints.txt` as
+file relations, drop environment markers, extras and hashes from the name, and
+read `install_requires` out of `setup.cfg` as INI. 47 requirements files, 7
+constraints files, 12 `setup.cfg`, one `Pipfile` - nothing else in the format
+carries structure worth a node.
+
+**RPM spec is where the payoff is.** A spec is the only file in a packaging
+repository that says what a package is made of, and every reference in it
+resolves somewhere:
+
+- `Requires`, `BuildRequires`, `Requires(pre)`, `Provides`, `Obsoletes` ->
+  `depends_on rpm:<name>`, the same ecosystem-tagged convention as npm.
+- `Source0..N` and `Patch0..N` -> the file in the tree, when the tree holds it.
+  This is the edge nothing else can produce: it is what ties a package node to
+  the sources, units and sysconfig files sitting next to it.
+- `%package -n` -> a subpackage node under the spec, so `%files -n` sections
+  attach to the right one rather than merging.
+- `Summary:` is a one-line description written by hand. Take it as
+  `graph_nodes.summary` directly - no model, no heuristic, better than anything
+  the summarizer of the index-time item could infer.
+- `%prep`, `%build`, `%install` and the scriptlets are shell. Hand the body to
+  the existing `BashParser` rather than writing a second shell reader; the macro
+  expansions it will not understand (`%{buildroot}`, `%{_bindir}`) are worth
+  leaving as literal text rather than resolving.
+
+**systemd units close the chain.** Small in count, cheap to read - INI with a
+known key set - and they connect what the spec installs to what actually runs it:
+`ExecStart` names the binary a `%files` section shipped, `EnvironmentFile` names
+the sysconfig the same spec installed, `After`/`Requires`/`WantedBy` name other
+units. Worth doing in the same pass as the spec parser, since neither half is
+interesting without the other.
+
+Left out on purpose: nginx configuration (5 files here, and `include` /
+`upstream` / `proxy_pass` would resolve, but the grammar is a real one and the
+volume does not yet justify it), `.j2` templates (3 files outside the vendored
+collections here, 10 more in `homelander` - low volume, and Ansible's
+`uses_template` edge already reaches them as file nodes without a parser
+reading inside), `.repo`, `.sysconfig` and `.mirrorlist` (data, no references
+to follow), and the IDE and linter dotfiles, which say nothing about the code.
+
+## 13. Language Extractor Improvements (Python/Ruby)
+
+Improve the cross-file resolution in the upstream `graphifyy` extractor:
+
+- **Python:** Resolve dotted relative imports (e.g., `from .db.store import EventStore`)
+  to their actual file nodes rather than flattening them into placeholder nodes.
+- **Ruby:** Add support for `require` resolution, modules, and `inherits` edges
+  to connect isolated per-file islands into a unified graph.
+
+## 14. Incremental extraction for the code half
+
+Optimize the `graphifyy` pass to support incremental extraction. Currently,
+while Tree-sitter parsers skip unchanged files, the code pass re-extracts the
+whole corpus. Revisiting `graphify.detect.detect_incremental` will significantly
+speed up re-indexing for large codebases.
+
+## 15. Record the gaps an agent hit, instead of losing them
+
+The recap convention in `CLAUDE.local.md` already obliges an agent to close a task
+with what the graph could not answer and what would fix it - a missing summary, a
+file type nothing indexes, an index older than the tree, a question the tools
+cannot express. That report ends its life in a transcript. Nobody reading this
+repository next week sees it, and the same gap gets rediscovered by hand every
+time it is hit.
+
+- Store them: a `suggestions` table keyed by `(project, category)` holding the
+  observation, the lever it moves - token usage, coverage, or indexing time - and
+  the concrete change proposed. A `report_gap` MCP tool writes one, `get_gaps`
+  reads them back per project.
+- Aggregate rather than accumulate. The same gap reported by ten sessions is one
+  finding with a count of ten, and the count is the whole signal: it says which
+  missing parser or absent tool is actually costing tokens, as against which one
+  was inconvenient once.
+- Surface them on the dashboard of the project status item, next to plans and
+  conventions. A backlog that is only queryable through an MCP tool is a backlog
+  the maintainer never reads.
+- The instruction itself is not portable today. It lives in this repository's
+  `CLAUDE.local.md`, which is not rendered into an indexed project, so an agent
+  working anywhere else never reports anything. Either the skill carries the rule
+  into the projects it is installed in, or the tool's own description does - the
+  latter needs no rendering step and reaches Gemini identically.
+
+## 16. Semantic Search & Embeddings
+
+Enable vector similarity search alongside the graph:
+
+- **Generation:** Choose between local models (e.g., `fastembed`) or API
+  providers for `vector(1536)` embeddings, chunking on AST node boundaries.
+- **Tool:** Add `search_code_semantic` to `mcp-server` to query the HNSW index
+  and return owning nodes.
+
+## 17. Agent Memory, Knowledge & Conventions
+
+Create a persistent store for non-AST project details:
+
+- **Conventions:** Store synthesized architectural patterns and styles (e.g.,
+  Docker Compose standards or Puppet module patterns).
+- **Knowledge Base:** Allow agents to store and retrieve persistent knowledge
+  about best practices and functional patterns.
+- **Tools:** Implement `save_convention`, `store_knowledge`, and `search_memory`
+  MCP tools with vector search support.
+
+## 18. Index-Time Summarization
+
+Produce node summaries during the indexing phase to reduce agent token usage:
+
+- **Local LLM:** Use a small CPU-driven model in the compose stack to generate
+  prose summaries for nodes.
+- **Structural Parsing:** Extract variable lists and schemas from templates
+  (ERB/EPP) and data files (YAML/JSON/Hiera) into `graph_nodes.metadata` so
+  agents don't have to read raw files.
+- **Backfill needs a way to enumerate the gaps.** `search_code_nodes` cannot
+  filter on `summary IS NULL` - it matches `name`/`id` only
+  (`mcp-server/src/index.ts:397`) - so an agent told to fill in the missing
+  summaries fills in whatever it happened to touch instead of what is actually
+  missing. `list_nodes_without_summary(project, type?, path prefix?)` makes that
+  systematic, and after item 23 it is also where a wiped manual summary would
+  show up.
+- **The fallback summary reads like a summary and answers nothing.** With no
+  title and no leading comment, `extract_summary`
+  (`graphify/src/ctxgraph/summaries.py:69-79`) names what the file declares, so
+  every HCL file in an infrastructure tree comes back as
+  `block: locals, dynamic.alias, +2 more`; a thin comment is worse still, since
+  `# Records` became the entire summary of a 205-line Route53 zone file. Both are
+  non-null, so the nullness filter above would never surface them, and an agent
+  that trusts the field opens the file anyway. Observed on `homelander`: to say
+  how `tf-modules/r53-entries` maps YAML keys onto Route53 record attributes,
+  every entity node of the module was summary-less and both file summaries were
+  declaration lists, so the module was read in full - and the summaries that
+  answer the question were written by hand afterwards.
+
+## 19. Project Status Web Interface
+
+Expand the viewer into a project dashboard. Beyond the graph, it should display:
+
+- Project plans (synced with `save_plan`/`get_plans`).
+- Stored conventions and architectural patterns.
+- Indexing metadata (last run, node/edge counts).
+
+## 20. Shared records that belong to no single project
+
+Everything stored is scoped to one codebase. `graph_nodes`, `project_plans` and
+`file_hashes` all carry a `project`, and `get_plans` answers for whichever project
+the session is bound to. Right for a graph, wrong for a procedure:
+`ctx-file-selection-bootstrap` - generate `.ctxkeep` / `.ctxignore` for a
+repository, verify the selection by simulation, record the formats no parser
+reads - applies to every tree there is, and sits under `claude-context-mcp` only
+because a plan has to sit somewhere. An agent in another repository finds it just
+by being told which project name to pass.
+
+- Reserve a project standing for all of them, `_common`. Plans land there when
+  they are not about one codebase, and later the conventions and knowledge of the
+  memory item do too.
+- `get_plans` merges `_common` into whatever project it was asked about, so the
+  mandatory active-plan check finds a shared procedure without having to know it
+  exists. Same for the convention and knowledge readers when they arrive.
+- `projects` does not admit such a row today: `root_path` is `NOT NULL UNIQUE`
+  and there is no tree behind `_common`. Either a sentinel path or a `virtual`
+  column, and the second needs the migration item above.
+- Reserve the name against a directory that happens to be called `_common`,
+  since a project name is derived from the last segment of its path.
+- Then move `ctx-file-selection-bootstrap` to `_common` and remove it from
+  `claude-context-mcp`, which needs the `drop_plan` of the project-drop item.
+  Until both land the plan stays put and `CLAUDE.local.md` keeps naming the
+  project to ask.
+
+Cheaper than the two items around it, and placed here by subject rather than by
+cost: it is the cross-project question - what does not fit inside one project's
+scope - answered for records instead of for edges.
+
+## 21. Cross-project lookups and relations
+
+Implement a resolver that can discover and link relations between different
+indexed codebases. This is essential for infrastructure projects where one
+repository (e.g., Ansible) manages another (e.g., a web service).
+
+## 22. Code-half node ids collide across files, and the first one wins
+
+`import_extraction()` maps graphifyy's ids onto ours through one dictionary
+keyed by their id alone (`graphify/src/ctxgraph/interop.py:145-183`). Their ids
+repeat across files, so every later node with an id already taken resolves to
+the _first_ path that claimed it, and its edges are written against that path.
+The comment there says this stops an edge from being silently retargeted; it is
+what causes the retargeting. `collisions` is counted and logged once per run at
+INFO as "graphifyy reused N node ids across files", which reads like harmless
+deduplication rather than a graph that now asserts something false.
+
+Measured on `kurum`, which holds four `collector.py` and many `__main__.py`:
+
+- `get_code_graph_neighbors('alertmanager/handlers/clickhouse/src/clickhouse_handler/collector.py')`
+  returns `contains` edges to entities of two other files -
+  `alertmanager/handlers/oncall/src/oncall_handler/collector.py::AppState` and
+  `misc-tools/py-ccu-collector/src/ccu-collector/server/collector.py::to_int()`
+  among them - plus the imports of a third (`ctypes`, `ctypes_util`,
+  `db_models_event` belong to `eBPF/py-net-events-collector`).
+- The three other `collector.py` file nodes return `[]`. So do the
+  `__main__.py` nodes.
+- `shortest_path` from `.../ccu-collector/server/__main__.py` to
+  `.../ccu-collector/server/collector.py` finds no path, though the first
+  imports `Storage` from the second.
+
+Nodes themselves are fine: `upsert_file_node` is keyed by `source_file` and an
+entity id carries path, label and location. Only the id map is ambiguous, and
+only for the producer that reads the programming languages - the `ctxgraph`
+parsers resolve against paths and do not share this bug. The asymmetry is what
+makes it hard to notice: a Puppet manifest answers this question correctly, so
+an empty answer on a Python file reads as "nothing to connect" rather than as
+"the edges went to a namesake".
+
+- Key the map by `(their_id, source_file)`. Their nodes carry `source_file`, so
+  the ambiguity is resolvable here without touching the extractor.
+- An edge endpoint that resolves to no unique path should stay an external
+  placeholder, which is already what an unknown target becomes. Binding it to
+  whichever file was indexed first is the worse of the two.
+- Report collisions per file rather than as one total, and at WARNING: the count
+  is the number of files whose edges are now wrong, not a housekeeping figure.
+- Check the same question for `node_id()` file nodes (`interop.py:91-108`): the
+  branch that recognises a file by `label == basename(source_file)` is correct,
+  but it is the point where two same-named files become indistinguishable if the
+  label is ever used without its path.
+
+This is a correctness item, like the extractor-cache one: an agent is told to
+trust the graph instead of reading the tree, and here the graph states that one
+service contains another service's functions.
+
+## 23. Manual summaries do not survive a re-index for code entities
+
+The contract stated in `CLAUDE.md` and in the skill is that a summary written
+through `save_node_summary` is marked manual and outlives a re-index. That holds
+for file nodes and not for entities. `clear_producer_artifacts()`
+(`graphify/src/ctxgraph/storage.py:298-320`) deletes the producer's entity nodes
+and is called unconditionally on every code-half run
+(`graphify/src/ctxgraph/indexer.py:195`), before the extraction is imported. The
+`ON CONFLICT` branch that preserves a manual summary (`storage.py:113-122` and
+`:273-283`) only fires when a row is still there, so a deleted-then-reinserted
+entity comes back with `summary_source: auto` and an empty summary. The
+docstring is explicit that file nodes are kept for exactly this reason; entities
+were left out of it.
+
+Second half of the same problem: an entity id embeds its line number
+(`_KEY_TEMPLATE` with `source_location`), so
+`.../collector.py::to_int()@L202` becomes `@L215` after an edit above it. Even
+with the delete fixed, a manual summary would be preserved onto an id nothing
+points at any more, and the re-parsed entity would arrive summary-less next to
+it.
+
+Observed while filling in the summaries of one module: eleven were saved, ten of
+them on entities, and the next `make index` on that tree drops all ten. An agent
+following the instruction to backfill missing summaries is doing work that
+evaporates, and the instruction to prefer summaries over reading files gets
+quietly less true with every re-index.
+
+- Preserve manual summaries across the producer wipe: read the manual rows for
+  the tree before deleting, re-apply them after the import. Cheapest fix, keeps
+  the current id scheme, and one query bounded by the number of manual rows.
+- Or exclude `metadata ->> 'summary_source' = 'manual'` from the delete and
+  prune such rows by a separate rule - a manual summary on an entity that no
+  longer exists in the source is exactly the case the delete was meant to catch,
+  so it needs an answer either way.
+- Move the line number out of the id into `metadata`, making the identity
+  `path::qualified_name`. This is the version that also fixes `save_node_summary`
+  being addressed at a moving target, and it changes stored ids, so it wants the
+  migration path of item 9.
+- Until one of them lands, say so where the promise is made: the skill and
+  `CLAUDE.md` should say that only file-node summaries are durable today.
+
+Open decision: whether a manual summary should survive the entity disappearing
+from the source at all, or be reported as stale and dropped. The answer decides
+whether the fix is "preserve" or "exclude from the delete".
+
+## 24. Lexical search over stored node content
+
+`search_code_nodes` matches identifiers only - `WHERE project = $1 AND (name
+ILIKE $2 OR id ILIKE $2)` (`mcp-server/src/index.ts:397`).
+`graph_nodes.content` (`init-db/01-init.sql:37`) is written by both producers and
+read by nobody, so a question whose subject lives in a value rather than in a
+name has to leave the graph - and the first `grep` of a session is usually the
+point after which the graph stops being used at all.
+
+Two field cases, both from trees where the value _is_ the wiring:
+
+- `puppet`: the link "which matching does this collector poll" exists only as a
+  port number. `hieradata/role/ccu_collector.yaml` sets
+  `WT_MRPC_ADDR=http://matching.pwt:12347/api/v2`, and
+  `hieradata/role/matching_wt.yaml` opens `12347` under `fwrules::virtual`. Both
+  ends are indexed `key` nodes; only the literal joins them.
+  `search_code_nodes('12347')` and `('12348')` returned `[]`, while `('ccu')` and
+  `('matching')` returned their keys correctly - everything was indexed except
+  what the question needed.
+- `homelander`: `search_code_nodes('crank-pool')` returned `[]` although the
+  string sits in more than twenty files - it is the DNS pool that four
+  `enlisted.net` records alias and that an IAM policy grants a robot to rewrite.
+  Locating it took `grep -rn crank`, and the alias targets, the IAM grant and the
+  zone files then all came from that grep rather than from the graph.
+
+- Add a content mode behind a GIN `pg_trgm` index, or `tsvector` if word
+  boundaries matter more than substrings. No model required; it sits below the
+  embedding item and covers the lexical half embeddings do not give.
+- A node-type filter matters as much as the mode: the target almost always sits
+  in a `key`, `stage` or `target` node rather than in a file, and without the
+  filter a common literal ("80", "443") returns noise.
+- It is also half of the cross-project question without the resolver of item 21:
+  `matching.pwt:12347` ties `kurum` (the collector's code) to `puppet` (its
+  configuration) through a single literal, provided values are searchable in
+  both.
+
+Open decision: return the owning node, or the matching line inside it.
