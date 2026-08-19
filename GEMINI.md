@@ -107,7 +107,7 @@ Two failure modes seen repeatedly, worth pre-empting in the prompt:
 
 - **A test that measured nothing.** The indexer source is baked into the image
   by `COPY src ./src`, so a change under `until
-`make -C graphify TAG=dev build`. A delegate that skips the rebuild is
+`make -C graphify build`. A delegate that skips the rebuild is
   measuring the previous version and will
 - **A substituted acceptance criterion.** Asked for nodes in the graph, it
   answers with a file count, a log line, o

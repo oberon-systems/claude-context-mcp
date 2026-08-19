@@ -8,7 +8,7 @@ PIP := $(VENV)/bin/pip
 VERSION := $(shell sed -n 's/^  version: \(.*\)/\1/p' .cz.yaml)
 
 COMPOSE ?= docker compose
-TAG ?= dev
+TAG ?= latest
 export TAG
 
 GRAPHIFY_DIR := graphify

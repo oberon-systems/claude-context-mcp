@@ -211,7 +211,7 @@ it.
 | `POSTGRES_USER`     | `user`    | Database user                                                                                   |
 | `POSTGRES_DB`       | `context` | Database name                                                                                   |
 | `MCP_PORT`          | `3000`    | Host port the MCP server is published on                                                        |
-| `TAG`               | `dev`     | Tag applied to the images built by `make build`                                                 |
+| `TAG`               | `latest`  | Tag applied to the images built by `make build`                                                 |
 
 The stack is a singleton, and nothing about the codebase being indexed changes
 that. `docker-compose.yaml` pins the compose project name with a

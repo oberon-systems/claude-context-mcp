@@ -3,8 +3,10 @@
 # Normally reached from the repo root, which passes TAG down through
 # $(MAKE) -C. Standalone use works too and falls back to the defaults below.
 
-IMAGE ?= claude-context-mcp/mcp-server
-TAG ?= dev
+# The reference compose runs, so `make build` replaces the image the stack
+# starts rather than producing one nothing addresses.
+IMAGE ?= ghcr.io/oberon-systems/claude-context-mcp/mcp-server
+TAG ?= latest
 REF := $(IMAGE):$(TAG)
 
 DOCKER ?= docker
