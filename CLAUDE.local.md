@@ -46,7 +46,9 @@ Four rules, all mandatory:
    with the default `status: active`. The graph names a project after its root
    directory, and `list_projects` says what is indexed under which name, so check
    there rather than guessing. This is the first tool call of the turn, not something
-   to get to eventually.
+   to get to eventually. Plans are held in one table for the whole database, so that
+   call also returns the global plans - the ones saved under no project - and
+   `project: "*"` lists every project's plans at once.
 2. **If an active plan covers the request, act on it.** Follow its steps in order. Do NOT:
 
    - spawn Explore or Plan agents to "get oriented" first;
@@ -75,21 +77,24 @@ Four rules, all mandatory:
 
 3. **Whenever a plan is finalized** (approved via `ExitPlanMode`), immediately also save it
    with `save_plan` - same content, a stable `plan_id` derived from the topic,
-   `status: active` - so any other/future client can pick it up via `get_plans`.
+   `status: active` - so any other/future client can pick it up via `get_plans`. The
+   `plan_id` is unique across the whole database, and the project is a tag: name it
+   explicitly for work on one repository, `"*"` for a plan that belongs to none.
 4. **After the plan's work is actually done** (implemented, verified, landed), retire it.
-   There is no delete tool in the `context` MCP set, only `save_plan`/`get_plans`, so
-   "delete" means calling `save_plan` again with the same `plan_id` and
+   Retiring means calling `save_plan` again with the same `plan_id` and
    `status: completed` (or `archived`), which drops it out of `get_plans`' default
    `active` filter. Don't leave finished plans sitting as `active` - that's what makes
    rule 1 trustworthy for the next session instead of surfacing stale, already-done work.
+   `drop_plan` deletes one outright, by `plan_id` alone; it is for a plan written by
+   mistake, never for finished work, which is retired rather than erased.
 
 Reusable procedures are a third status. A plan that is run on demand rather than finished
-once is stored `template`, so it never appears in the `active` list rule 1 trusts. There is
-one today: `ctx-file-selection-bootstrap` under project `claude-context-mcp` - generate
-`.ctxkeep` / `.ctxignore` for a repository, verify the selection by simulation, and record
-the formats no parser reads. Reach it from any project with `get_plans` at
-`project: claude-context-mcp`, `status: template`, and follow it when asked to apply the
-file selection plan to a repo.
+once is stored `template`, so it never appears in the `active` list rule 1 trusts, and it is
+saved global (`project: "*"`), since a procedure belongs to no one repository. There is one
+today: `ctx-file-selection-bootstrap` - generate `.ctxkeep` / `.ctxignore` for a repository,
+verify the selection by simulation, and record the formats no parser reads. Reach it from
+any project with `get_plans` at `status: template`, without naming a project, and follow it
+when asked to apply the file selection plan to a repo.
 
 ## Recap: report how the work was actually done
 

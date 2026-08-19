@@ -132,9 +132,10 @@ costs and deletes nothing:
 { "name": "api" }
 ```
 
-Read the report out. The two halves are the point: nodes, edges, file hashes
-and embeddings come back with one `@MAKE@ index`, while plans and manually
-written summaries do not come back at all. Never pass `confirm: true` on your
+Read the report out. The three parts are the point: nodes, edges, file hashes
+and embeddings come back with one `@MAKE@ index`, manually written summaries do
+not come back at all, and plans are not deleted at all - they keep the project
+name as a tag and stay readable through `get_plans`. Never pass `confirm: true` on your
 own - the user says the word, or the project stays. Resolve the name with
 `list_projects` first; a wrong one is refused with the list of real ones.
 

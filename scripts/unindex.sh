@@ -2,10 +2,11 @@
 # Remove one indexed codebase from the database.
 #
 # Reached through `make unindex`, which passes the selectors in the environment.
-# Everything hangs off the row in `projects`: graph_nodes, project_plans and
+# Everything derived hangs off the row in `projects`: graph_nodes and
 # file_hashes cascade from it, graph_edges and code_embeddings cascade from
 # graph_nodes, so one DELETE takes the whole graph of one project and nothing
-# of any other.
+# of any other. Plans are not derived and have no foreign key: they carry the
+# project as a tag and stay behind.
 
 set -euo pipefail
 
@@ -81,7 +82,7 @@ if ! report="$(psql_query -v name="$name" <<< "
            (SELECT count(*) FROM graph_edges e WHERE e.project = p.name),
            (SELECT count(*) FROM file_hashes f WHERE f.project = p.name),
            (SELECT count(*) FROM code_embeddings c WHERE c.project = p.name),
-           (SELECT count(*) FROM project_plans l WHERE l.project = p.name),
+           (SELECT count(*) FROM plans l WHERE l.project = p.name),
            (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name
               AND g.metadata ->> 'summary_source' = 'manual')
       FROM projects p
@@ -99,12 +100,14 @@ fi
 IFS='|' read -r root indexed nodes edges hashes embeddings plans manual \
     <<< "$report"
 
-# What one `make index` brings back and what nothing brings back are different
-# losses, so they are never added into one number.
+# What one `make index` brings back, what nothing brings back, and what the
+# drop does not touch are three different fates, never one number.
 echo "project \"$name\" ($root, indexed $indexed)"
 echo "  rebuilt by one 'make index': $nodes nodes, $edges edges," \
     "$hashes file hashes, $embeddings embeddings"
-echo "  not rebuilt, gone for good: $plans plans, $manual manual summaries"
+echo "  not rebuilt, gone for good: $manual manual summaries"
+echo "  kept, tagged with the name: $plans plans, still readable with" \
+    "get_plans project: \"$name\""
 
 if [ -z "${FORCE:-}" ]; then
     read -r -p "Drop it? [y/N] " reply

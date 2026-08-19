@@ -47,8 +47,9 @@ indexed_projects() {
 }
 
 # What one `make index` brings back and what nothing brings back are different
-# losses, so they are never added into one number. Same split `unindex` prints,
-# for the same reason: it is what tells the reader whether the file matters.
+# losses, so they are never added into one number: it is what tells the reader
+# whether the file matters. `unindex` splits the same counts differently -
+# there, plans survive the drop, and here they only survive in this file.
 report_project() {
     local row root indexed nodes edges hashes embeddings plans manual
     row="$(psql_query -v name="$1" <<< "
@@ -58,7 +59,7 @@ report_project() {
                (SELECT count(*) FROM graph_edges e WHERE e.project = p.name),
                (SELECT count(*) FROM file_hashes f WHERE f.project = p.name),
                (SELECT count(*) FROM code_embeddings c WHERE c.project = p.name),
-               (SELECT count(*) FROM project_plans l WHERE l.project = p.name),
+               (SELECT count(*) FROM plans l WHERE l.project = p.name),
                (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name
                   AND g.metadata ->> 'summary_source' = 'manual')
           FROM projects p
@@ -164,6 +165,9 @@ SELECT format('-- created: %s', to_char(now(), 'YYYY-MM-DD HH24:MI:SS'));
 \qecho ''
 \qecho 'BEGIN;'
 SELECT format('DELETE FROM projects WHERE name = %L;', :'name');
+-- Plans have no foreign key to `projects`, so the delete above does not
+-- cascade to them and the COPY below would collide on the primary key.
+SELECT format('DELETE FROM plans WHERE project = %L;', :'name');
 
 \qecho 'COPY projects (name, root_path, indexed_at) FROM stdin;'
 COPY (SELECT name, root_path, indexed_at
@@ -189,11 +193,13 @@ COPY (SELECT project, node_id, content_chunk, embedding, created_at
         FROM code_embeddings WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
-\qecho 'COPY project_plans (project, id, title, content, status, metadata,'
-\qecho '                    created_at, updated_at) FROM stdin;'
-COPY (SELECT project, id, title, content, status, metadata, created_at,
+-- A global plan has no project and belongs in no single-project file; it
+-- travels in the whole-database archive instead.
+\qecho 'COPY plans (id, project, title, content, status, metadata,'
+\qecho '            created_at, updated_at) FROM stdin;'
+COPY (SELECT id, project, title, content, status, metadata, created_at,
              updated_at
-        FROM project_plans WHERE project = :'name') TO STDOUT;
+        FROM plans WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
 \qecho 'COPY file_hashes (project, file_path, hash, updated_at) FROM stdin;'

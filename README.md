@@ -31,10 +31,13 @@ mounted read-only, so nothing in this stack can modify your sources.
                             :3000
 ```
 
-- **postgres** stores the graphs (`graph_nodes`, `graph_edges`), the plans
-  (`project_plans`) and the vector embeddings table (`code_embeddings`). Every
-  one of those is scoped to a row of `projects`, and `graph_nodes` is keyed on
-  `(project, id)`, since `README.md` is a node id in every codebase there is.
+- **postgres** stores the graphs (`graph_nodes`, `graph_edges`), the vector
+  embeddings table (`code_embeddings`) and the plans (`plans`). Everything
+  derived from a tree is scoped to a row of `projects`, and `graph_nodes` is
+  keyed on `(project, id)`, since `README.md` is a node id in every codebase
+  there is. Plans are the exception: they are written by an agent and rebuilt
+  by nobody, so they live in one table for the whole database and carry the
+  project as a tag rather than an owner.
 - **graphify** walks the mounted project and writes what it finds, then exits.
   It never writes to the host. Two producers share the pass: code goes through
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
@@ -162,9 +165,11 @@ make unindex PROJECT_NAME=api                # named directly
 ```
 
 It prints what the drop costs and asks before deleting anything (`FORCE=1`
-skips the prompt). The counts are printed in two halves on purpose: nodes,
-edges, file hashes and embeddings come back with one `make index`, while plans
-and manually written summaries do not come back at all. Unlike `make index`,
+skips the prompt). The counts are printed in three parts on purpose: nodes,
+edges, file hashes and embeddings come back with one `make index`, manually
+written summaries do not come back at all, and plans are not deleted in the
+first place - they keep the name as a tag and stay readable through
+`get_plans`. Unlike `make index`,
 this target has no default - naming nothing is an error rather than a delete of
 whatever `PROJECT_PATH` happens to point at. The `drop_project` MCP tool does
 the same from an agent, reporting first and deleting only when called again
@@ -510,17 +515,17 @@ make mcp help
 
 ## MCP tools
 
-| Tool                       | Arguments                                        | Returns                                                                |
-| -------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------- |
-| `get_code_graph_neighbors` | `node_id`                                        | Incoming and outgoing edges of a node, with the relation type          |
-| `search_code_nodes`        | `query`, optional `limit`                        | Nodes whose name or id matches the substring                           |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`    | Shortest chain of relations between two nodes                          |
-| `save_node_summary`        | `node_id`, `summary`                             | Saves or updates a summary for a specific node                         |
-| `get_node_summary`         | `node_id`                                        | Retrieves summary, file path, and type for a node                      |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `status` | Creates or updates a persistent project plan                           |
-| `get_plans`                | optional `status`                                | Retrieves project plans filtered by status                             |
-| `drop_plan`                | `plan_id`                                        | Deletes one plan outright, for one written by mistake                  |
-| `drop_project`             | `name`, optional `confirm`                       | Reports what dropping a project costs, and drops it on `confirm: true` |
+| Tool                       | Arguments                                                   | Returns                                                                |
+| -------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `get_code_graph_neighbors` | `node_id`                                                   | Incoming and outgoing edges of a node, with the relation type          |
+| `search_code_nodes`        | `query`, optional `limit`                                   | Nodes whose name or id matches the substring                           |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`               | Shortest chain of relations between two nodes                          |
+| `save_node_summary`        | `node_id`, `summary`                                        | Saves or updates a summary for a specific node                         |
+| `get_node_summary`         | `node_id`                                                   | Retrieves summary, file path, and type for a node                      |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status` | Creates or updates a persistent plan; `project: "*"` makes it global   |
+| `get_plans`                | optional `project`, `status`                                | Plans of one project plus the global ones; `project: "*"` lists all    |
+| `drop_plan`                | `plan_id`                                                   | Deletes one plan outright, for one written by mistake                  |
+| `drop_project`             | `name`, optional `confirm`                                  | Reports what dropping a project costs, and drops it on `confirm: true` |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
@@ -535,7 +540,22 @@ are refreshed on every run.
 
 ### Persistent Project Planning
 
-The system includes dedicated support for tracking project execution roadmaps. Plans are stored in the `project_plans` table and can be managed directly by an AI client using the `save_plan` and `get_plans` tools.
+The system includes dedicated support for tracking project execution roadmaps.
+Plans are managed directly by an AI client through `save_plan`, `get_plans` and
+`drop_plan`.
+
+Unlike everything else here, a plan is not derived from a tree: nothing rebuilds
+it, so it is not owned by a project. The `plans` table holds them for the whole
+database, keyed on a `plan_id` that is unique across it, with `project` as a
+free-text tag. That has three consequences worth knowing:
+
+- A plan survives `make unindex` and `drop_project`, and can name a repository
+  this database has never indexed.
+- `get_plans` defaults to the project the session connected to and always adds
+  the global plans on top. `project: "*"` lists every project's plans.
+- `save_plan` with `project: "*"` stores a plan that belongs to no project and
+  is listed under all of them - the right home for a procedure that is run on
+  demand rather than finished once.
 
 ## Backup and restore
 
@@ -576,15 +596,17 @@ make restore FILE=api-20260819-115137.sql.gz     # replaces that one project
 A bare name is looked up in the backup directory, and `make restore` with no
 `FILE=` lists what is there rather than guessing at the newest. Both directions
 print what is about to be replaced and ask first; `FORCE=1` skips the prompt.
-A project restore is atomic - the file carries its own `BEGIN`, the `DELETE`
-that cascades the old copy away, and `COMMIT` - and a database restore runs in
+A project restore is atomic - the file carries its own `BEGIN`, the `DELETE`s
+that take the old copy away, and `COMMIT` - and a database restore runs in
 one transaction with `--exit-on-error`, since `pg_restore` otherwise treats
 errors as non-fatal and would report success over a half-restored database.
 Either is refused outright while an index job is running.
 
 Worth doing before `make unindex` and before `make clean`: nodes, edges,
 hashes and embeddings come back with one `make index`, but plans and manually
-written summaries come back from nowhere else.
+written summaries come back from nowhere else. A single-project file written
+before plans became global names the table that no longer exists and will not
+restore - take the backup again rather than editing the file.
 
 ## Database schema
 
@@ -609,9 +631,9 @@ which is safe because the migrations are idempotent, and records the version
 again.
 
 To remove a single codebase rather than the whole database, use `make unindex` -
-everything cascades from the row in `projects`, so one `DELETE` there takes that
-project's nodes, edges, hashes, embeddings and plans, and nothing of any other
-project. `make clean` is the other end: it empties the data directory and starts
+everything derived cascades from the row in `projects`, so one `DELETE` there
+takes that project's nodes, edges, hashes and embeddings, and nothing of any
+other project. Plans are not derived and have no foreign key, so they stay. `make clean` is the other end: it empties the data directory and starts
 the database over, asking for confirmation first since it destroys the index
 (`make clean FORCE=1` skips the prompt). Both are worth a `make backup` first.
 

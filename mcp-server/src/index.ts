@@ -45,12 +45,39 @@ function projectDescription(sessionProject: string | null): string {
         "indexed project to read its graph instead.";
 }
 
+// Plans are the exception to the paragraph above. They are written by an
+// agent rather than derived from a tree, so they are held in one table for the
+// whole database, tagged with a project instead of owned by one. "*" is the
+// tag that means every project: it reads all of them, and it writes a plan
+// that belongs to none and is listed under all.
+function planScopeDescription(
+  sessionProject: string | null,
+  writing: boolean,
+): string {
+  const star = writing
+    ? '"*" saves it as a global plan, listed under every project.'
+    : '"*" lists the plans of every project.';
+  const subject = writing ? "Project this plan is about" : "Project to list";
+  return sessionProject === null
+    ? `${subject}. Required here: this session was opened on /mcp without ` +
+        `naming one. ${star}`
+    : `${subject}. Defaults to "${sessionProject}". ${star}`;
+}
+
 const listToolsHandler = async (
   sessionProject: string | null,
 ): Promise<ListToolsResult> => {
   const project = {
     type: "string",
     description: projectDescription(sessionProject),
+  };
+  const planTag = {
+    type: "string",
+    description: planScopeDescription(sessionProject, true),
+  };
+  const planFilter = {
+    type: "string",
+    description: planScopeDescription(sessionProject, false),
   };
   return {
     tools: [
@@ -186,14 +213,18 @@ const listToolsHandler = async (
       },
       {
         name: "save_plan",
-        description: "Create or update a persistent project execution plan",
+        description:
+          "Create or update a persistent execution plan. Plans are stored " +
+          "across projects and outlive the codebase they were written for",
         inputSchema: {
           type: "object",
           properties: {
-            project,
+            project: planTag,
             plan_id: {
               type: "string",
-              description: "Unique identifier for the project plan",
+              description:
+                "Identifier of the plan, unique across the whole database. " +
+                "Saving under an existing one overwrites that plan",
             },
             title: {
               type: "string",
@@ -214,11 +245,13 @@ const listToolsHandler = async (
       },
       {
         name: "get_plans",
-        description: "Retrieve project execution plans filtered by status",
+        description:
+          "Retrieve execution plans filtered by project and status. Global " +
+          "plans, the ones saved without a project, are always included",
         inputSchema: {
           type: "object",
           properties: {
-            project,
+            project: planFilter,
             status: {
               type: "string",
               description: "Filter plans by status (default 'active')",
@@ -234,10 +267,11 @@ const listToolsHandler = async (
         inputSchema: {
           type: "object",
           properties: {
-            project,
             plan_id: {
               type: "string",
-              description: "Identifier of the plan to delete",
+              description:
+                "Identifier of the plan to delete. It is unique across the " +
+                "database, so no project is named",
             },
           },
           required: ["plan_id"],
@@ -358,6 +392,26 @@ function readProject(
   );
 }
 
+/** What project a plan call is about: its own argument, else the session's.
+ *
+ * `explicit` separates a caller that named "*" from one that named nothing on
+ * a session without a default, which are both `null` and mean opposite things
+ * when writing.
+ */
+type PlanScope = { explicit: boolean; project: string | null };
+
+function readPlanScope(
+  args: Record<string, unknown> | undefined,
+  sessionProject: string | null,
+): PlanScope {
+  const value = args?.project;
+  if (typeof value === "string" && value.trim() !== "") {
+    const tag = value.trim();
+    return { explicit: true, project: tag === "*" ? null : tag };
+  }
+  return { explicit: false, project: sessionProject };
+}
+
 /** Reject an unknown project by name rather than by empty result.
  *
  * A misspelled name is otherwise indistinguishable from an empty graph on
@@ -379,7 +433,8 @@ async function requireProject(project: string): Promise<string> {
 }
 
 // Counted per project rather than summed: one `make index` brings the derived
-// rows back, and nothing brings a plan or a hand-written summary back.
+// rows back, nothing brings a hand-written summary back, and a plan is not
+// tied to the project row at all - it is tagged with the name and stays.
 const DROP_REPORT = `
   SELECT p.root_path, p.indexed_at,
          (SELECT count(*) FROM graph_nodes AS g
@@ -390,7 +445,7 @@ const DROP_REPORT = `
            WHERE f.project = p.name) AS hashes,
          (SELECT count(*) FROM code_embeddings AS c
            WHERE c.project = p.name) AS embeddings,
-         (SELECT count(*) FROM project_plans AS l
+         (SELECT count(*) FROM plans AS l
            WHERE l.project = p.name) AS plans,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name
@@ -425,8 +480,9 @@ function describeDrop(
     `${dropped ? "dropped" : "project"} "${project}" (${row.root_path}, ${when})`,
     `  rebuilt by one \`make index\`: ${row.nodes} nodes, ${row.edges} edges, ` +
       `${row.hashes} file hashes, ${row.embeddings} embeddings`,
-    `  not rebuilt, gone for good: ${row.plans} plans, ` +
-      `${row.summaries} manual summaries`,
+    `  not rebuilt, gone for good: ${row.summaries} manual summaries`,
+    `  kept, tagged with the name: ${row.plans} plans, still readable with ` +
+      `get_plans project: "${project}"`,
   ];
   if (!dropped) {
     lines.push(
@@ -486,8 +542,9 @@ function makeCallToolHandler(
         try {
           await client.query("BEGIN");
           const res = await client.query<DropReport>(DROP_REPORT, [target]);
-          // graph_nodes, project_plans and file_hashes cascade from projects,
-          // graph_edges and code_embeddings from graph_nodes.
+          // graph_nodes and file_hashes cascade from projects, graph_edges
+          // and code_embeddings from graph_nodes. Plans have no foreign key
+          // and survive the drop, which is what the report says.
           await client.query(`DELETE FROM projects WHERE name = $1`, [target]);
           await client.query("COMMIT");
           return {
@@ -501,6 +558,139 @@ function makeCallToolHandler(
         } finally {
           client.release();
         }
+      }
+
+      // The three plan tools are handled ahead of the project lookup below.
+      // A plan is not part of any graph: it may name a codebase this database
+      // has never indexed, and it stays readable after that codebase is
+      // dropped, so requiring the project to exist would refuse both.
+      if (name === "save_plan") {
+        const planId = requireString(args, "plan_id");
+        const title = requireString(args, "title");
+        const content = requireString(args, "content");
+        let status = "active";
+        if (args !== undefined && args.status !== undefined) {
+          if (typeof args.status !== "string") {
+            throw new Error('Argument "status" must be a string');
+          }
+          status = args.status;
+        }
+
+        const scope = readPlanScope(args, sessionProject);
+        // Storing a plan under no project at all is a decision, so it has to
+        // be made rather than fallen into by omission.
+        if (!scope.explicit && scope.project === null) {
+          throw new Error(
+            'Argument "project" is required: this session was opened on /mcp ' +
+              'without naming one. Name the project the plan is about, or "*" ' +
+              "to save it as a global plan.",
+          );
+        }
+
+        await dbPool.query(
+          `INSERT INTO plans (
+           id, project, title, content, status, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+         ON CONFLICT (id) DO UPDATE SET
+           project = EXCLUDED.project,
+           title = EXCLUDED.title,
+           content = EXCLUDED.content,
+           status = EXCLUDED.status,
+           updated_at = CURRENT_TIMESTAMP`,
+          [planId, scope.project, title, content, status],
+        );
+
+        const where =
+          scope.project === null ? "global" : `project ${scope.project}`;
+        const text = [`Plan ${planId} successfully saved (${where}).`];
+        // The tag is free text with nothing to check it, so a typo would
+        // otherwise store a plan under a name no session ever asks for.
+        if (scope.project !== null) {
+          const known = await dbPool.query(
+            `SELECT 1 FROM projects WHERE name = $1`,
+            [scope.project],
+          );
+          if (known.rowCount === 0) {
+            text.push(
+              `No indexed project named "${scope.project}". The plan was ` +
+                "stored anyway and will be listed once one is indexed under " +
+                "that name.",
+            );
+          }
+        }
+
+        return {
+          content: [{ type: "text", text: text.join("\n") }],
+        };
+      }
+
+      if (name === "get_plans") {
+        let status = "active";
+        if (args !== undefined && args.status !== undefined) {
+          if (typeof args.status !== "string") {
+            throw new Error('Argument "status" must be a string');
+          }
+          status = args.status;
+        }
+
+        // A null project is no filter at all: either "*" was asked for, or the
+        // session named no project and has none to narrow by.
+        const scope = readPlanScope(args, sessionProject);
+        const res = await dbPool.query(
+          `SELECT id, project, title, content, status, metadata,
+                  created_at, updated_at
+             FROM plans
+            WHERE ($1::text IS NULL OR project = $1 OR project IS NULL)
+              AND status = $2
+            ORDER BY (project IS NULL), updated_at DESC`,
+          [scope.project, status],
+        );
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
+
+      if (name === "drop_plan") {
+        const planId = requireString(args, "plan_id");
+        const res = await dbPool.query<{
+          project: string | null;
+          title: string;
+          status: string;
+        }>(
+          `DELETE FROM plans
+            WHERE id = $1
+        RETURNING project, title, status`,
+          [planId],
+        );
+
+        // A typo and a delete have to read differently, or the caller cannot
+        // tell which of the two just happened.
+        if (res.rowCount === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No plan "${planId}". Nothing was deleted.`,
+              },
+            ],
+          };
+        }
+
+        const row = res.rows[0];
+        const where =
+          row.project === null ? "global" : `project ${row.project}`;
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Deleted plan ${planId} (${where}): "${row.title}", ` +
+                `status ${row.status}.`,
+            },
+          ],
+        };
       }
 
       const project = await requireProject(readProject(args, sessionProject));
@@ -641,98 +831,6 @@ function makeCallToolHandler(
 
         return {
           content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-        };
-      }
-
-      if (name === "save_plan") {
-        const planId = requireString(args, "plan_id");
-        const title = requireString(args, "title");
-        const content = requireString(args, "content");
-        let status = "active";
-        if (args !== undefined && args.status !== undefined) {
-          if (typeof args.status !== "string") {
-            throw new Error('Argument "status" must be a string');
-          }
-          status = args.status;
-        }
-
-        await dbPool.query(
-          `INSERT INTO project_plans (
-           project, id, title, content, status, updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
-         ON CONFLICT (project, id) DO UPDATE SET
-           title = EXCLUDED.title,
-           content = EXCLUDED.content,
-           status = EXCLUDED.status,
-           updated_at = CURRENT_TIMESTAMP`,
-          [project, planId, title, content, status],
-        );
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Plan ${planId} successfully saved.`,
-            },
-          ],
-        };
-      }
-
-      if (name === "get_plans") {
-        let status = "active";
-        if (args !== undefined && args.status !== undefined) {
-          if (typeof args.status !== "string") {
-            throw new Error('Argument "status" must be a string');
-          }
-          status = args.status;
-        }
-
-        const res = await dbPool.query(
-          `SELECT id, title, content, status, metadata, created_at, updated_at
-           FROM project_plans
-          WHERE project = $1 AND status = $2
-          ORDER BY updated_at DESC`,
-          [project, status],
-        );
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-        };
-      }
-
-      if (name === "drop_plan") {
-        const planId = requireString(args, "plan_id");
-        const res = await dbPool.query<{ title: string; status: string }>(
-          `DELETE FROM project_plans
-            WHERE project = $1 AND id = $2
-        RETURNING title, status`,
-          [project, planId],
-        );
-
-        // A typo and a delete have to read differently, or the caller cannot
-        // tell which of the two just happened.
-        if (res.rowCount === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No plan "${planId}" in ${project}. Nothing was deleted.`,
-              },
-            ],
-          };
-        }
-
-        const row = res.rows[0];
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `Deleted plan ${planId} of ${project}: "${row.title}", ` +
-                `status ${row.status}.`,
-            },
-          ],
         };
       }
 

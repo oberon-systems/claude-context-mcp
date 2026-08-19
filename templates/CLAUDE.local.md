@@ -41,7 +41,9 @@ plan - it says what to do next, and is not an invitation to redo the research
 behind it.
 
 1. **First tool call of any non-trivial request:** `get_plans` with
-   `project: "@PROJECT@"` and the default `status: active`.
+   `project: "@PROJECT@"` and the default `status: active`. Plans are held for
+   the whole database, not per project: that call also returns the global ones,
+   saved under no project, and `project: "*"` lists every project's plans.
 2. **If an active plan covers the request, execute it.** Follow its steps in
    order. Do not re-run the research it summarizes, re-verify its conclusions,
    or read files the current step does not name. If one step no longer matches
@@ -49,10 +51,14 @@ behind it.
    to start planning again.
 3. **When a plan is approved, save it** with `save_plan`: a stable `plan_id`
    derived from the topic, `status: active`, and enough content that another
-   session can execute it without this conversation.
+   session can execute it without this conversation. The `plan_id` is unique
+   across the whole database, so make it name the topic rather than repeat a
+   generic word. A procedure that belongs to no single repository is saved with
+   `project: "*"`.
 4. **When the work has landed, retire it** by calling `save_plan` again with the
-   same `plan_id` and `status: completed`. There is no delete tool, and a
-   finished plan left `active` is what makes rule 1 untrustworthy next time.
+   same `plan_id` and `status: completed`. A finished plan left `active` is what
+   makes rule 1 untrustworthy next time. `drop_plan` exists too, but it is for a
+   plan written by mistake - retiring is what finished work gets.
 
 ## Recap: say how the answer was produced
 
