@@ -16,8 +16,11 @@ instead of the file it normally expects.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import posixpath
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -41,6 +44,7 @@ from ctxgraph.storage import (
 )
 from ctxgraph.summaries import extract_summary
 from graphify import cache as extractor_cache
+from graphify import extract as extractor_extract
 from graphify.cluster import cluster
 from graphify.export import to_html, to_json
 
@@ -52,23 +56,99 @@ LOG = logging.getLogger(__name__)
 _KEY_TEMPLATE = "{path}::{label}@{location}"
 
 
-def redirect_extractor_cache() -> None:
-    """Keep the extractor's own cache out of the mounted project.
+def cache_root(project: str) -> Path:
+    """Return the extractor cache directory of one project."""
+    return Path(GRAPHIFY_OUT_DIR) / "cache" / project
 
-    It caches a parsed file under a `graphify-out/cache` directory next to the
-    common parent of the paths it was handed, which for us is inside the
-    project mount - and that mount is read only by contract, so the write
-    fails and takes the extraction with it. Pointing the directory at our own
-    writable one keeps the cache working, which is what makes a re-index skip
-    files that did not change.
 
-    This reaches into the extractor rather than going through an option
-    because it has none. The version is pinned, and the failure mode if the
-    internals move is loud: the write goes back to the read-only mount.
+def install_extractor_cache(project: str, fresh: bool = False) -> int:
+    """Scope the extractor's own cache to one project. Returns entries cleared.
+
+    Two things are wrong with the cache as shipped, and both have to be fixed
+    from here because it has no options.
+
+    It is written next to the common parent of the paths it was handed, which
+    for us is inside the project mount - read only by contract, so the write
+    fails and takes the extraction with it. That is what `cache_dir` is
+    redirected for, and it is what makes a re-index skip unchanged files.
+
+    Worse, an entry is keyed by file content alone, and a hit is returned
+    verbatim - carrying the `source_file` of whichever file was extracted
+    first. Every tree is mounted at the same path, so two codebases cannot even
+    be told apart: one empty `__init__.py` answers for every empty
+    `__init__.py` ever indexed, under a path that is not in the tree being
+    indexed, and the file it stood in for gets no node at all. The key here is
+    the path and the content together, under a directory of the project's own,
+    so neither collision can happen.
+
+    This reaches into the extractor rather than going through an option because
+    it has none. The version is pinned, and the failure modes if the internals
+    move are loud: the write goes back to the read-only mount, and an
+    unpatched `extract` module reports a gap for every file at the end of the
+    run. The lookups are replaced on `graphify.extract` rather than on
+    `graphify.cache`, because that module binds them by value at import time.
     """
-    target = Path(GRAPHIFY_OUT_DIR) / "cache"
-    target.mkdir(parents=True, exist_ok=True)
-    extractor_cache.cache_dir = lambda root=None: target
+    root = cache_root(project)
+    root.mkdir(parents=True, exist_ok=True)
+    extractor_cache.cache_dir = lambda _root=None: root
+
+    def entry_for(path: Path) -> Path:
+        digest = hashlib.sha256(f"{path}\0".encode())
+        digest.update(path.read_bytes())
+        return root / f"{digest.hexdigest()}.json"
+
+    def load_cached(path: Path, _root: Path | None = None) -> dict | None:
+        try:
+            entry = entry_for(Path(path))
+            return json.loads(entry.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def save_cached(path: Path, result: dict, _root: Path | None = None) -> None:
+        try:
+            entry_for(Path(path)).write_text(json.dumps(result))
+        except OSError:
+            LOG.warning("Failed to cache the extraction of %s", path)
+
+    extractor_extract.load_cached = load_cached
+    extractor_extract.save_cached = save_cached
+
+    if not fresh:
+        return 0
+    cleared = len(list(root.glob("*.json")))
+    extractor_cache.clear_cache()
+    return cleared
+
+
+def prune_extractor_caches(known: set[str]) -> tuple[int, int]:
+    """Drop cached extractions no project owns. Returns projects, entries.
+
+    A project can leave the database through `make unindex` or through the
+    `drop_project` tool, and neither can reach this volume: the tool runs in
+    another container, and the script talks to postgres only. So the cache is
+    collected here instead, against the projects that still exist.
+
+    The loose entries are the ones written before the cache was scoped, when
+    one directory held every project at once. Nothing can read them now, and
+    they are the entries that answered for the wrong tree.
+    """
+    root = Path(GRAPHIFY_OUT_DIR) / "cache"
+    if not root.is_dir():
+        return 0, 0
+
+    entries = 0
+    for stale in root.glob("*.json"):
+        stale.unlink(missing_ok=True)
+        entries += 1
+
+    projects = 0
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or child.name in known:
+            continue
+        entries += len(list(child.glob("*.json")))
+        shutil.rmtree(child, ignore_errors=True)
+        projects += 1
+    return projects, entries
 
 
 def node_type(label: str, source_file: str | None) -> str:
@@ -115,8 +195,12 @@ def import_extraction(
     project: str,
     extraction: dict[str, list[dict[str, str]]],
     contents: dict[str, str],
-) -> tuple[int, int]:
-    """Store one graphifyy extraction. Returns the nodes and edges written.
+) -> tuple[int, int, set[str]]:
+    """Store one graphifyy extraction.
+
+    Returns the nodes written, the edges written, and the paths a file node was
+    written for - which is what tells a run whose extraction came back short
+    from a clean one.
 
     `contents` maps a project relative path to the text of that file, which is
     what `extract_summary` needs: graphifyy writes no summary of its own, and
@@ -141,6 +225,7 @@ def import_extraction(
     id_map: dict[str, str] = {}
     collisions = 0
     written = 0
+    files: set[str] = set()
     for node in nodes:
         their_id = node.get("id", "")
         our_id = node_id(node)
@@ -162,6 +247,7 @@ def import_extraction(
             upsert_file_node(
                 cursor, project, source_file, summary, source=SOURCE_GRAPHIFYY
             )
+            files.add(source_file)
         else:
             upsert_extracted_node(
                 cursor,
@@ -210,7 +296,7 @@ def import_extraction(
         )
         linked += 1
 
-    return written, linked
+    return written, linked, files
 
 
 def db_to_graph(cursor: Cursor, project: str) -> nx.Graph:

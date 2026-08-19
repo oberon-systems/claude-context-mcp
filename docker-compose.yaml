@@ -38,6 +38,9 @@ services:
       # derived from it unless one is given.
       PROJECT_ROOT: ${PROJECT_PATH}
       PROJECT_NAME: ${PROJECT_NAME:-}
+      # Set by `make index FRESH=1`: re-extract every file rather than trust
+      # either cache. Named here or it would reach compose and not the job.
+      FORCE_REEXTRACT: ${FORCE_REEXTRACT:-}
     volumes:
       # Read-only by contract: the indexer must never mutate host sources.
       - ${PROJECT_PATH}:/project:ro

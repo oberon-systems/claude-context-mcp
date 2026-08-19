@@ -51,6 +51,12 @@ Make, Markdown, shell, TOML, SQL, JSON).
 Report the counts from the last two log lines and stop. Do not read the
 indexed files to "check" the result.
 
+The closing line says how many files were selected and how many of them a node
+was written for. When those differ, a warning block names the files left out
+and why - report that too, it is the graph admitting it does not describe the
+tree. If the reason is not a skipped file (too big, unreadable), re-run with
+`FRESH=1` appended, which re-parses everything instead of trusting a cache.
+
 If it fails because the stack is down, run `@MAKE@ up` and say so.
 
 ### /graphify query "TEXT"

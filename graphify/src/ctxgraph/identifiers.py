@@ -44,7 +44,9 @@ def project_name(explicit: str, root_path: str) -> str:
     """
     candidate = explicit.strip() or posixpath.basename(root_path.rstrip("/"))
     cleaned = _PROJECT_NAME_ALLOWED.sub("-", candidate.lower()).strip("-")
-    if not cleaned:
+    # "." and ".." survive the allowed set and would name the parent of every
+    # per-project directory the name is used for.
+    if not cleaned or cleaned in {".", ".."}:
         raise RuntimeError(
             f"cannot derive a project name from {root_path!r}; "
             "pass PROJECT_NAME explicitly"

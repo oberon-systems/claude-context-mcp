@@ -16,6 +16,7 @@ import psycopg2
 from psycopg2.extensions import cursor as Cursor
 
 from ctxgraph.config import (
+    FORCE_REEXTRACT,
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
     MAX_NODE_ID_LENGTH,
@@ -28,9 +29,10 @@ from ctxgraph.discovery import iter_source_files, read_source
 from ctxgraph.identifiers import entity_node_id, project_name, truncate
 from ctxgraph.interop import (
     import_extraction,
+    install_extractor_cache,
     materialize_graph_json,
+    prune_extractor_caches,
     recluster,
-    redirect_extractor_cache,
 )
 from ctxgraph.parsers import get_parser
 from ctxgraph.resolution import placeholder_id, resolve_file_target, resolve_symbol
@@ -43,6 +45,7 @@ from ctxgraph.storage import (
     get_file_entities,
     get_file_hash,
     insert_edge,
+    list_projects,
     prune_missing_files,
     prune_orphans,
     upsert_entity_node,
@@ -58,6 +61,9 @@ LOG = logging.getLogger(__name__)
 # and nothing past it. Keeping only that much of every code file bounds the
 # memory the graphifyy pass needs on a large tree.
 SUMMARY_HEAD_LINES = 80
+# How many of the files a run left without a node it names before summarizing
+# the rest as a count.
+GAP_REPORT_LIMIT = 20
 
 
 def compute_hash(content: str) -> str:
@@ -170,7 +176,11 @@ def normalize_extraction(
 
 
 def index_with_graphifyy(
-    cursor: Cursor, project: str, sources: list[tuple[str, str]]
+    cursor: Cursor,
+    project: str,
+    sources: list[tuple[str, str]],
+    gaps: dict[str, str],
+    fresh: bool = False,
 ) -> tuple[int, int]:
     """Extract the code half of the tree and store it. Returns nodes, edges.
 
@@ -178,15 +188,25 @@ def index_with_graphifyy(
     against every file it was given at once, so feeding it only the files that
     changed would lose the edges between them. Everything it wrote last time
     is dropped first, which is what keeps a deleted function from living on.
+
+    `gaps` collects the files that came back without a node of their own, and
+    why. A run that writes fewer nodes than it selected files has to say so:
+    the graph is what agents are told to trust instead of the filesystem.
     """
     if not sources:
         return 0, 0
 
-    redirect_extractor_cache()
+    cleared = install_extractor_cache(project, fresh)
+    if cleared:
+        LOG.info("Cleared %d cached extractions before re-extracting", cleared)
+
     heads: dict[str, str] = {}
+    unread: dict[str, str] = {}
     for full_path, rel_path in sources:
-        content = read_source(full_path, rel_path)
-        if content is not None:
+        content, reason = read_source(full_path, rel_path)
+        if content is None:
+            unread[rel_path] = reason
+        else:
             heads[rel_path] = "\n".join(content.splitlines()[:SUMMARY_HEAD_LINES])
 
     extraction = extract([Path(full_path) for full_path, _ in sources])
@@ -200,7 +220,11 @@ def index_with_graphifyy(
     for _, rel_path in sources:
         clear_file_artifacts(cursor, project, rel_path)
 
-    return import_extraction(cursor, project, extraction, heads)
+    nodes, edges, extracted = import_extraction(cursor, project, extraction, heads)
+    for _, rel_path in sources:
+        if rel_path not in extracted:
+            gaps[rel_path] = unread.get(rel_path, "extractor returned nothing")
+    return nodes, edges
 
 
 def resolve_project() -> tuple[str, str]:
@@ -236,6 +260,17 @@ def scan_and_build_graph() -> None:
         with conn.cursor() as cursor:
             ensure_project(cursor, project, root_path)
             conn.commit()
+            # A project can leave the database through `make unindex` or the
+            # drop_project tool, neither of which can reach this volume.
+            dropped, entries = prune_extractor_caches(
+                {name for name, _, _ in list_projects(cursor)}
+            )
+            if entries:
+                LOG.info(
+                    "Reclaimed %d unowned cached extractions (%d dropped projects)",
+                    entries,
+                    dropped,
+                )
 
         discovered = list(iter_source_files(PROJECT_PATH))
         code_sources = [pair for pair in discovered if is_graphifyy_source(pair[1])]
@@ -250,9 +285,16 @@ def scan_and_build_graph() -> None:
             len(sources),
         )
 
+        # Every selected file the run leaves without a node of its own, and
+        # why. Both producers add to it, and it is what the closing report
+        # accounts for.
+        gaps: dict[str, str] = {}
+
         with conn.cursor() as cursor:
             try:
-                nodes, edges = index_with_graphifyy(cursor, project, code_sources)
+                nodes, edges = index_with_graphifyy(
+                    cursor, project, code_sources, gaps, FORCE_REEXTRACT
+                )
                 conn.commit()
                 LOG.info("graphifyy: %d nodes, %d edges", nodes, edges)
             except Exception:
@@ -272,12 +314,17 @@ def scan_and_build_graph() -> None:
 
         with conn.cursor() as cursor:
             for full_path, rel_path in sources:
-                content = read_source(full_path, rel_path)
+                content, reason = read_source(full_path, rel_path)
                 if content is None:
+                    gaps[rel_path] = reason
                     continue
 
                 file_hash = compute_hash(content)
-                stored_hash = get_file_hash(cursor, project, rel_path)
+                stored_hash = (
+                    None
+                    if FORCE_REEXTRACT
+                    else get_file_hash(cursor, project, rel_path)
+                )
 
                 if stored_hash == file_hash:
                     # Skip parsing, retrieve entities from DB
@@ -290,6 +337,7 @@ def scan_and_build_graph() -> None:
                     except Exception:
                         conn.rollback()
                         failures += 1
+                        gaps[rel_path] = "failed to index"
                         LOG.exception("Failed to index %s", rel_path)
                         continue
                     conn.commit()
@@ -305,7 +353,7 @@ def scan_and_build_graph() -> None:
             for full_path, rel_path in sources:
                 if rel_path not in known_files:
                     continue
-                content = read_source(full_path, rel_path)
+                content, _ = read_source(full_path, rel_path)
                 if content is None:
                     continue
                 try:
@@ -354,13 +402,21 @@ def scan_and_build_graph() -> None:
                 LOG.exception("Failed to write graph.json")
 
         LOG.info(
-            "Done with %s: %d files, %d entities, %d edges, %d pruned, %d failures",
+            "Done with %s: %d files selected, %d with a node, %d entities, "
+            "%d edges, %d pruned, %d failures",
             project,
-            len(known_files),
+            len(discovered),
+            len(discovered) - len(gaps),
             entity_total,
             edge_total,
             pruned,
             failures,
         )
+        if gaps:
+            LOG.warning("%d selected files produced no node:", len(gaps))
+            for rel_path, reason in sorted(gaps.items())[:GAP_REPORT_LIMIT]:
+                LOG.warning("  %s (%s)", rel_path, reason)
+            if len(gaps) > GAP_REPORT_LIMIT:
+                LOG.warning("  ... and %d more", len(gaps) - GAP_REPORT_LIMIT)
     finally:
         conn.close()

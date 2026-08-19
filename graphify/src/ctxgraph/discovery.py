@@ -69,19 +69,24 @@ def iter_source_files(root_path: str) -> Iterator[tuple[str, str]]:
             yield os.path.join(current_dir, file_name), rel_path
 
 
-def read_source(full_path: str, rel_path: str) -> str | None:
-    """Return the text of a file, or None when it cannot or should not be read."""
+def read_source(full_path: str, rel_path: str) -> tuple[str | None, str]:
+    """Return the text of a file, and why it was skipped when it has no text.
+
+    The reason travels with the content because a skipped file is a file the
+    graph will not describe, and the run reports that at the end rather than
+    leaving a node missing with no account of it.
+    """
     try:
         size = os.path.getsize(full_path)
     except OSError:
         LOG.exception("Failed to stat %s", rel_path)
-        return None
+        return None, "unreadable"
     if size > MAX_FILE_BYTES:
         LOG.info("Skipping %s: %d bytes exceeds the limit", rel_path, size)
-        return None
+        return None, "over the size limit"
     try:
         with open(full_path, encoding="utf-8", errors="ignore") as handle:
-            return handle.read()
+            return handle.read(), ""
     except OSError:
         LOG.exception("Failed to read %s", rel_path)
-        return None
+        return None, "unreadable"

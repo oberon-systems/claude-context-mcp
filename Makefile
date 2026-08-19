@@ -138,13 +138,19 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 #
 # PROJECT_ROOT travels alongside the mount because the container only ever sees
 # /project, and the projects table records where that came from.
+#
+# FRESH=1 re-extracts every file instead of trusting a cache - the extractor's
+# own per-file cache and the file_hashes table both. Spelled apart from FORCE,
+# which means "skip the confirmation" for `unindex` and `clean`.
 PROJECT ?=
 PROJECT_NAME ?=
+FRESH ?=
 INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 
 index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
+		$(if $(FRESH),FORCE_REEXTRACT=1) \
 		$(COMPOSE) --profile index run --rm graphify
 
 # The other end of `index`: one project leaves the database, the rest stay.

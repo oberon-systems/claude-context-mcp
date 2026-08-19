@@ -19,6 +19,15 @@ PROJECT_ROOT = os.getenv("PROJECT_ROOT", "")
 PROJECT_NAME = os.getenv("PROJECT_NAME", "")
 IGNORE_FILE = ".ctxignore"
 KEEP_FILE = ".ctxkeep"
+# Re-extract every file instead of trusting either cache: the extractor's own
+# per-file cache and our file_hashes table. For when a cache is suspected
+# rather than known to be wrong. `make index FRESH=1` sets it.
+FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
+    "",
+    "0",
+    "false",
+    "no",
+}
 
 DEFAULT_IGNORED_DIRS = frozenset(
     {

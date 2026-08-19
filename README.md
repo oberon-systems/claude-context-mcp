@@ -85,6 +85,12 @@ make index PROJECT=/home/you/work/api
 make index PROJECT=/home/you/work/infra
 ```
 
+A re-index is authoritative: it reports how many files it selected and how many
+of them a node was written for, and names the ones it had to leave out. Both
+producers skip a file whose content has not changed since the last run, so a
+re-index is cheap; `make index PROJECT=... FRESH=1` distrusts both caches and
+re-parses everything, for when a graph looks incomplete rather than merely old.
+
 Each lands under a name taken from the last segment of its path (`api`,
 `infra`; override with `PROJECT_NAME=`). The indexed repository needs nothing
 of its own for this - no checkout of this project inside it, no `.env`, no
@@ -117,7 +123,9 @@ and manually written summaries do not come back at all. Unlike `make index`,
 this target has no default - naming nothing is an error rather than a delete of
 whatever `PROJECT_PATH` happens to point at. The `drop_project` MCP tool does
 the same from an agent, reporting first and deleting only when called again
-with `confirm: true`.
+with `confirm: true`. The extraction cache the project leaves behind on the
+`graph-out` volume is reclaimed by the next `make index`, whichever tree that
+one indexes - the volume is reachable from the indexing job alone.
 
 Node ids are unique within a project, not across the database: `README.md` is a
 node in every one of them. Edges stay inside one project, because the indexer
@@ -378,6 +386,7 @@ make build       build both service images
 make up          start postgres, mcp-server and the viewer
 make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env
+                 FRESH=1 re-parses every file instead of trusting a cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
 make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
