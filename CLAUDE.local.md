@@ -81,11 +81,19 @@ Four rules, all mandatory:
    `active` filter. Don't leave finished plans sitting as `active` - that's what makes
    rule 1 trustworthy for the next session instead of surfacing stale, already-done work.
 
+Reusable procedures are a third status. A plan that is run on demand rather than finished
+once is stored `template`, so it never appears in the `active` list rule 1 trusts. There is
+one today: `ctx-file-selection-bootstrap` under project `claude-context-mcp` - generate
+`.ctxkeep` / `.ctxignore` for a repository, verify the selection by simulation, and record
+the formats no parser reads. Reach it from any project with `get_plans` at
+`project: claude-context-mcp`, `status: template`, and follow it when asked to apply the
+file selection plan to a repo.
+
 ## Recap: report how the work was actually done
 
 Every time a task ends - implementation, review, research, anything that took more than
 a single answer - close the reply with a **Recap** section stating how the answer was
-produced, not just what it concluded. Counts, not adjectives. Four lines, in this order,
+produced, not just what it concluded. Counts, not adjectives. Five lines, in this order,
 and skip a line only when its count is genuinely zero:
 
 1. **Graph / `context` MCP** - total calls, broken down by tool and purpose:
@@ -105,11 +113,22 @@ and skip a line only when its count is genuinely zero:
 4. **External delegates** - the Gemini CLI runs: model, how many invocations, what the
    task file asked for, and how much of the result survived review. A delegate is not a
    subagent; keep the two counts separate and never merge them into one number.
+5. **Suggestions** - what the graph or the context did not have, and what would fix it.
+   Only gaps this turn actually hit: a lookup that came back empty, a summary that was
+   missing or too thin to answer from, a file type that is not indexed, an index older
+   than the tree, a question the tools cannot express. Name the lever each one moves -
+   fewer tokens, wider coverage, or a shorter run - and the concrete change behind it: a
+   summary to save, a `.ctxkeep` pattern to add, a parser that does not exist, a tool
+   that is missing. Write "none" when the graph answered everything asked of it; a turn
+   that re-derived half its answer by hand and still reports "none" is the one line the
+   user will not believe.
 
 The point is auditability of method: the user is comparing what the graph answered
 against what was re-derived by hand, and cannot see the tool calls. So the recap is
 written from what actually happened in the turn, never rounded, never reconstructed
-from what the workflow says should have happened.
+from what the workflow says should have happened. The suggestions line is the other
+half of that: line 2 says what had to be re-derived by hand, line 5 says what would have
+made it unnecessary, so the tooling gets fixed instead of worked around every turn.
 
 ## Model routing across the workflow
 
@@ -127,10 +146,23 @@ Ordinary implementation work may be handed to the Gemini CLI on `gemini-3.1-flas
 
 - Start from a clean tree (`git status --short` empty), so that afterwards `git diff` is
   exactly what the delegate wrote.
-- Run it headless, task in a file to avoid quoting problems:
-  `gemini -m gemini-3.1-flash-lite --approval-mode yolo -p "$(cat task.txt)"`.
+- Run it headless, task in a file to avoid quoting problems, and always with the
+  workspace-trust variable exported:
+  `GEMINI_CLI_TRUST_WORKSPACE=true gemini -m gemini-3.1-flash-lite --approval-mode yolo -p "$(cat task.txt)"`.
   `yolo` is required - a headless run has nobody to answer a prompt, and `auto_edit`
   stalls on the first shell command.
+- **The env var is not optional.** Without it the CLI first downgrades the mode
+  ("Approval mode overridden to \"default\" because the current folder is not trusted")
+  and then refuses to run at all: "Gemini CLI is not running in a trusted directory".
+  Every headless run in an untrusted checkout dies there, before reading the task.
+  `--skip-trust` is the flag-shaped equivalent; trusting the folder interactively does
+  not carry into a headless run.
+- **The workspace is the only writable root.** An output path outside the repo - a
+  session scratchpad under `/tmp`, for instance - is refused with "Path not in
+  workspace" and the delegate quietly retargets the write to
+  `~/.gemini/tmp/<project>/<name>`, reporting success. So either name an output file
+  inside the repo, or read the result back from that fallback directory instead of
+  concluding the run produced nothing.
 
 ### Reviewing the delegate's work
 
@@ -147,3 +179,11 @@ the diff in isolation:
    queries). Sonnet gathers evidence; it does not rule.
 4. The verdict - accept, fix on top, or revert - is Opus 5's alone, taken on the
    evidence gathered.
+
+## Code Style & Comments
+
+- **Do NOT write code comments** by default.
+- Comments are allowed **only** if the behavior or implementation is non-obvious, counterintuitive, or inherently illogical.
+- **Strict comment limits**:
+  - Maximum length: **2 lines**.
+  - Line length limit: **79 characters** per line (including indentation and comment symbols).
