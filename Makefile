@@ -39,7 +39,7 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
-	logs ps status index unindex backup restore psql clean skill-install \
+	logs ps status index reindex unindex backup restore psql clean skill-install \
 	skill-uninstall skill-status $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
@@ -47,7 +47,7 @@ $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init install shell lint check build pull up down restart logs ps \
-	status index unindex backup restore psql clean graphify mcp db web \
+	status index reindex unindex backup restore psql clean graphify mcp db web \
 	skill-install skill-uninstall skill-status require-venv require-env \
 	require-not-root
 
@@ -247,6 +247,15 @@ index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(if $(FRESH),FORCE_REEXTRACT=1) \
 		$(COMPOSE) --profile index run --rm graphify
+
+# The named form of `index FRESH=1`: distrust both caches - the extractor's
+# per-file one and the file_hashes table - and parse every selected file again.
+# Nothing is deleted first, so the graph is never absent while the run proceeds:
+# the run rewrites what it finds and the usual prune pass drops what the tree no
+# longer has.
+reindex: require-env  ## Re-index PROJECT, trusting neither cache
+	@$(MAKE) --no-print-directory index FRESH=1 \
+		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
 
 # The other end of `index`: one project leaves the database, the rest stay.
 # Naming it is deliberate work - PROJECT= resolves through the projects table by

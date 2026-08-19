@@ -94,14 +94,14 @@ make install AGENT_ROOT=/home/you/work/api
 
 Six things, none of which replaces a file that already exists:
 
-| Step                               | What it leaves behind                                                |
-| ---------------------------------- | -------------------------------------------------------------------- |
-| `.ctxkeep` / `.ctxignore`          | generated from the file types the tree actually holds, and verified  |
-| `.mcp.json`                        | the `context` server for Claude Code, at `/mcp/<project>`            |
-| `.gemini/settings.json`            | the same address for the Gemini CLI                                  |
-| `.claude/skills/graphify/SKILL.md` | the skill, rendered for that root (`make skill-install` on its own)  |
-| `CLAUDE.local.md`, `GEMINI.md`     | how an agent should use the graph, from `templates/CLAUDE.local.md`  |
-| shell aliases                      | `context-index`, `context-status`, `context-install`, in `~/.bashrc` |
+| Step                               | What it leaves behind                                                                   |
+| ---------------------------------- | --------------------------------------------------------------------------------------- |
+| `.ctxkeep` / `.ctxignore`          | generated from the file types the tree actually holds, and verified                     |
+| `.mcp.json`                        | the `context` server for Claude Code, at `/mcp/<project>`                               |
+| `.gemini/settings.json`            | the same address for the Gemini CLI                                                     |
+| `.claude/skills/graphify/SKILL.md` | the skill, rendered for that root (`make skill-install` on its own)                     |
+| `CLAUDE.local.md`, `GEMINI.md`     | how an agent should use the graph, from `templates/CLAUDE.local.md`                     |
+| shell aliases                      | `context-index`, `context-reindex`, `context-status`, `context-install`, in `~/.bashrc` |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 
@@ -144,8 +144,10 @@ make index PROJECT=/home/you/work/infra
 A re-index is authoritative: it reports how many files it selected and how many
 of them a node was written for, and names the ones it had to leave out. Both
 producers skip a file whose content has not changed since the last run, so a
-re-index is cheap; `make index PROJECT=... FRESH=1` distrusts both caches and
+re-index is cheap; `make reindex PROJECT=...` distrusts both caches and
 re-parses everything, for when a graph looks incomplete rather than merely old.
+It is the named form of `make index PROJECT=... FRESH=1`, and the
+`context-reindex` alias is the same thing for the tree you stand in.
 
 Each lands under a name taken from the last segment of its path (`api`,
 `infra`; override with `PROJECT_NAME=`). The indexed repository needs nothing
@@ -459,6 +461,7 @@ make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env
                  FRESH=1 re-parses every file instead of trusting a cache
+make reindex     index PROJECT=<path> again, trusting neither cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
 make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
                  KEEP=<n> keeps the n newest backups of that kind, 7 by default

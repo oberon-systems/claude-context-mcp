@@ -23,6 +23,7 @@ make_prefix="${MAKE_PREFIX:-make -C $repo_root}"
 python_bin="${PYTHON_BIN:-python3}"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
 marker="# >>> claude-context-mcp >>>"
+end_marker="# <<< claude-context-mcp <<<"
 
 if [ ! -d "$target" ]; then
     echo "AGENT_ROOT=$target is not a directory" >&2
@@ -127,27 +128,71 @@ done
 echo "  rendered from templates/CLAUDE.local.md"
 
 # 5. The aliases. This is the one step that writes outside both repositories,
-#    so it is fenced by a marker and never appends twice - and it refuses to
-#    duplicate aliases of the same names that predate the marker.
+#    so it is fenced by a pair of markers and never appends twice - and it
+#    refuses to duplicate aliases of the same names that predate the marker.
+#    A block that is already there is rewritten when it has fallen behind, which
+#    is how an alias added later reaches a shell that was onboarded before it.
 echo
 echo "Aliases"
 alias_block() {
     cat <<BLOCK
 $marker
 alias context-index='make -C $repo_root index PROJECT=\$(pwd)'
+alias context-reindex='make -C $repo_root reindex PROJECT=\$(pwd)'
 alias context-status='make -C $repo_root status'
 alias context-install='make -C $repo_root install AGENT_ROOT=\$(pwd)'
 alias context-install-skill='make -C $repo_root skill-install AGENT_ROOT=\$(pwd)'
-# <<< claude-context-mcp <<<
+$end_marker
 BLOCK
+}
+
+# What the rc file holds today, markers included, so the two can be compared.
+extract_block() {
+    awk -v start="$marker" -v end="$end_marker" '
+        $0 == start { inside = 1 }
+        inside { print }
+        $0 == end { inside = 0 }
+    ' "$1"
+}
+
+# Only ever called with both markers present: the replacement runs from the
+# opening one to the closing one, and without a closing one it would swallow
+# everything after it.
+replace_block() {
+    awk -v start="$marker" -v end="$end_marker" -v block="$work/aliases" '
+        $0 == start {
+            while ((getline line < block) > 0) print line
+            skipping = 1
+            next
+        }
+        skipping && $0 == end { skipping = 0; next }
+        !skipping
+    ' "$1"
 }
 
 if [ "${ALIASES:-1}" = "0" ]; then
     note "shell aliases" "skipped (ALIASES=0)"
     echo "  not requested"
+elif [ -f "$shell_rc" ] && grep -Fq "$marker" "$shell_rc" \
+        && grep -Fq "$end_marker" "$shell_rc"; then
+    alias_block > "$work/aliases"
+    if extract_block "$shell_rc" | cmp -s - "$work/aliases"; then
+        note "shell aliases" "kept (already current in $shell_rc)"
+        echo "  already in $shell_rc"
+    else
+        # Rewritten through cat rather than mv, so the rc file keeps its own
+        # inode and mode instead of inheriting the temporary file's.
+        replace_block "$shell_rc" > "$work/rc"
+        cat "$work/rc" > "$shell_rc"
+        note "shell aliases" "updated in $shell_rc"
+        echo "  refreshed in $shell_rc, active in the next shell"
+    fi
 elif [ -f "$shell_rc" ] && grep -Fq "$marker" "$shell_rc"; then
-    note "shell aliases" "kept (already in $shell_rc)"
-    echo "  already in $shell_rc"
+    note "shell aliases" "skipped (the block in $shell_rc has no closing marker)"
+    echo "  $shell_rc opens the block but never closes it, so it cannot be"
+    echo "  replaced safely. Fix the fence by hand with:"
+    echo
+    alias_block | sed 's/^/  /'
 elif [ -f "$shell_rc" ] && grep -Eq \
         '^[[:space:]]*alias[[:space:]]+context-[a-z-]+=' "$shell_rc"; then
     note "shell aliases" "skipped (defined in $shell_rc without the marker)"

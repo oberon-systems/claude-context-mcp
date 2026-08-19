@@ -54,8 +54,9 @@ indexed files to "check" the result.
 The closing line says how many files were selected and how many of them a node
 was written for. When those differ, a warning block names the files left out
 and why - report that too, it is the graph admitting it does not describe the
-tree. If the reason is not a skipped file (too big, unreadable), re-run with
-`FRESH=1` appended, which re-parses everything instead of trusting a cache.
+tree. If the reason is not a skipped file (too big, unreadable), re-run it as
+`@MAKE@ reindex PROJECT=@ROOT@`, which re-parses everything instead of trusting
+a cache (the same as `index` with `FRESH=1` appended).
 
 If it fails because the stack is down, run `@MAKE@ up` and say so.
 
