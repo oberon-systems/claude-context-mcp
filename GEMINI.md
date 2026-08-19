@@ -7,14 +7,9 @@ You are working on a Dockerized GraphRAG & Vector Context MCP Service for Claude
 - **Goal:** Provide an isolated PostgreSQL + pgvector database, a Python-based Graphify code-graph parser, and a TypeScript MCP server in a single Docker Compose stack to index codebases and supply graph/vector context tools to Claude CLI.
 - **Architecture:** Microservices approach orchestrated via Docker Compose. Host project codebase is mounted read-only (`:ro`), AST graph and vector embeddings are stored in PostgreSQL, and tools are exposed over MCP (Streamable HTTP, with SSE kept for older clients).
 
-## 2. New Features: Summarization & Planning
-
-- **Automatic Summarization:** The `graphify` engine automatically generates initial summaries for indexed files (Markdown, Code) and stores them in the `graph_nodes` table.
-- **Persistent Project Planning:** The system supports tracking project execution plans in the `project_plans` table, manageable via dedicated MCP tools (`save_plan`, `get_plans`).
-
 ---
 
-## 3. Core Architectural Rules
+## 2. Core Architectural Rules
 
 1. **Docker-First & IaC:** All services must be fully configured and launchable via `docker-compose.yml`. Database migrations and initial schemas belong in `/init-db/`.
 2. **Read-Only Codebase Access:** Target repository volumes must ALWAYS be mounted as read-only (`:ro`). Containers must never mutate host source files.
@@ -25,7 +20,7 @@ You are working on a Dockerized GraphRAG & Vector Context MCP Service for Claude
 
 ---
 
-## 4. Technology Stack
+## 3. Technology Stack
 
 - **Orchestration & Infrastructure:** Docker, Docker Compose.
 - **Database:** PostgreSQL 16 (`pgvector/pgvector:pg16`), SQL init scripts.
@@ -36,7 +31,7 @@ You are working on a Dockerized GraphRAG & Vector Context MCP Service for Claude
 
 ---
 
-## 5. Current Work Phase
+## 4. Current Work Phase
 
 Refer to `ROADMAP.md` or task tracking for current state.
 
@@ -66,7 +61,7 @@ Refer to `ROADMAP.md` or task tracking for current state.
 
 ---
 
-## 6. Pre-Commit Hooks & Quality Assurance
+## 5. Pre-Commit Hooks & Quality Assurance
 
 Always keep `.pre-commit-config.yaml` at the root level updated for all active file extensions:
 
@@ -78,9 +73,46 @@ Always keep `.pre-commit-config.yaml` at the root level updated for all active f
 
 ---
 
-## 7. Coding Standards
+## 6. Coding Standards
 
 - **Language & Encoding:** English only. Pure ASCII. No Unicode symbols, non-ASCII characters, or emojis in docstrings, comments, commit messages, or docs.
 - **Python:** PEP 8 compliant, explicit type hints required, robust exception handling.
 - **TypeScript:** Strict type checking enabled (`"strict": true` in `tsconfig.json`), no implicit `any`.
 - **Git Commit Format:** Must be generated via `cz c` using `commitizen` with `wyld-cz`.
+
+## 7. Delegating Work to Gemini
+
+Ordinary implementation work may be handed to the Gemini CLI on
+`gemini-3.1-flash-lite` and reviewed afterwards. The loop is fixed:
+
+1. **Clean tree first.** `git status --short` must be empty, on `main`. What
+   `git diff` shows afterwards is then exactly what the delegate wrote.
+2. **Run it headless.** Put the task in a file to avoid quoting problems:
+   `gemini -m gemini-3.1-flash-lite --approval-mode yolo -p "$(cat task.txt)"`.
+   `yolo` is required - a headless run has nobody to answer a prompt, and
+   `auto_edit` stalls on the first shell command.
+3. **Re-index.** `make index PROJECT=<path>`, so the review reads a graph that
+   matches the tree rather than the one from before the edit.
+4. **Verify from the graph, never from the report.** Use the `context` MCP
+   tools. The delegate's summary is a claim to be checked, not a result.
+5. **Fix on top, then commit** with `cz commit` as always. Local commit only;
+   pushing is the user's call.
+
+The task prompt must always carry these standing rules: do not commit or run
+any writing git command; pure ASCII English; edits must pass
+`.venv/bin/pre-commit run --files <paths>`; state an acceptance test the
+delegate has to check itself; and name any tree that is off limits.
+
+Two failure modes seen repeatedly, worth pre-empting in the prompt:
+
+- **A test that measured nothing.** The indexer source is baked into the image
+  by `COPY src ./src`, so a change under `until
+`make -C graphify TAG=dev build`. A delegate that skips the rebuild is
+  measuring the previous version and will
+- **A substituted acceptance criterion.** Asked for nodes in the graph, it
+  answers with a file count, a log line, o
+  persist". Ask for the node list, and query it yourself regardless.
+
+Give the delegate the facts already established rather than letting it
+rediscover them - the free tier throttles r minute,
+and every wasted turn costs a minute of backoff.
