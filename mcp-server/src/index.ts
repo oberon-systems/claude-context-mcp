@@ -64,6 +64,13 @@ function planScopeDescription(
     : `${subject}. Defaults to "${sessionProject}". ${star}`;
 }
 
+// What the record is, as opposed to where it stands. A template was a status
+// until the type column existed, which left it unable to be completed.
+const PLAN_TYPE_DESCRIPTION =
+  'What the record is, apart from its lifecycle: "plan" (the default) for ' +
+  'work executed once, "template" for a form to copy, "procedure" for a ' +
+  "routine run on demand. Free text, like status.";
+
 const listToolsHandler = async (
   sessionProject: string | null,
 ): Promise<ListToolsResult> => {
@@ -239,6 +246,10 @@ const listToolsHandler = async (
               description:
                 "Status of the plan (e.g., active, completed, archived)",
             },
+            type: {
+              type: "string",
+              description: PLAN_TYPE_DESCRIPTION,
+            },
           },
           required: ["plan_id", "title", "content"],
         },
@@ -255,6 +266,13 @@ const listToolsHandler = async (
             status: {
               type: "string",
               description: "Filter plans by status (default 'active')",
+            },
+            type: {
+              type: "string",
+              description:
+                "Filter plans by type (default 'plan'), \"*\" for every " +
+                "type. " +
+                PLAN_TYPE_DESCRIPTION,
             },
           },
         },
@@ -575,6 +593,13 @@ function makeCallToolHandler(
           }
           status = args.status;
         }
+        let planType = "plan";
+        if (args !== undefined && args.type !== undefined) {
+          if (typeof args.type !== "string") {
+            throw new Error('Argument "type" must be a string');
+          }
+          planType = args.type;
+        }
 
         const scope = readPlanScope(args, sessionProject);
         // Storing a plan under no project at all is a decision, so it has to
@@ -589,16 +614,17 @@ function makeCallToolHandler(
 
         await dbPool.query(
           `INSERT INTO plans (
-           id, project, title, content, status, updated_at
+           id, project, title, content, status, type, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
          ON CONFLICT (id) DO UPDATE SET
            project = EXCLUDED.project,
            title = EXCLUDED.title,
            content = EXCLUDED.content,
            status = EXCLUDED.status,
+           type = EXCLUDED.type,
            updated_at = CURRENT_TIMESTAMP`,
-          [planId, scope.project, title, content, status],
+          [planId, scope.project, title, content, status, planType],
         );
 
         const where =
@@ -633,18 +659,29 @@ function makeCallToolHandler(
           }
           status = args.status;
         }
+        // Defaulted like the status rather than left open: a template is
+        // active for as long as it exists, and an unfiltered listing would
+        // put one where an agent reads approved pending work.
+        let planType: string | null = "plan";
+        if (args !== undefined && args.type !== undefined) {
+          if (typeof args.type !== "string") {
+            throw new Error('Argument "type" must be a string');
+          }
+          planType = args.type === "*" ? null : args.type;
+        }
 
         // A null project is no filter at all: either "*" was asked for, or the
         // session named no project and has none to narrow by.
         const scope = readPlanScope(args, sessionProject);
         const res = await dbPool.query(
-          `SELECT id, project, title, content, status, metadata,
+          `SELECT id, project, title, content, status, type, metadata,
                   created_at, updated_at
              FROM plans
             WHERE ($1::text IS NULL OR project = $1 OR project IS NULL)
               AND status = $2
+              AND ($3::text IS NULL OR type = $3)
             ORDER BY (project IS NULL), updated_at DESC`,
-          [scope.project, status],
+          [scope.project, status, planType],
         );
 
         return {
