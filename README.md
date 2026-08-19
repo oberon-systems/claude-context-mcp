@@ -388,6 +388,9 @@ make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env
                  FRESH=1 re-parses every file instead of trusting a cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
+make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
+                 KEEP=<n> keeps the n newest backups of that same kind
+make restore     put FILE=<path> back, over the database or over one project
 make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database
@@ -471,6 +474,53 @@ are refreshed on every run.
 
 The system includes dedicated support for tracking project execution roadmaps. Plans are stored in the `project_plans` table and can be managed directly by an AI client using the `save_plan` and `get_plans` tools.
 
+## Backup and restore
+
+`make backup` writes the database to
+`~/.local/share/context-mcp/backups`, next to the data directory itself:
+
+```bash
+make backup                                  # the whole database
+make backup PROJECT_NAME=api                 # one codebase
+make backup PROJECT=/home/you/work/api       # the same, resolved by root path
+make backup KEEP=7                           # and prune older backups of that kind
+```
+
+The two are different files for a reason. The whole database is a `pg_dump`
+custom archive, `context-<timestamp>.dump`. A single project cannot be one:
+`pg_dump` selects by table and never by row, and every table here is scoped by
+a `project` column. So one codebase comes out as
+`<name>-<timestamp>.sql.gz` - the `COPY` blocks of its rows in foreign-key
+order, wrapped in a single transaction, which is the shape `pg_dump
+--format=plain` emits and which `psql` replays. Neither file is written under
+its final name until it has been read back, so an interrupted dump cannot be
+mistaken for a backup.
+
+`FILE=<path>` writes somewhere else instead, and rotation then leaves that file
+alone: `KEEP=<n>` only ever prunes the timestamped names this scheme produces,
+and prunes each kind on its own, so keeping two database archives never deletes
+a project's only backup.
+
+Restoring names the file and nothing else:
+
+```bash
+make restore FILE=context-20260819-115420.dump   # replaces the whole database
+make restore FILE=api-20260819-115137.sql.gz     # replaces that one project
+```
+
+A bare name is looked up in the backup directory, and `make restore` with no
+`FILE=` lists what is there rather than guessing at the newest. Both directions
+print what is about to be replaced and ask first; `FORCE=1` skips the prompt.
+A project restore is atomic - the file carries its own `BEGIN`, the `DELETE`
+that cascades the old copy away, and `COMMIT` - and a database restore runs in
+one transaction with `--exit-on-error`, since `pg_restore` otherwise treats
+errors as non-fatal and would report success over a half-restored database.
+Either is refused outright while an index job is running.
+
+Worth doing before `make unindex` and before `make clean`: nodes, edges,
+hashes and embeddings come back with one `make index`, but plans and manually
+written summaries come back from nowhere else.
+
 ## Database schema
 
 `init-db/01-init.sql` is replayed by the PostgreSQL entrypoint **only when the
@@ -480,7 +530,7 @@ for confirmation first, since it destroys the index; `make clean FORCE=1` skips
 the prompt for scripted use. To remove a single codebase rather than the whole
 database, use `make unindex` - everything cascades from the row in `projects`,
 so one `DELETE` there takes that project's nodes, edges, hashes, embeddings and
-plans, and nothing of any other project.
+plans, and nothing of any other project. Both are worth a `make backup` first.
 
 `DATA_DIR` is emptied from inside the postgres service rather than from the
 host: its files belong to the container's postgres uid, so a host-side `rm`

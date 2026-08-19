@@ -30,7 +30,7 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'knowledge-base') to enable targeted cross-repository searches.
 - [ ] **Unified Onboarding:** Single `make install` command (configure agents, install skills).
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
-- [ ] **Maintenance Tools:** Backup/Restore.
+- [x] **Maintenance Tools:** Backup/Restore (`make backup`, `make restore`).
 - [ ] **Local Build:** Streamlined `make build` with stable tagging.
 - [ ] **Gap Tracking:** Persistent storage for agent-reported missing context/gaps.
 - [ ] **Shared Records (\_common):** Handle cross-project plans and conventions.

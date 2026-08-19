@@ -25,15 +25,16 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp
 ROOT_GOALS := help init shell lint check build up down restart logs ps status \
-	index unindex psql clean skill-install skill-uninstall skill-status $(SUBS)
+	index unindex backup restore psql clean skill-install skill-uninstall \
+	skill-status $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init shell lint check build up down restart logs ps status index \
-	unindex psql clean graphify mcp skill-install skill-uninstall skill-status \
-	require-venv require-env require-not-root
+	unindex backup restore psql clean graphify mcp skill-install \
+	skill-uninstall skill-status require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
 	@echo "$(NAME) $(VERSION)"
@@ -145,6 +146,9 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 PROJECT ?=
 PROJECT_NAME ?=
 FRESH ?=
+FILE ?=
+KEEP ?=
+BACKUP_DIR ?=
 INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 
 index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
@@ -161,6 +165,24 @@ index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
 unindex: require-env  ## Drop PROJECT= or PROJECT_NAME= from the database
 	@COMPOSE='$(COMPOSE)' UNINDEX_PATH='$(INDEXED)' \
 		UNINDEX_NAME='$(PROJECT_NAME)' FORCE='$(FORCE)' scripts/unindex.sh
+
+# The other maintenance pair: `backup` writes, `restore` puts back. Both take
+# the same selectors as `unindex` - nothing named means the whole database -
+# and both leave the destination directory to the script, which defaults it
+# next to the database rather than reading a setting for it.
+#
+# FILE= names one file instead of the generated name, and then rotation leaves
+# it alone: KEEP=N only ever prunes files this naming scheme produced.
+backup: require-env  ## Back up the database, or PROJECT= / PROJECT_NAME= alone
+	@COMPOSE='$(COMPOSE)' BACKUP_PATH='$(INDEXED)' \
+		BACKUP_NAME='$(PROJECT_NAME)' BACKUP_FILE='$(FILE)' \
+		BACKUP_DIR='$(BACKUP_DIR)' KEEP='$(KEEP)' scripts/backup.sh
+
+# No default here for the same reason `unindex` has none: a bare invocation
+# that replaces a database is the accident worth designing out.
+restore: require-env  ## Restore FILE= over the database or over one project
+	@COMPOSE='$(COMPOSE)' BACKUP_FILE='$(FILE)' BACKUP_DIR='$(BACKUP_DIR)' \
+		FORCE='$(FORCE)' scripts/restore.sh
 
 psql: require-env  ## Open a psql session against the context database
 	$(COMPOSE) exec postgres psql -U "$${POSTGRES_USER:-user}" -d "$${POSTGRES_DB:-context}"
