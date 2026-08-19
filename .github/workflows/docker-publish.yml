@@ -36,11 +36,15 @@ jobs:
         with:
           context: ./graphify
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}/graphify:${{ inputs.tag || github.ref_name }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/graphify:${{ inputs.tag || github.ref_name }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/graphify:latest
 
       - name: Build and push mcp-server
         uses: docker/build-push-action@v5
         with:
           context: ./mcp-server
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}/mcp-server:${{ inputs.tag || github.ref_name }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}/mcp-server:${{ inputs.tag || github.ref_name }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/mcp-server:latest
