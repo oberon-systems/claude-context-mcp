@@ -75,6 +75,13 @@ curl -fsS localhost:3000/health
 
 Then register the server with the agents, as described below.
 
+`make build` is optional: the images are published to
+`ghcr.io/oberon-systems/claude-context-mcp`, and `make up` pulls them when they
+are missing. A local build produces exactly that reference at `:latest`, which
+is the one `docker-compose.yaml` pins, so it takes the published image's place
+until `make pull` fetches it again. `make build` prints the image id it left
+behind, and says so when the running stack still holds the previous one.
+
 ## Several codebases, one database
 
 One stack serves every codebase you index, and any tree can be indexed without
@@ -211,7 +218,7 @@ it.
 | `POSTGRES_USER`     | `user`    | Database user                                                                                   |
 | `POSTGRES_DB`       | `context` | Database name                                                                                   |
 | `MCP_PORT`          | `3000`    | Host port the MCP server is published on                                                        |
-| `TAG`               | `latest`  | Tag applied to the images built by `make build`                                                 |
+| `TAG`               | `latest`  | Tag applied to the images built by `make build`; compose only ever runs `:latest`               |
 
 The stack is a singleton, and nothing about the codebase being indexed changes
 that. `docker-compose.yaml` pins the compose project name with a
@@ -385,6 +392,7 @@ Run `make` for the full list, including the per-service subdivisions.
 make init        create the virtualenv and install the pre-commit hooks
 make lint        run every pre-commit hook over every file
 make build       build both service images
+make pull        pull the published images, discarding a local build
 make up          start postgres, mcp-server and the viewer
 make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env

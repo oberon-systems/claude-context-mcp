@@ -8,8 +8,19 @@ PIP := $(VENV)/bin/pip
 VERSION := $(shell sed -n 's/^  version: \(.*\)/\1/p' .cz.yaml)
 
 COMPOSE ?= docker compose
+DOCKER ?= docker
+
+# Inherited by the service Makefiles the same way TAG is: each one repeats the
+# default so it still builds standalone, and a value set here wins. The images
+# are named for the registry they are published to, so a local build replaces
+# the reference docker-compose.yaml pins instead of producing one nothing runs.
+REGISTRY ?= ghcr.io
+NAMESPACE ?= oberon-systems/claude-context-mcp
 TAG ?= latest
 export TAG
+
+GRAPHIFY_IMAGE := $(REGISTRY)/$(NAMESPACE)/graphify
+MCP_IMAGE := $(REGISTRY)/$(NAMESPACE)/mcp-server
 
 GRAPHIFY_DIR := graphify
 MCP_DIR := mcp-server
@@ -24,16 +35,16 @@ SHELL := /bin/bash
 # delegation runs. Root target names are left alone, otherwise make warns about
 # the override.
 SUBS := graphify mcp
-ROOT_GOALS := help init shell lint check build up down restart logs ps status \
-	index unindex backup restore psql clean skill-install skill-uninstall \
+ROOT_GOALS := help init shell lint check build pull up down restart logs ps \
+	status index unindex backup restore psql clean skill-install skill-uninstall \
 	skill-status $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init shell lint check build up down restart logs ps status index \
-	unindex backup restore psql clean graphify mcp skill-install \
+.PHONY: help init shell lint check build pull up down restart logs ps status \
+	index unindex backup restore psql clean graphify mcp skill-install \
 	skill-uninstall skill-status require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
@@ -45,11 +56,13 @@ help:  ## Show the current version and the available targets
 	@echo
 	@echo "  graphify <target>"
 	@echo
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) help | sed 's/^\(.\)/      \1/'
+	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
+		IMAGE='$(GRAPHIFY_IMAGE)' help | sed 's/^\(.\)/      \1/'
 	@echo
 	@echo "  mcp <target>"
 	@echo
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) help | sed 's/^\(.\)/      \1/'
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
+		IMAGE='$(MCP_IMAGE)' help | sed 's/^\(.\)/      \1/'
 	@echo
 
 init:  ## Create the virtualenv and install the pre-commit hooks
@@ -77,9 +90,29 @@ lint: require-venv  ## Run the pre-commit hooks over every file
 
 check: lint  ## Alias for lint
 
+# Both services build under the reference compose runs, so a build replaces
+# what the stack starts. That is worth saying out loud: the summary is how you
+# see the image id actually moved, and a running stack still holds the previous
+# one until it is recreated.
 build:  ## Build every service image
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) TAG='$(TAG)' build
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
+		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' build
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
+		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' build
+	@for ref in $(GRAPHIFY_IMAGE):$(TAG) $(MCP_IMAGE):$(TAG); do \
+		$(DOCKER) image ls --format \
+			'{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Size}}' "$$ref" \
+			| sed 's/^/  /'; \
+	done
+	@test -z "$$($(COMPOSE) ps -q 2> /dev/null)" \
+		|| echo "  stack is running, 'make up' recreates it with these"
+
+# The other end of `build`, and the reason it needs one: a local build takes
+# over the same :latest reference the registry publishes, and `up` never
+# re-pulls an image that is already present. This is what puts the published
+# one back - and what a first run uses instead of building at all.
+pull:  ## Pull the published images, discarding a local build
+	$(COMPOSE) --profile index pull
 
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the MCP server redirects to, answers on a stack this target started.
@@ -214,8 +247,10 @@ clean: require-env  ## Remove the containers, the database and the built images
 			/var/lib/postgresql/data/.[!.]* \
 			/var/lib/postgresql/data/*'
 	$(COMPOSE) --profile index down -v --remove-orphans
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) TAG='$(TAG)' clean
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) TAG='$(TAG)' clean
+	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
+		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' clean
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
+		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' clean
 
 # The skill is one file, and both agents read the same format. What it cannot
 # know from here is where it is being installed, which decides three things:
@@ -275,10 +310,12 @@ skill-status:  ## Show where the skill is registered
 # The sub-Makefiles own their own target lists, so everything after the
 # subdivision name is passed straight through: `make mcp build`, `make mcp`.
 graphify:
-	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) TAG='$(TAG)' $(SUBARGS)
+	@$(MAKE) --no-print-directory -C $(GRAPHIFY_DIR) \
+		IMAGE='$(GRAPHIFY_IMAGE)' TAG='$(TAG)' $(SUBARGS)
 
 mcp:
-	@$(MAKE) --no-print-directory -C $(MCP_DIR) TAG='$(TAG)' $(SUBARGS)
+	@$(MAKE) --no-print-directory -C $(MCP_DIR) \
+		IMAGE='$(MCP_IMAGE)' TAG='$(TAG)' $(SUBARGS)
 
 require-venv:
 	@test -x $(PYTHON) || { \

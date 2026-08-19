@@ -26,11 +26,12 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 
 Simplifying how users interact with the stack and how agents manage project context.
 
+- [ ] **Coss-project plans**: plans should been stored as cross-project, e.g. plans table, but have `project` field.
 - [ ] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'knowledge-base') to enable targeted cross-repository searches.
-- [ ] **Unified Onboarding:** Single `make install` command (configure agents, install skills).
+- [ ] **Unified Onboarding:** Single `make install` command (configure agents, install skills, CLAUDE.local.md if not present), also generate .ctxignore .ctxkeep somehow
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
 - [x] **Maintenance Tools:** Backup/Restore (`make backup`, `make restore`).
-- [ ] **Local Build:** Streamlined `make build` with stable tagging.
+- [x] **Local Build:** Streamlined `make build` with stable tagging.
 - [ ] **Gap Tracking:** Persistent storage for agent-reported missing context/gaps.
 - [ ] **Shared Records (\_common):** Handle cross-project plans and conventions.
 - [ ] **Cross-Project Lookups:** Link relations between codebases.
