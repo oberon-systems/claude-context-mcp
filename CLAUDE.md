@@ -27,6 +27,7 @@ You are working on a Dockerized GraphRAG & Vector Context MCP Service for Claude
 - **Graphify Engine:** Python 3.11+, `graphifyy` (upstream code extractor, used
   as a library), `tree-sitter`, `networkx`, `psycopg2-binary`.
 - **MCP Server:** Node.js 20+, TypeScript, `@modelcontextprotocol/sdk`, Express, `pg`.
+- **Dashboard:** Node.js 20+, TypeScript, Express, `pg`, React 19, Vite.
 - **Code Quality & Tooling:** `pre-commit`, `commitizen` (with the optional `wyld-cz` adapter), `ruff`, `eslint`, `prettier`, `typescript` (`tsc`), `shellcheck`.
 
 ---
@@ -47,6 +48,7 @@ Refer to `ROADMAP.md` or task tracking for current state.
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;
   `backup.sh`, `restore.sh` and `unindex.sh` drive the database targets.
 - `/mcp-server/` - TypeScript MCP Server (`src/index.ts`, `Dockerfile`, `package.json`, `tsconfig.json`).
+- `/web/` - the dashboard: an Express JSON API over the same schema and a React client, in one image.
 - `docker-compose.yml` - Container orchestration.
 - `.pre-commit-config.yaml` - Pre-commit rules configuration.
 - `.cz.yaml` - Commitizen configuration, naming the `wyld-cz` adapter when it is available.

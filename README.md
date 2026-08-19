@@ -23,12 +23,15 @@ mounted read-only, so nothing in this stack can modify your sources.
                                +-----------+
                                | postgres  |  pgvector/pgvector:pg16
                                +-----------+
-                                  ^      ^  read
-                                  |      |
-                       +-----------+    +--------+
-   Claude, Gemini <--> | mcp-server|    | viewer |  :3001, the graph page
-                       +-----------+    +--------+
-                            :3000
+                                ^    ^    ^  read
+                                |    |    |
+                     +-----------+  +--------+  +-----+
+   Claude, Gemini <->| mcp-server|  | viewer |  | web |<-> browser
+                     +-----------+  +--------+  +-----+
+                          :3000       :3001       :3002
+                                          ^          |
+                                          +----------+
+                                       the graph page, proxied
 ```
 
 - **postgres** stores the graphs (`graph_nodes`, `graph_edges`), the vector
@@ -51,6 +54,11 @@ mounted read-only, so nothing in this stack can modify your sources.
 - **viewer** renders the graph as an interactive page, from the database, on
   every request. The drawing library is vendored into the image rather than
   loaded from a CDN, so the page works with no route to the internet.
+- **web** is the dashboard, on loopback only: the indexed projects with their
+  counts and how old each index is, a browsable node index with summaries and
+  neighbours, and every plan in the database, filtered by project, status and
+  type and editable in place. The graph itself is the viewer's page, proxied
+  rather than linked, so the frame and the API share one origin.
 
 A second MCP server is configured alongside: the upstream stdio server, started
 through `docker compose run`, serving the same graph from a `graph.json` written
@@ -266,6 +274,8 @@ it.
 | `POSTGRES_USER`     | `user`    | Database user                                                                                   |
 | `POSTGRES_DB`       | `context` | Database name                                                                                   |
 | `MCP_PORT`          | `3000`    | Host port the MCP server is published on                                                        |
+| `VIEWER_PORT`       | `3001`    | Host port the graph page is published on                                                        |
+| `WEB_PORT`          | `3002`    | Host port the dashboard is published on, bound to loopback                                      |
 | `TAG`               | `latest`  | Tag applied to the images built by `make build`; compose only ever runs `:latest`               |
 
 The stack is a singleton, and nothing about the codebase being indexed changes
@@ -443,9 +453,9 @@ make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> onto the stack, then index it
                  INDEX=0 skips the indexing, ALIASES=0 leaves ~/.bashrc alone
 make lint        run every pre-commit hook over every file
-make build       build both service images
+make build       build every service image
 make pull        pull the published images, discarding a local build
-make up          start postgres, mcp-server and the viewer
+make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env
                  FRESH=1 re-parses every file instead of trusting a cache
@@ -459,6 +469,7 @@ make psql        open a psql session against the context database
 make db migrate  apply every pending schema migration
 make db version  show which migrations are applied and which are pending
 make db new      write the next migration file, NAME=<slug>
+make web dev     serve the dashboard client from vite against the running stack
 make clean       remove containers, the database directory and the built images
 
 make skill-install    register the graphify skill for Claude and Gemini
@@ -515,17 +526,17 @@ make mcp help
 
 ## MCP tools
 
-| Tool                       | Arguments                                                   | Returns                                                                |
-| -------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `get_code_graph_neighbors` | `node_id`                                                   | Incoming and outgoing edges of a node, with the relation type          |
-| `search_code_nodes`        | `query`, optional `limit`                                   | Nodes whose name or id matches the substring                           |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`               | Shortest chain of relations between two nodes                          |
-| `save_node_summary`        | `node_id`, `summary`                                        | Saves or updates a summary for a specific node                         |
-| `get_node_summary`         | `node_id`                                                   | Retrieves summary, file path, and type for a node                      |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status` | Creates or updates a persistent plan; `project: "*"` makes it global   |
-| `get_plans`                | optional `project`, `status`                                | Plans of one project plus the global ones; `project: "*"` lists all    |
-| `drop_plan`                | `plan_id`                                                   | Deletes one plan outright, for one written by mistake                  |
-| `drop_project`             | `name`, optional `confirm`                                  | Reports what dropping a project costs, and drops it on `confirm: true` |
+| Tool                       | Arguments                                                           | Returns                                                                |
+| -------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `get_code_graph_neighbors` | `node_id`                                                           | Incoming and outgoing edges of a node, with the relation type          |
+| `search_code_nodes`        | `query`, optional `limit`                                           | Nodes whose name or id matches the substring                           |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                       | Shortest chain of relations between two nodes                          |
+| `save_node_summary`        | `node_id`, `summary`                                                | Saves or updates a summary for a specific node                         |
+| `get_node_summary`         | `node_id`                                                           | Retrieves summary, file path, and type for a node                      |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type` | Creates or updates a persistent plan; `project: "*"` makes it global   |
+| `get_plans`                | optional `project`, `status`, `type`                                | Plans of one project plus the global ones; `project: "*"` lists all    |
+| `drop_plan`                | `plan_id`                                                           | Deletes one plan outright, for one written by mistake                  |
+| `drop_project`             | `name`, optional `confirm`                                          | Reports what dropping a project costs, and drops it on `confirm: true` |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
@@ -556,6 +567,46 @@ free-text tag. That has three consequences worth knowing:
 - `save_plan` with `project: "*"` stores a plan that belongs to no project and
   is listed under all of them - the right home for a procedure that is run on
   demand rather than finished once.
+
+`type` is the other axis, and it is not a status. `status` says where a plan
+stands - `active`, `completed`, `archived` - while `type` says what the record
+is: `plan` for work executed once, `template` for a form to copy, `procedure`
+for a routine run on demand. They were one column until migration 0003, which is
+why a template used to be a status and could therefore never be completed.
+
+Two consequences: `get_plans` defaults to `type: "plan"`, so a procedure never
+turns up where an agent reads approved pending work, and `type: "*"` is how to
+see every kind. And re-saving a plan without naming a `type` resets it to
+`plan`, exactly as it already resets `status` to `active` - `save_plan` writes a
+whole row, it does not patch one.
+
+## Web interface
+
+`make up` publishes a dashboard on <http://127.0.0.1:3002>, bound to loopback
+because it is the only service here that writes to the database on behalf of a
+browser and it carries no authentication of its own. Three views:
+
+- **Projects** - what is indexed, where it came from, how many nodes, edges,
+  files and plans each holds, and how old the index is. A project last indexed
+  more than a week ago says so in amber; one that was never indexed says that
+  instead of showing a date.
+- **A project** - four tabs. _overview_ counts what the graph holds and lists
+  the node types as chips that open a filtered node list. _graph_ is the
+  viewer's page, proxied through this service so the frame shares the page's
+  origin; above 5,000 nodes it states the size and waits for a click, because
+  the viewer draws the whole graph in one request. _nodes_ searches names and
+  ids and opens one node with its summary, its metadata, its neighbours and,
+  on request, its stored source. _files_ lists the file nodes, with how many
+  entities each carries and whether a hash was recorded for it.
+- **Plans** - every plan in the database, including the global ones and the
+  ones tagged with a codebase nothing has indexed, filtered by project, status,
+  type or a search over titles and bodies. A plan opens as rendered markdown
+  and edits in place; the status can be changed from the list.
+
+What it can change: plans, and dropping a project. A drop is reported before it
+happens - what one `make index` would rebuild, what nothing rebuilds, and that
+the plans tagged with the name survive - and then asks for the project name to
+be typed. Re-indexing is not offered: `make index` remains the way in.
 
 ## Backup and restore
 
@@ -655,6 +706,11 @@ directory on the next `make up`.
   `(source, target, relation)`
 - `code_embeddings` - `vector(1536)` chunks with an HNSW cosine index, not
   populated yet (see `ROADMAP.md`)
+- `plans` - one row per plan, keyed on an id unique across the database, with
+  `project` as a free-text tag, plus `status` and `type`
+
+A single-project backup taken before migration 0003 carries no `type` column;
+restoring it is fine, and the rows come back as `plan`.
 
 ## Development
 
@@ -694,6 +750,10 @@ The eslint and `tsc` hook runs `scripts/mcp-check.sh`, which uses
 `eslint.config.mjs` imports its plugins and ESM resolves those relative to the
 config file. `make init` installs them; `make mcp deps` does it on its own.
 
+`scripts/web-check.sh` is its sibling for the dashboard, over
+`web/node_modules`: it lints `.ts` and `.tsx` and runs both tsc projects, the
+server's and the client's. `make web deps` installs what it needs.
+
 ## Layout
 
 ```text
@@ -701,6 +761,7 @@ migrations/    numbered schema migrations and the Makefile driving goose
 graphify/      Python indexer, its image and its Makefile
   src/ctxgraph/  the indexer package, run as `python -m ctxgraph`
 mcp-server/    TypeScript MCP server, its image and its Makefile
+web/           the dashboard: JSON API, React client, its image and its Makefile
 skills/        the agent skill, rendered into place by `make skill-install`
 templates/     the CLAUDE.local.md an onboarded codebase gets
 scripts/       helper scripts: onboarding, backup, restore, pre-commit

@@ -54,7 +54,11 @@ behind it.
    session can execute it without this conversation. The `plan_id` is unique
    across the whole database, so make it name the topic rather than repeat a
    generic word. A procedure that belongs to no single repository is saved with
-   `project: "*"`.
+   `project: "*"`. A record that is run on demand rather than finished once is
+   saved with `type: "template"` (or `"procedure"`), not with a status of that
+   name: `get_plans` lists `type: "plan"` unless asked otherwise, which is what
+   keeps rule 1's active list free of procedures. Ask for `type: "*"` to see
+   every kind.
 4. **When the work has landed, retire it** by calling `save_plan` again with the
    same `plan_id` and `status: completed`. A finished plan left `active` is what
    makes rule 1 untrustworthy next time. `drop_plan` exists too, but it is for a

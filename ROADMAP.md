@@ -33,7 +33,7 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **Gap Tracking:** Persistent storage for agent-reported missing context/gaps.
 - [ ] **Shared Records (\_common):** Handle cross-project conventions, the way plans are already handled.
 - [ ] **Cross-Project Lookups:** Link relations between codebases.
-- [ ] **Web Interface:** Dashboard for plans, metadata, and graph overview.
+- [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
 
 ## Phase 4: Semantic & Advanced Intelligence
 
@@ -48,6 +48,7 @@ Adding vector context and agent memory.
 
 ## Completed Items
 
+- A dashboard on loopback port 3002: the indexed projects with their counts and how old each index is, a browsable node index with summaries and neighbours, the viewer's graph embedded through a same-origin proxy, and every plan in the database readable, filterable by project, status and the new type, and editable in place
 - Unified onboarding: one `make install` registers the `context` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.ctxkeep`/`.ctxignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists
 - Schema management: numbered goose migrations over a `schema_migrations` table, applied to the existing database by the `migrate` service before anything else reads it
 - A re-index invalidates the extractor cache (keyed by project and path, dropped with the project, forced by `make index FRESH=1`, and a run that reports its own shortfall)

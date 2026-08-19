@@ -97,6 +97,10 @@ to one. Nodes are coloured by community and sized by degree; the inspector
 panel carries the summary on the source line. Say the address; do not try to
 open a browser.
 
+The dashboard at `http://localhost:3002` embeds the same page beside the
+projects and the plans. Say that address instead when the question is about
+what is indexed or what the plans hold, rather than about one graph.
+
 ### /graphify status
 
 ```bash
@@ -175,5 +179,9 @@ of real ones, but that is a wasted turn.
   a file written at index time, so it lags until the next `@MAKE@ index`, and
   that file holds whichever project was indexed last - it has no notion of
   projects at all. The `context` server reads the database directly and does.
+- A plan carries a `type` as well as a `status`: `status` is where it stands,
+  `type` is what it is - `plan`, `template` or `procedure`. `get_plans` lists
+  `type: "plan"` unless another is named, so a procedure never appears where
+  approved pending work is read; `type: "*"` lists every kind.
 - The project mount is read only. Nothing in this skill writes to the indexed
   tree.
