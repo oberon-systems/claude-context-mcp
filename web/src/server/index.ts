@@ -7,6 +7,7 @@ import { dbPool } from "./db.js";
 import { makeGuard } from "./guard.js";
 import { proxyViewer, VIEWER_ROUTES } from "./proxy.js";
 import { nodesRouter } from "./routes/nodes.js";
+import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
 
 const PORT = Number(process.env.PORT ?? 3002);
@@ -33,6 +34,7 @@ api.get(
 
 api.use(projectsRouter);
 api.use(nodesRouter);
+api.use(plansRouter);
 
 api.use((_req, res) => {
   res.status(404).json({ error: "No such endpoint" });
