@@ -19,18 +19,7 @@ content hash is unchanged and prunes what a deleted file left behind.
 
 What follows is deliberately deferred work, ranked from simple to complex.
 
-## 1. Move the database out of the working tree
-
-`DATA_DIR` defaults to `./pgdata`, which puts the database inside the checkout.
-Default it outside instead, `$XDG_DATA_HOME/claude-context-mcp/pgdata` or
-similar, and keep the in-tree path only as an explicit choice. This prevents
-accidental data loss via `git clean -xfd`.
-
-The password should move with the data. `postgres` publishes no port and is
-reachable only on the compose network, so a fixed default
-(`POSTGRES_PASSWORD=context` in `.env.example`) is sufficient.
-`make status` should be improved to distinguish between "stack is down" and
-authentication failures, providing clear recovery paths (`make clean` or `ALTER USER`).
+## 1. Move the database out of the working tree [COMPLETED]
 
 ## 2. Use public registry for built images
 
