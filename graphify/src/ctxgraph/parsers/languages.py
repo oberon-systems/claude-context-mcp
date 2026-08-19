@@ -558,24 +558,30 @@ class JsonParser(CodeParser):
 class PuppetParser(CodeParser):
     """Puppet manifest AST parser.
 
-    Two things the query pair cannot express on its own, so both are handled
-    in the overrides below: a resource is named after two of its fields rather
-    than a single captured node, and a template reference is the only Puppet
-    relation whose target is a path instead of a symbol.
+    Three things the query pair cannot express on its own, so all of them are
+    handled in the overrides below: a resource is named after two of its fields
+    rather than a single captured node, a template reference is the only Puppet
+    relation whose target is a path instead of a symbol, and `class_identifier`
+    is one node type serving three unrelated jobs - a declaration's name, a
+    resource's type, and a qualified variable read - which only the surrounding
+    nodes tell apart.
     """
 
     FAMILY = "puppet"
+    # A single-segment Puppet name is a plain `identifier` node; only a
+    # qualified name is a `class_identifier`. Both must be listed or
+    # `class package_repo` is lost as an entity.
     ENTITY_QUERY = """
-        (class_definition (class_identifier) @class)
-        (defined_resource_type (class_identifier) @define)
+        (class_definition [(class_identifier) (identifier)] @class)
+        (defined_resource_type [(class_identifier) (identifier)] @define)
         (node_definition (node_name) @node)
-        (function_declaration (class_identifier) @function)
+        (function_declaration [(class_identifier) (identifier)] @function)
     """
     # `include stdlib` yields a bare identifier while `include a::b` yields a
     # class_identifier, so both alternatives have to be listed or every
     # reference to an unqualified class is lost.
     RELATION_QUERY = """
-        (class_inherits (class_identifier) @inherits)
+        (class_inherits [(class_identifier) (identifier)] @inherits)
         (include_statement [(class_identifier) (identifier)] @includes)
         (require_statement [(class_identifier) (identifier)] @requires)
     """
@@ -587,10 +593,16 @@ class PuppetParser(CodeParser):
         (attribute) @attribute
         (relation) @relation
         (function_call) @call
+        (class_identifier) @scoped
     """
     # `require =>` and `notify =>` are the ordering metaparameters worth an
     # edge; the rest of an attribute list is configuration data.
     ATTRIBUTE_RELATIONS = {"require": "requires", "notify": "notifies"}
+    # `$a::b` and `"${a::b}"` put the qualified name under one of these, which
+    # is what tells a variable read apart from the same node type used for a
+    # declaration or a resource type. The top scope form `$::a::b` is parented
+    # by whatever consumes it and is recognised by its own sigil instead.
+    SCOPED_READ_PARENTS = frozenset({"variable", "interpolation"})
     # The functions that render a template, in either template language.
     TEMPLATE_FUNCTIONS = frozenset({"epp", "template"})
 
@@ -633,6 +645,54 @@ class PuppetParser(CodeParser):
             if child.type == "string":
                 return strip_literal(node_text(child))
         return ""
+
+    def scoped_variable_class(self, node: Node) -> str:
+        """Name the class a qualified variable reference reads a parameter of.
+
+        `$::package_repo::user` and `$package_repo::base_dir` both read a
+        parameter of class `package_repo`, and `$profile::web::port` reads one
+        of `profile::web`: the last segment is the variable, everything before
+        it is the class. A single segment therefore names no class at all,
+        which is what `$::osfamily` and the other top scope facts are.
+
+        The segments come from the child nodes rather than from splitting the
+        text, because the text of the top scope form keeps its `$::` prefix and
+        would leave that on the first segment.
+        """
+        if not (
+            node_text(node).startswith("$")
+            or (
+                node.parent is not None and node.parent.type in self.SCOPED_READ_PARENTS
+            )
+        ):
+            return ""
+        segments = [
+            node_text(child)
+            for child in node.named_children
+            if child.type == "identifier"
+        ]
+        if len(segments) < 2:
+            return ""
+        return "::".join(segments[:-1])
+
+    def declared_resource_type(self, node: Node) -> str:
+        """Name the defined type a resource declaration instantiates.
+
+        `accounts::user { 'repo': }` is an instance of `define accounts::user`,
+        so the whole qualified name is the target and nothing is stripped off
+        it. A built-in type is a bare `identifier` and never reaches here,
+        which leaves exactly the module defined types.
+
+        Compared by equality rather than identity: tree-sitter hands out a
+        fresh wrapper object for the same underlying node, so `is` would fail
+        on a node that is in fact the type field.
+        """
+        parent = node.parent
+        if parent is None or parent.type != "resource_declaration":
+            return ""
+        if parent.child_by_field_name("type") != node:
+            return ""
+        return node_text(node)
 
     def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
         """Return the declarations and the resources a manifest holds."""
@@ -688,6 +748,18 @@ class PuppetParser(CodeParser):
             argument = self.template_argument(node)
             if argument:
                 templates.append(argument)
+
+        # One capture, two edges: every `::` joined name in the manifest arrives
+        # here, including the declarations and whatever a line the grammar
+        # cannot parse leaves behind, so each edge admits only the shapes it
+        # recognises rather than excluding the ones it does not.
+        for node in captures.get("scoped", []):
+            owner = self.scoped_variable_class(node)
+            if owner:
+                pairs.append((owner, "reads_var"))
+            declared = self.declared_resource_type(node)
+            if declared:
+                pairs.append((declared, "references"))
 
         relations = [
             {"target": entry["name"], "type": entry["type"], "scope": "symbol"}
