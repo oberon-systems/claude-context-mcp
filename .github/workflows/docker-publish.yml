@@ -1,0 +1,46 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build"
+        required: true
+        default: "v0.1.0"
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push graphify
+        uses: docker/build-push-action@v5
+        with:
+          context: ./graphify
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/graphify:${{ inputs.tag || github.ref_name }}
+
+      - name: Build and push mcp-server
+        uses: docker/build-push-action@v5
+        with:
+          context: ./mcp-server
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}/mcp-server:${{ inputs.tag || github.ref_name }}
