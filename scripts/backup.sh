@@ -195,9 +195,9 @@ COPY (SELECT project, node_id, content_chunk, embedding, created_at
 
 -- A global plan has no project and belongs in no single-project file; it
 -- travels in the whole-database archive instead.
-\qecho 'COPY plans (id, project, title, content, status, metadata,'
+\qecho 'COPY plans (id, project, title, content, status, type, metadata,'
 \qecho '            created_at, updated_at) FROM stdin;'
-COPY (SELECT id, project, title, content, status, metadata, created_at,
+COPY (SELECT id, project, title, content, status, type, metadata, created_at,
              updated_at
         FROM plans WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
