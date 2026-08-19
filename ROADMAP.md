@@ -41,13 +41,13 @@ Adding vector context and agent memory.
 
 - [ ] **Lexical Search:** Add GIN/trigram index for literal content search (`grep` over the graph).
 - [ ] **Semantic Search:** Implement vector embedding generation and HNSW search.
-- [ ] **Index-Time Summarization:** Generate node summaries using a small local LLM.
 - [ ] **Agent Memory:** Persistent store for project-wide conventions and knowledge.
 
 ---
 
 ## Completed Items
 
+- Model summaries: `make summarize` describes every file node of both halves of the tree with a local GGUF model (SmolLM2-1.7B-Instruct Q4_K_M) reading the head of the file - a resumable pass of its own rather than part of indexing, since it costs seconds per file - cached by content hash in `summary_cache`, marked `summary_source: llm` so a re-index keeps it, and capped by the cpu and memory limits on the indexer container. Entity nodes still carry no summary of their own
 - A dashboard on loopback port 3002: the indexed projects with their counts and how old each index is, a browsable node index with summaries and neighbours, the viewer's graph embedded through a same-origin proxy, and every plan in the database readable, filterable by project, status and the new type, and editable in place
 - Unified onboarding: one `make install` registers the `context` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.ctxkeep`/`.ctxignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists
 - Schema management: numbered goose migrations over a `schema_migrations` table, applied to the existing database by the `migrate` service before anything else reads it

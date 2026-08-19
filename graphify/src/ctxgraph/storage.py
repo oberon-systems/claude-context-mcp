@@ -330,6 +330,76 @@ def get_file_hash(cursor: Cursor, project: str, rel_path: str) -> str | None:
     return result[0] if result else None
 
 
+def save_llm_summary(cursor: Cursor, project: str, rel_path: str, summary: str) -> bool:
+    """Replace a generated summary with the model's. Returns whether it was.
+
+    A summary written through `save_node_summary` is marked manual and is not
+    touched. Everything else is, which is what lets the backfill improve a
+    summary a plain index run wrote from the head of the file.
+    """
+    cursor.execute(
+        """
+        UPDATE graph_nodes
+           SET summary = %s,
+               metadata = metadata || '{"summary_source": "llm"}'::JSONB
+         WHERE project = %s AND id = %s
+           AND COALESCE(metadata ->> 'summary_source', 'auto') <> 'manual';
+        """,
+        (summary, project, truncate(rel_path, MAX_NODE_ID_LENGTH)),
+    )
+    return cursor.rowcount > 0
+
+
+def list_files_without_llm_summary(
+    cursor: Cursor, project: str, refresh: bool = False
+) -> list[str]:
+    """List the file nodes no model has described yet.
+
+    `refresh` widens it to every file node the model may write to, which is
+    all of them but the ones a human wrote through `save_node_summary`.
+    """
+    cursor.execute(
+        """
+        SELECT file_path FROM graph_nodes
+         WHERE project = %s AND type = 'file' AND file_path IS NOT NULL
+           AND COALESCE(metadata ->> 'summary_source', 'auto')
+               = ANY(CASE WHEN %s THEN ARRAY['auto', 'llm'] ELSE ARRAY['auto'] END)
+         ORDER BY file_path;
+        """,
+        (project, refresh),
+    )
+    return [row[0] for row in cursor.fetchall()]
+
+
+def get_cached_summary(cursor: Cursor, project: str, content_hash: str) -> str | None:
+    """Retrieve the summary the model wrote for this exact text, if any."""
+    cursor.execute(
+        """
+        SELECT summary FROM summary_cache
+        WHERE project = %s AND content_hash = %s;
+        """,
+        (project, content_hash),
+    )
+    result = cursor.fetchone()
+    return result[0] if result else None
+
+
+def put_cached_summary(
+    cursor: Cursor, project: str, content_hash: str, summary: str
+) -> None:
+    """Store what the model answered, so the next run reads it instead."""
+    cursor.execute(
+        """
+        INSERT INTO summary_cache (project, content_hash, summary, updated_at)
+        VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+        ON CONFLICT (project, content_hash) DO UPDATE SET
+            summary = EXCLUDED.summary,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        (project, content_hash, summary),
+    )
+
+
 def upsert_file_hash(
     cursor: Cursor, project: str, rel_path: str, file_hash: str
 ) -> None:

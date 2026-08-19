@@ -69,10 +69,26 @@ services:
       # Set by `make index FRESH=1`: re-extract every file rather than trust
       # either cache. Named here or it would reach compose and not the job.
       FORCE_REEXTRACT: ${FORCE_REEXTRACT:-}
+      # Set by `make index SUMMARIZE=1`: describe each file with the model as
+      # the run goes. `make summarize` does the same work on its own instead.
+      SUMMARIZE: ${SUMMARIZE:-}
+      # Threads llama.cpp runs the summarizing model on. Kept at or below the
+      # cpu quota below: threads oversubscribed against a quota buy context
+      # switches, not throughput.
+      LLM_THREADS: ${LLM_THREADS:-2}
     volumes:
       # Read-only by contract: the indexer must never mutate host sources.
       - ${PROJECT_PATH}:/project:ro
       - graph-out:/app/graphify-out
+      # The summarizer weights, put there by `make llm-model-install`.
+      - ${HOME}/.local/share/context-mcp/models:/models:ro
+    # The summarizing pass is the only thing here that can take the machine
+    # with it: a 1.7B model over every file, unattended, for as long as the
+    # tree is large. The floor is the weights (~1.1 GB) plus the context
+    # window plus the extraction, so 4g is small rather than generous.
+    cpus: ${GRAPHIFY_CPUS:-2}
+    mem_limit: ${GRAPHIFY_MEM:-4g}
+    mem_reservation: ${GRAPHIFY_MEM_RESERVATION:-1g}
     networks: [base]
     profiles: [index]
     depends_on:

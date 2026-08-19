@@ -138,3 +138,31 @@ SUMMARY_SCAN_LINES = 40
 MAX_SUMMARY_LENGTH = 300
 # How many declared names a fallback summary lists before it says "+N more".
 SUMMARY_ENTITY_LIMIT = 8
+
+# Whether an index run also writes model summaries. Off by default: a first
+# index of a large tree would spend hours in the model, and the summaries the
+# parsers write are there immediately. `make index SUMMARIZE=1` turns it on
+# for one run, and `make summarize` does the same work afterwards instead.
+SUMMARIZE = os.getenv("SUMMARIZE", "").strip().lower() not in {
+    "",
+    "0",
+    "false",
+    "no",
+}
+# Where the GGUF weights the summarizer loads are mounted. `make
+# llm-model-install` puts them under ~/.local/share/context-mcp/models on the
+# host, and docker-compose mounts that directory read-only at /models.
+LLM_MODEL_PATH = os.getenv(
+    "LLM_MODEL_PATH", "/models/smollm2-1.7b-instruct.Q4_K_M.gguf"
+)
+# Kept at or below the cpu quota the container runs under: llama.cpp threads
+# oversubscribed against a quota buy context switches, not throughput.
+LLM_THREADS = int(os.getenv("LLM_THREADS", "2"))
+LLM_CTX = int(os.getenv("LLM_CTX", "2048"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "64"))
+# The prompt is clamped to this many characters, so a file can never overflow
+# the context window. It is also the setting that decides how long the pass
+# takes: reading the prompt is most of the work on a CPU, and the answer is
+# 64 tokens whatever the input was. About 25 lines of code, against the 40
+# `extract_summary` reads for the same purpose.
+LLM_INPUT_CHARS = int(os.getenv("LLM_INPUT_CHARS", "2000"))

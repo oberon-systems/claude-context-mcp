@@ -39,17 +39,17 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
-	logs ps status index reindex unindex backup restore psql clean skill-install \
-	skill-uninstall skill-status $(SUBS)
+	logs ps status index reindex summarize unindex backup restore psql clean \
+	skill-install skill-uninstall skill-status llm-model-install $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init install shell lint check build pull up down restart logs ps \
-	status index reindex unindex backup restore psql clean graphify mcp db web \
-	skill-install skill-uninstall skill-status require-venv require-env \
-	require-not-root
+	status index reindex summarize unindex backup restore psql clean graphify \
+	mcp db web skill-install skill-uninstall skill-status llm-model-install \
+	require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
 	@echo "$(NAME) $(VERSION)"
@@ -235,6 +235,11 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 PROJECT ?=
 PROJECT_NAME ?=
 FRESH ?=
+# SUMMARIZE=1 has the index run write model summaries as it goes. Off by
+# default because it costs seconds per file: `make summarize` is the same work
+# without holding up the graph.
+SUMMARIZE ?=
+BG ?=
 FILE ?=
 # Backups rotate by default: a target that only ever grows is a target nobody
 # prunes. KEEP= empty turns it off for one run and keeps everything.
@@ -246,7 +251,20 @@ index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(if $(FRESH),FORCE_REEXTRACT=1) \
+		$(if $(SUMMARIZE),SUMMARIZE=1) \
 		$(COMPOSE) --profile index run --rm graphify
+
+# The slow half of indexing, on its own: the model describes the files whose
+# summary still comes from the head of the file, and marks each one as its
+# own. It commits per file, so an interrupted run keeps what it wrote and the
+# next one starts from what is left. FRESH=1 re-describes everything instead,
+# cache included; BG=1 detaches, for the hours a large tree takes.
+summarize: require-env  ## Summarize PROJECT with the model (BG=1 detaches)
+	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
+		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
+		$(if $(FRESH),FORCE_REEXTRACT=1) \
+		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
+		graphify python -m ctxgraph.summarize
 
 # The named form of `index FRESH=1`: distrust both caches - the extractor's
 # per-file one and the file_hashes table - and parse every selected file again.
@@ -265,6 +283,25 @@ reindex: require-env  ## Re-index PROJECT, trusting neither cache
 unindex: require-env  ## Drop PROJECT= or PROJECT_NAME= from the database
 	@COMPOSE='$(COMPOSE)' UNINDEX_PATH='$(INDEXED)' \
 		UNINDEX_NAME='$(PROJECT_NAME)' FORCE='$(FORCE)' scripts/unindex.sh
+
+# The weights the indexer summarizes with. Mounted read-only at /models by
+# compose, so the path below is the host half of that mount.
+MODEL_DIR := $(HOME)/.local/share/context-mcp/models
+MODEL_URL := https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf
+MODEL_FILE := $(MODEL_DIR)/smollm2-1.7b-instruct.Q4_K_M.gguf
+
+# Downloaded beside the target name and moved into place only once it is a
+# GGUF file: without `-f` curl saves the error page under the model's name and
+# exits 0, and llama.cpp is then the one to report it, a run later.
+llm-model-install:  ## Download the summarizer weights (FORCE=1 re-downloads)
+	@test -z '$(FORCE)' && test -s '$(MODEL_FILE)' \
+		&& echo "model: kept ($(MODEL_FILE))" && exit 0; \
+	mkdir -p '$(MODEL_DIR)'; \
+	curl -fL --progress-bar '$(MODEL_URL)' -o '$(MODEL_FILE).part' || exit 1; \
+	head -c 4 '$(MODEL_FILE).part' | grep -q GGUF \
+		|| { echo "not a GGUF file, kept as $(MODEL_FILE).part" >&2; exit 1; }; \
+	mv '$(MODEL_FILE).part' '$(MODEL_FILE)'; \
+	echo "model: written to $(MODEL_FILE)"
 
 # The other maintenance pair: `backup` writes, `restore` puts back. Both take
 # the same selectors as `unindex` - nothing named means the whole database -

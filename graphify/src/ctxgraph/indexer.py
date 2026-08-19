@@ -19,11 +19,13 @@ from ctxgraph.config import (
     FORCE_REEXTRACT,
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
+    LLM_MODEL_PATH,
     MAX_NODE_ID_LENGTH,
     PROJECT_NAME,
     PROJECT_PATH,
     PROJECT_ROOT,
     SOURCE_GRAPHIFYY,
+    SUMMARIZE,
 )
 from ctxgraph.discovery import iter_source_files, read_source
 from ctxgraph.identifiers import entity_node_id, project_name, truncate
@@ -53,13 +55,15 @@ from ctxgraph.storage import (
     upsert_file_node,
 )
 from ctxgraph.summaries import extract_summary
+from ctxgraph.summarizer import Summarizer
 from graphify.extract import extract
 
 LOG = logging.getLogger(__name__)
 
-# extract_summary reads the head of a file for a title or a leading comment,
-# and nothing past it. Keeping only that much of every code file bounds the
-# memory the graphifyy pass needs on a large tree.
+# What a summary is written from, by either producer: extract_summary reads
+# the head of a file for a title or a leading comment, and the model is shown
+# no more than this either. Keeping only that much of every code file bounds
+# the memory the graphifyy pass needs on a large tree.
 SUMMARY_HEAD_LINES = 80
 # How many of the files a run left without a node it names before summarizing
 # the rest as a count.
@@ -72,7 +76,11 @@ def compute_hash(content: str) -> str:
 
 
 def index_file(
-    cursor: Cursor, project: str, rel_path: str, content: str
+    cursor: Cursor,
+    project: str,
+    rel_path: str,
+    content: str,
+    summarizer: Summarizer | None = None,
 ) -> list[dict[str, str]]:
     """Store the file node and its entities. Returns the entities written."""
     parser = get_parser(rel_path)
@@ -81,6 +89,8 @@ def index_file(
     upsert_file_node(
         cursor, project, rel_path, extract_summary(rel_path, content, entities)
     )
+    if summarizer is not None:
+        summarizer.refine(cursor, project, rel_path, content)
     clear_file_artifacts(cursor, project, rel_path)
 
     for entity in entities:
@@ -180,6 +190,7 @@ def index_with_graphifyy(
     project: str,
     sources: list[tuple[str, str]],
     gaps: dict[str, str],
+    summarizer: Summarizer | None = None,
     fresh: bool = False,
 ) -> tuple[int, int]:
     """Extract the code half of the tree and store it. Returns nodes, edges.
@@ -220,7 +231,9 @@ def index_with_graphifyy(
     for _, rel_path in sources:
         clear_file_artifacts(cursor, project, rel_path)
 
-    nodes, edges, extracted = import_extraction(cursor, project, extraction, heads)
+    nodes, edges, extracted = import_extraction(
+        cursor, project, extraction, heads, summarizer
+    )
     for _, rel_path in sources:
         if rel_path not in extracted:
             gaps[rel_path] = unread.get(rel_path, "extractor returned nothing")
@@ -251,6 +264,11 @@ def scan_and_build_graph() -> None:
         raise RuntimeError(f"{PROJECT_PATH} is not a directory")
 
     project, root_path = resolve_project()
+    # Only when asked for. Loading the weights costs a gigabyte and seconds
+    # per file after that, so an index run is the fast producer by default and
+    # `make summarize` is where the model earns its time. Before the database
+    # either way, so missing weights stop the run in one line.
+    summarizer = Summarizer(LLM_MODEL_PATH, FORCE_REEXTRACT) if SUMMARIZE else None
 
     conn = get_db_connection()
     try:
@@ -293,7 +311,7 @@ def scan_and_build_graph() -> None:
         with conn.cursor() as cursor:
             try:
                 nodes, edges = index_with_graphifyy(
-                    cursor, project, code_sources, gaps, FORCE_REEXTRACT
+                    cursor, project, code_sources, gaps, summarizer, FORCE_REEXTRACT
                 )
                 conn.commit()
                 LOG.info("graphifyy: %d nodes, %d edges", nodes, edges)
@@ -332,7 +350,9 @@ def scan_and_build_graph() -> None:
                 else:
                     # Re-parse file
                     try:
-                        entities = index_file(cursor, project, rel_path, content)
+                        entities = index_file(
+                            cursor, project, rel_path, content, summarizer
+                        )
                         upsert_file_hash(cursor, project, rel_path, file_hash)
                     except Exception:
                         conn.rollback()
@@ -412,6 +432,8 @@ def scan_and_build_graph() -> None:
             pruned,
             failures,
         )
+        if summarizer is not None:
+            LOG.info("Summaries: %s", summarizer.report())
         if gaps:
             LOG.warning("%d selected files produced no node:", len(gaps))
             for rel_path, reason in sorted(gaps.items())[:GAP_REPORT_LIMIT]:
@@ -419,4 +441,6 @@ def scan_and_build_graph() -> None:
             if len(gaps) > GAP_REPORT_LIMIT:
                 LOG.warning("  ... and %d more", len(gaps) - GAP_REPORT_LIMIT)
     finally:
+        if summarizer is not None:
+            summarizer.close()
         conn.close()

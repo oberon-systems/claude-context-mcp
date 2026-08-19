@@ -19,7 +19,7 @@ PROJECT_PATH ?= $(REPO_ROOT)
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build rebuild run shell lint clean
+.PHONY: help build rebuild run shell lint test clean
 
 help:
 	@echo "Image: $(REF)"
@@ -30,6 +30,7 @@ help:
 	@echo "  run       Run the indexer against PROJECT_PATH (needs a reachable database)"
 	@echo "  shell     Open a shell inside the image"
 	@echo "  lint      Run ruff over the Python sources"
+	@echo "  test      Run the unit tests (pip install -r requirements-dev.txt)"
 	@echo "  clean     Remove the built image"
 
 build:
@@ -60,6 +61,15 @@ lint:
 		$(REPO_ROOT)/.venv/bin/ruff check .; \
 	else \
 		$(PYTHON) -m ruff check .; \
+	fi
+
+# The suite mocks the model, so it needs neither the weights nor a llama.cpp
+# build - see tests/conftest.py.
+test:
+	@if [ -x $(REPO_ROOT)/.venv/bin/pytest ]; then \
+		$(REPO_ROOT)/.venv/bin/pytest -q; \
+	else \
+		$(PYTHON) -m pytest -q; \
 	fi
 
 clean:

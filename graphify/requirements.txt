@@ -10,6 +10,9 @@ graphifyy[mcp]==0.1.14
 # a decorator the MCP SDK dropped in 2.0. Its own `mcp` extra is unpinned, so
 # the ceiling has to be set here or the server dies on import.
 mcp<2
+# Summaries are written at index time by a local GGUF model. PyPI carries this
+# one as an sdist; the Dockerfile builds it in a stage of its own.
+llama-cpp-python==0.3.7
 pathspec==1.1.1
 psycopg2-binary==2.9.12
 # Ansible structure lives in the YAML values, not in the tree-sitter tree.

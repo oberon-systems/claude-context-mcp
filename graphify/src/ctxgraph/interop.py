@@ -43,6 +43,7 @@ from ctxgraph.storage import (
     upsert_file_node,
 )
 from ctxgraph.summaries import extract_summary
+from ctxgraph.summarizer import Summarizer
 from graphify import cache as extractor_cache
 from graphify import extract as extractor_extract
 from graphify.cluster import cluster
@@ -195,6 +196,7 @@ def import_extraction(
     project: str,
     extraction: dict[str, list[dict[str, str]]],
     contents: dict[str, str],
+    summarizer: Summarizer | None = None,
 ) -> tuple[int, int, set[str]]:
     """Store one graphifyy extraction.
 
@@ -202,9 +204,11 @@ def import_extraction(
     written for - which is what tells a run whose extraction came back short
     from a clean one.
 
-    `contents` maps a project relative path to the text of that file, which is
-    what `extract_summary` needs: graphifyy writes no summary of its own, and
-    a graph of bare labels sends the agent back to opening files one by one.
+    `contents` maps a project relative path to the head of that file, which is
+    what the summary is written from: graphifyy writes no summary of its own,
+    and a graph of bare labels sends the agent back to opening files one by
+    one. The head, not the whole file - it is what bounds both the memory of
+    this pass and the prompt the model is given.
     """
     nodes = extraction.get("nodes", [])
     edges = extraction.get("edges", [])
@@ -247,6 +251,10 @@ def import_extraction(
             upsert_file_node(
                 cursor, project, source_file, summary, source=SOURCE_GRAPHIFYY
             )
+            if summarizer is not None:
+                summarizer.refine(
+                    cursor, project, source_file, contents.get(source_file, "")
+                )
             files.add(source_file)
         else:
             upsert_extracted_node(

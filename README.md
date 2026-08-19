@@ -72,6 +72,8 @@ all, while `mcp-server` reads the database directly and does.
 - Docker with the Compose plugin
 - Python 3.11+ (only for the pre-commit toolchain in `make init`)
 - Node.js 20+ (only for `make mcp lint` / `typecheck` outside Docker)
+- for the optional model summaries only: ~1 GB of disk and 4 GB of memory,
+  downloaded by `make llm-model-install` and mounted read-only at `/models`
 
 ## Quick start
 
@@ -463,6 +465,9 @@ make index       index PROJECT=<path>, or PROJECT_PATH from .env
                  FRESH=1 re-parses every file instead of trusting a cache
 make reindex     index PROJECT=<path> again, trusting neither cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
+make summarize   describe PROJECT's files with the model (BG=1 detaches)
+make llm-model-install
+                 download the summarizer weights (FORCE=1 re-downloads)
 make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
                  KEEP=<n> keeps the n newest backups of that kind, 7 by default
 make restore     put FILE=<path> back, over the database or over one project
@@ -546,11 +551,45 @@ rather than tearing down the client session.
 
 ### Automatic Summarization
 
-Indexing generates a summary for every file from its leading docstring, comment
-block or first heading, and stores it on the file node in `graph_nodes`. A
-summary written through `save_node_summary` is tagged `summary_source: manual`
-in the node metadata, and re-indexing leaves those alone; generated summaries
-are refreshed on every run.
+Indexing writes a summary for every file node in `graph_nodes` from its leading
+docstring, comment block or first heading. That is the fast producer and it is
+what a plain `make index` does, for both halves of the tree.
+
+A local GGUF model (SmolLM2-1.7B-Instruct, Q4_K_M) writes better ones, and it
+is slow: seconds per file, so a first index of a large tree would spend hours
+in it. It therefore runs as a pass of its own, after the graph exists:
+
+```bash
+make llm-model-install               # once: ~1 GB of weights
+make summarize PROJECT=$(pwd)        # describe what has no model summary yet
+make summarize PROJECT=$(pwd) BG=1   # the same, detached, for a large tree
+```
+
+The pass commits per file and only visits files whose summary still comes from
+the head of the file, so it can be stopped and started again without repeating
+itself; `FRESH=1` re-describes everything instead. `make index SUMMARIZE=1`
+does the same work inline for a tree small enough to wait for.
+
+Every answer is cached in `summary_cache`, keyed by the hash of the text the
+model was shown, so a re-index pays for the files that changed and looks up the
+rest. The cache belongs to the project and goes with it on `make unindex`.
+
+The container is capped while it runs: `GRAPHIFY_CPUS` and `GRAPHIFY_MEM` in
+`.env` (2 cpus and 4g by default), with `LLM_THREADS` at or below the cpu
+count, and the weights are released as soon as the pass ends. The cpu count is
+also the throughput: on this repository the pass measured ~45 s per file at the
+default 2, and ~13 s per file at 8. Budget accordingly before pointing it at a
+large tree - it is per file, and it is why the pass detaches.
+
+Expect it to decline some files: a 1.7B model reading the head of a changelog
+or a compose file tends to answer with the file name, and an answer that says
+no more than the node id is rejected rather than stored. Those keep the
+head-of-file summary and are reported as failures in the closing line.
+
+Node metadata records which of the three wrote the summary in `summary_source`:
+`auto` for the head of the file, `llm` for the model, `manual` for one written
+through `save_node_summary`. A manual summary is never overwritten, and a model
+summary survives a re-index rather than being replaced by the fast one.
 
 ### Persistent Project Planning
 

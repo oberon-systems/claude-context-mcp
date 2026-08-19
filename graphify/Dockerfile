@@ -1,3 +1,34 @@
+# Two stages for one dependency. Every other pinned package ships a manylinux
+# wheel - the tree-sitter grammars carry their compiled parser, psycopg2-binary
+# links libpq statically - but llama-cpp-python is published to PyPI as a
+# source distribution and compiles llama.cpp. The compiler stays in the builder
+# so the image that runs is the one without it.
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Unpinned on purpose: none of these survives into the image that runs, so a
+# pin would only make the build fail the day the base image moves. git is not
+# optional despite nothing being cloned: llama.cpp's CMake looks it up with
+# find_program(... REQUIRED) to stamp the build info.
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends cmake build-essential git \
+    && rm -rf /var/lib/apt/lists/*
+
+# GGML_NATIVE=OFF matters most: the default bakes this host's instruction set
+# into the image, which then crashes on an older CPU. BLAS and CUDA are off
+# because the indexer summarizes short heads on the CPU it was given.
+ENV CMAKE_ARGS="-DGGML_NATIVE=OFF -DGGML_BLAS=OFF -DGGML_CUDA=OFF"
+
+COPY requirements.txt .
+# The extra index carries prebuilt CPU wheels of llama-cpp-python. When it has
+# none for this interpreter, pip falls back to the sdist and the toolchain
+# above builds it.
+RUN pip wheel --no-cache-dir --wheel-dir /wheels \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu \
+    -r requirements.txt
+
 FROM python:3.11-slim
 
 # Unbuffered so `docker compose logs` shows progress while the job is running.
@@ -11,12 +42,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Every pinned dependency ships a manylinux wheel: the tree-sitter grammars
-# carry their compiled parser, and psycopg2-binary links libpq statically. No
-# apt layer and no compiler are needed, which keeps the image around 250 MB
-# smaller.
+# The compiled llama.cpp links against OpenMP, and the wheel does not carry it.
+# The one apt package the runtime image needs, and the reason to check
+# `import llama_cpp` after a build rather than only at index time.
+# hadolint ignore=DL3008
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY --from=builder /wheels /wheels
+RUN pip install --no-cache-dir --no-index --find-links /wheels -r requirements.txt \
+    && rm -rf /wheels
 
 # The graph page draws itself with vis-network, which upstream loads from a
 # CDN. Vendored into the image instead, so the page renders on a host with no
