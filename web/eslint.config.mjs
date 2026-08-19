@@ -20,9 +20,11 @@ export default tseslint.config(
     },
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
+      // ignoreRestSiblings covers `const { total: _total, ...rest } = row`,
+      // which is how a paged query drops its window count.
       "@typescript-eslint/no-unused-vars": [
         "error",
-        { argsIgnorePattern: "^_" },
+        { argsIgnorePattern: "^_", ignoreRestSiblings: true },
       ],
       "no-console": "off",
       eqeqeq: ["error", "always"],
