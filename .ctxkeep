@@ -3,6 +3,7 @@
 *.md
 *.sql
 *.mjs
+*.sh
 *.json
 *.yaml
 

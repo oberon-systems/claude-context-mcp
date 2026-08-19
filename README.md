@@ -103,6 +103,22 @@ Every tool then works on `api` without being told, and takes an optional
 answers a question spanning two repositories, an Ansible role and the service
 it deploys, an API and its client. `list_projects` returns what is indexed.
 
+Removing one is the same shape:
+
+```bash
+make unindex PROJECT=/home/you/work/api      # resolved by root path
+make unindex PROJECT_NAME=api                # named directly
+```
+
+It prints what the drop costs and asks before deleting anything (`FORCE=1`
+skips the prompt). The counts are printed in two halves on purpose: nodes,
+edges, file hashes and embeddings come back with one `make index`, while plans
+and manually written summaries do not come back at all. Unlike `make index`,
+this target has no default - naming nothing is an error rather than a delete of
+whatever `PROJECT_PATH` happens to point at. The `drop_project` MCP tool does
+the same from an agent, reporting first and deleting only when called again
+with `confirm: true`.
+
 Node ids are unique within a project, not across the database: `README.md` is a
 node in every one of them. Edges stay inside one project, because the indexer
 is handed a single tree and resolves every target within it.
@@ -362,6 +378,7 @@ make build       build both service images
 make up          start postgres, mcp-server and the viewer
 make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env
+make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
 make logs        follow the service logs
 make status      show whether the stack runs and whether anything uses it
 make psql        open a psql session against the context database
@@ -418,15 +435,17 @@ make mcp help
 
 ## MCP tools
 
-| Tool                       | Arguments                                        | Returns                                                       |
-| -------------------------- | ------------------------------------------------ | ------------------------------------------------------------- |
-| `get_code_graph_neighbors` | `node_id`                                        | Incoming and outgoing edges of a node, with the relation type |
-| `search_code_nodes`        | `query`, optional `limit`                        | Nodes whose name or id matches the substring                  |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`    | Shortest chain of relations between two nodes                 |
-| `save_node_summary`        | `node_id`, `summary`                             | Saves or updates a summary for a specific node                |
-| `get_node_summary`         | `node_id`                                        | Retrieves summary, file path, and type for a node             |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `status` | Creates or updates a persistent project plan                  |
-| `get_plans`                | optional `status`                                | Retrieves project plans filtered by status                    |
+| Tool                       | Arguments                                        | Returns                                                                |
+| -------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------- |
+| `get_code_graph_neighbors` | `node_id`                                        | Incoming and outgoing edges of a node, with the relation type          |
+| `search_code_nodes`        | `query`, optional `limit`                        | Nodes whose name or id matches the substring                           |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`    | Shortest chain of relations between two nodes                          |
+| `save_node_summary`        | `node_id`, `summary`                             | Saves or updates a summary for a specific node                         |
+| `get_node_summary`         | `node_id`                                        | Retrieves summary, file path, and type for a node                      |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `status` | Creates or updates a persistent project plan                           |
+| `get_plans`                | optional `status`                                | Retrieves project plans filtered by status                             |
+| `drop_plan`                | `plan_id`                                        | Deletes one plan outright, for one written by mistake                  |
+| `drop_project`             | `name`, optional `confirm`                       | Reports what dropping a project costs, and drops it on `confirm: true` |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
@@ -449,7 +468,10 @@ The system includes dedicated support for tracking project execution roadmaps. P
 data directory is empty**. After changing the schema, either apply the change by
 hand or run `make clean` to empty `DATA_DIR` and start over. That target asks
 for confirmation first, since it destroys the index; `make clean FORCE=1` skips
-the prompt for scripted use.
+the prompt for scripted use. To remove a single codebase rather than the whole
+database, use `make unindex` - everything cascades from the row in `projects`,
+so one `DELETE` there takes that project's nodes, edges, hashes, embeddings and
+plans, and nothing of any other project.
 
 `DATA_DIR` is emptied from inside the postgres service rather than from the
 host: its files belong to the container's postgres uid, so a host-side `rm`

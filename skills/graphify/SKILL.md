@@ -30,6 +30,7 @@ summaries survive a re-index and lets two agents share one graph.
 /graphify status           is the stack up, and how much is indexed
 /graphify projects         what else is indexed in the same database
 /graphify index PATH       index another codebase into the same database
+/graphify drop NAME        remove an indexed codebase from the database
 ```
 
 ## What to do when invoked
@@ -115,6 +116,24 @@ segment. This is the same command the rebuild above runs, with another path.
 The target repository needs nothing of its own - no checkout of this project
 inside it, no configuration - because the path is an argument of the job rather
 than a setting. Say which name it landed under; the log line names it.
+
+### /graphify drop NAME
+
+Call `drop_project` with the name and nothing else. It reports what the drop
+costs and deletes nothing:
+
+```json
+{ "name": "api" }
+```
+
+Read the report out. The two halves are the point: nodes, edges, file hashes
+and embeddings come back with one `@MAKE@ index`, while plans and manually
+written summaries do not come back at all. Never pass `confirm: true` on your
+own - the user says the word, or the project stays. Resolve the name with
+`list_projects` first; a wrong one is refused with the list of real ones.
+
+`@MAKE@ unindex PROJECT=/absolute/path` does the same from a shell, with a
+confirmation prompt.
 
 ## Querying a neighbouring project
 

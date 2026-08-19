@@ -25,14 +25,14 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp
 ROOT_GOALS := help init shell lint check build up down restart logs ps status \
-	index psql clean skill-install skill-uninstall skill-status $(SUBS)
+	index unindex psql clean skill-install skill-uninstall skill-status $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init shell lint check build up down restart logs ps status index \
-	psql clean graphify mcp skill-install skill-uninstall skill-status \
+	unindex psql clean graphify mcp skill-install skill-uninstall skill-status \
 	require-venv require-env require-not-root
 
 help:  ## Show the current version and the available targets
@@ -146,6 +146,15 @@ index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(COMPOSE) --profile index run --rm graphify
+
+# The other end of `index`: one project leaves the database, the rest stay.
+# Naming it is deliberate work - PROJECT= resolves through the projects table by
+# root path, PROJECT_NAME= names the row directly, and neither defaulting to
+# PROJECT_PATH is the point. A bare `make index` is convenient; a bare
+# `make unindex` would be a way to delete the wrong graph.
+unindex: require-env  ## Drop PROJECT= or PROJECT_NAME= from the database
+	@COMPOSE='$(COMPOSE)' UNINDEX_PATH='$(INDEXED)' \
+		UNINDEX_NAME='$(PROJECT_NAME)' FORCE='$(FORCE)' scripts/unindex.sh
 
 psql: require-env  ## Open a psql session against the context database
 	$(COMPOSE) exec postgres psql -U "$${POSTGRES_USER:-user}" -d "$${POSTGRES_DB:-context}"

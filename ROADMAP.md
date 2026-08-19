@@ -21,33 +21,9 @@ What follows is deliberately deferred work, ranked from simple to complex.
 
 ## 1. Move the database out of the working tree [COMPLETED]
 
-## 2. Use public registry for built images
+## 2. Use public registry for built images [COMPLETED]
 
-Users currently have to build images each time. Implement a way to pull pre-built
-images from a public registry instead of requiring local builds.
-
-## 3. Drop a project from the graph
-
-Nothing removes an indexed codebase. `make clean` empties the whole database, and
-`save_plan` can only re-status a plan, so retiring one project means hand-written
-SQL against the container: `DELETE FROM projects WHERE name = '<name>'`. That
-works only because `graph_nodes`, `project_plans`, `file_hashes` and
-`code_embeddings` all cascade from `projects`, and nothing stops a typo in the
-`WHERE` from taking a different project - or every project, when it is left off
-altogether.
-
-- `make unindex PROJECT=` / `PROJECT_NAME=`, carrying the confirmation prompt
-  `clean` already has, with `FORCE=` to skip it for scripted use.
-- A `drop_project` MCP tool for the case where the need actually shows up: a tree
-  that was renamed, moved, or absorbed into a parent repository leaves behind a
-  project answering questions about paths that no longer exist.
-- Report before deleting, and separate the derived from the hand-written. Node,
-  edge and file-hash counts cost one `make index` to rebuild; plans and manual
-  summaries (`metadata ->> 'summary_source' = 'manual'`) do not come back at all.
-  A drop that does not name those two counts is a drop taken blind.
-- `drop_plan` belongs here as well. Re-saving a plan as `completed` is right for
-  finished work and wrong for one that was moved or written by mistake, and both
-  leave a row only SQL can remove.
+## 3. Drop a project from the graph [COMPLETED]
 
 ## 4. A re-index must invalidate the extractor cache
 

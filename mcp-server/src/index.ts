@@ -65,6 +65,30 @@ const listToolsHandler = async (
         },
       },
       {
+        name: "drop_project",
+        description:
+          "Remove an indexed codebase from the database. Reports what the " +
+          "drop costs and deletes nothing unless confirm is true",
+        inputSchema: {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+              description:
+                "Name of the project to drop. Always named explicitly, never " +
+                "taken from the session, so a call cannot delete by omission",
+            },
+            confirm: {
+              type: "boolean",
+              description:
+                "Perform the delete. Absent or false, the tool only reports " +
+                "what would be lost",
+            },
+          },
+          required: ["name"],
+        },
+      },
+      {
         name: "get_code_graph_neighbors",
         description:
           "Get the related nodes and dependencies of a file or code entity",
@@ -203,6 +227,23 @@ const listToolsHandler = async (
         },
       },
       {
+        name: "drop_plan",
+        description:
+          "Delete a plan outright, for one written by mistake or moved " +
+          "elsewhere. Finished work is retired by re-saving it as completed",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project,
+            plan_id: {
+              type: "string",
+              description: "Identifier of the plan to delete",
+            },
+          },
+          required: ["plan_id"],
+        },
+      },
+      {
         name: "get_file_hash",
         description: "Get the stored MD5 hash for a file",
         inputSchema: {
@@ -337,6 +378,64 @@ async function requireProject(project: string): Promise<string> {
   return project;
 }
 
+// Counted per project rather than summed: one `make index` brings the derived
+// rows back, and nothing brings a plan or a hand-written summary back.
+const DROP_REPORT = `
+  SELECT p.root_path, p.indexed_at,
+         (SELECT count(*) FROM graph_nodes AS g
+           WHERE g.project = p.name) AS nodes,
+         (SELECT count(*) FROM graph_edges AS e
+           WHERE e.project = p.name) AS edges,
+         (SELECT count(*) FROM file_hashes AS f
+           WHERE f.project = p.name) AS hashes,
+         (SELECT count(*) FROM code_embeddings AS c
+           WHERE c.project = p.name) AS embeddings,
+         (SELECT count(*) FROM project_plans AS l
+           WHERE l.project = p.name) AS plans,
+         (SELECT count(*) FROM graph_nodes AS g
+           WHERE g.project = p.name
+             AND g.metadata ->> 'summary_source' = 'manual') AS summaries
+    FROM projects AS p
+   WHERE p.name = $1`;
+
+// count() arrives as a string: node-postgres leaves bigint alone rather than
+// losing precision in a number.
+type DropReport = {
+  root_path: string;
+  indexed_at: Date | null;
+  nodes: string;
+  edges: string;
+  hashes: string;
+  embeddings: string;
+  plans: string;
+  summaries: string;
+};
+
+/** Render a drop, before or after it happened. */
+function describeDrop(
+  project: string,
+  row: DropReport,
+  dropped: boolean,
+): string {
+  const when =
+    row.indexed_at === null
+      ? "never indexed"
+      : `indexed ${row.indexed_at.toISOString()}`;
+  const lines = [
+    `${dropped ? "dropped" : "project"} "${project}" (${row.root_path}, ${when})`,
+    `  rebuilt by one \`make index\`: ${row.nodes} nodes, ${row.edges} edges, ` +
+      `${row.hashes} file hashes, ${row.embeddings} embeddings`,
+    `  not rebuilt, gone for good: ${row.plans} plans, ` +
+      `${row.summaries} manual summaries`,
+  ];
+  if (!dropped) {
+    lines.push(
+      "Nothing was deleted. Call again with confirm: true to drop it.",
+    );
+  }
+  return lines.join("\n");
+}
+
 function makeCallToolHandler(
   sessionProject: string | null,
 ): (request: CallToolRequest) => Promise<CallToolResult> {
@@ -358,6 +457,50 @@ function makeCallToolHandler(
         return {
           content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
         };
+      }
+
+      // Handled ahead of the session default on purpose: the project to drop
+      // is the one named in the call, never the one the client connected to.
+      if (name === "drop_project") {
+        const target = await requireProject(requireString(args, "name"));
+        let confirm = false;
+        if (args !== undefined && args.confirm !== undefined) {
+          if (typeof args.confirm !== "boolean") {
+            throw new Error('Argument "confirm" must be a boolean');
+          }
+          confirm = args.confirm;
+        }
+
+        if (!confirm) {
+          const res = await dbPool.query<DropReport>(DROP_REPORT, [target]);
+          return {
+            content: [
+              { type: "text", text: describeDrop(target, res.rows[0], false) },
+            ],
+          };
+        }
+
+        // Counted and deleted on one connection inside one transaction, so the
+        // receipt cannot describe rows that were never there.
+        const client = await dbPool.connect();
+        try {
+          await client.query("BEGIN");
+          const res = await client.query<DropReport>(DROP_REPORT, [target]);
+          // graph_nodes, project_plans and file_hashes cascade from projects,
+          // graph_edges and code_embeddings from graph_nodes.
+          await client.query(`DELETE FROM projects WHERE name = $1`, [target]);
+          await client.query("COMMIT");
+          return {
+            content: [
+              { type: "text", text: describeDrop(target, res.rows[0], true) },
+            ],
+          };
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
       }
 
       const project = await requireProject(readProject(args, sessionProject));
@@ -555,6 +698,41 @@ function makeCallToolHandler(
 
         return {
           content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
+
+      if (name === "drop_plan") {
+        const planId = requireString(args, "plan_id");
+        const res = await dbPool.query<{ title: string; status: string }>(
+          `DELETE FROM project_plans
+            WHERE project = $1 AND id = $2
+        RETURNING title, status`,
+          [project, planId],
+        );
+
+        // A typo and a delete have to read differently, or the caller cannot
+        // tell which of the two just happened.
+        if (res.rowCount === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No plan "${planId}" in ${project}. Nothing was deleted.`,
+              },
+            ],
+          };
+        }
+
+        const row = res.rows[0];
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Deleted plan ${planId} of ${project}: "${row.title}", ` +
+                `status ${row.status}.`,
+            },
+          ],
         };
       }
 
