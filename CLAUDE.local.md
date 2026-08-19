@@ -187,3 +187,28 @@ the diff in isolation:
 - **Strict comment limits**:
   - Maximum length: **2 lines**.
   - Line length limit: **79 characters** per line (including indentation and comment symbols).
+
+## Commits: driving the real commitizen
+
+Every commit is made by the real binary, `.venv/bin/cz commit` - there is no `git cz`
+alias on this machine. Never `git commit -m`, never a message rendered by hand to look
+like commitizen output, and never a reflow of what it emitted, whitespace included.
+
+The adapter is `wyld_cz` (`.cz.yaml`), and it asks five questions in this order:
+
+1. `Select the type of change:` - a list in the order `fix`, `feat`, `build`, `docs`,
+   `refactor`; move down it with `\x1b[B`.
+2. `What is the scope of this change (e.g. package, tools):` - the one module or file the
+   commit is about, e.g. `PuppetParser`, `ROADMAP.md`.
+3. `Write a short description:` - the subject line.
+4. `Provide a longer description (optional):` - a single-line input, so the body is one
+   paragraph; the adapter wraps and indents it.
+5. `Link to issue (optional):` - normally empty.
+
+The result is `[<type>][<scope>]: <subject>`, which `cz check` and the commit-msg hook
+both enforce.
+
+It is interactive and needs a TTY, so drive it under `pty.fork`: strip ANSI from the
+accumulated output, wait for the prompt substring, sleep ~0.5s, write the answer plus
+`\r`, and clear the match buffer after each step. `git reset --soft HEAD~1` leaves the
+files staged when the last commit has to be made again with a corrected message.
