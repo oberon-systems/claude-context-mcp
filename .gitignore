@@ -30,6 +30,10 @@ docs/.jekyll-cache/
 /.claude/settings.local.json
 /.claude/RESUME.md
 
+# The llama.cpp release unpacked by `worker/get-llama-server.bat`: several
+# hundred MB of binaries that belong to a machine, not to the repository.
+/worker/llama-server/
+
 # The extractor's own output directory. Inside the container it is a volume;
 # this catches a copy left behind by running the extractor on the host.
 graphify-out/
