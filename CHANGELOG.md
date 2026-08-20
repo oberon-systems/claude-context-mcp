@@ -1,3 +1,31 @@
+## v0.12.0 (2026-08-20)
+
+### Features
+
+- **make**: install every skill under skills/, not only graphify
+- **core**: implement _suggestions support
+- **core**: implement repository categorization and agents memory support
+- **workerapi**: summarize a project from a machine with a GPU
+- **graphify**: pick the summarizer model with MODEL=, defaulting to Qwen2.5-Coder
+
+### Bug Fixes
+
+- **worker**: load the model before the job and say what llama.dll is missing
+- **pages**: build the site from docs/Gemfile instead of the github-pages gems
+- **worker**: pin llama-cpp-python to a version that actually has wheels
+
+### Build
+
+- **github**: added action for deploy github pages
+
+### Documentation
+
+- **ROADMAP.md**: record a reinstall target for already onboarded tools
+- **CLAUDE.md**: shrink the always-on agent instruction files
+- **docs**: restructure Pages docs and trim README to point at them
+- **pages**: fix site config
+- **pages**: added docks for github pages
+
 ## v0.11.0 (2026-08-20)
 
 ### Features
