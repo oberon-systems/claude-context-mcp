@@ -22,34 +22,45 @@ about one.
 
 ### Windows, NVIDIA
 
-From the repository root:
+Everything from a fresh checkout to a running worker. Copy the whole block,
+change the last line's address, token and project, and paste it into
+a shell in the repository root - cmd or PowerShell, both work:
 
-```powershell
+```bat
 cd worker
 py -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
+py -c "import glob,os,shutil,sysconfig;p=sysconfig.get_paths()['purelib'];[shutil.copy(f,os.path.join(p,'llama_cpp','lib')) for f in glob.glob(os.path.join(p,'nvidia','*','bin','*.dll'))]"
+py -c "import llama_cpp; print('llama_cpp ok')"
+py -m ctxworker.download
+py -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum
 ```
 
-The CUDA index matters. Installing without it gets the CPU build, the card
-sits idle, and nothing says so - check the llama.cpp banner on startup and
-confirm the layer count next to `assigned to device CUDA0` is not zero.
+If the seventh line printed `llama_cpp ok` and the last one started
+reporting files, the setup is finished and the rest of this section is
+background. If it stopped somewhere, Troubleshooting at the end names each
+failure by its message.
 
-Always use `cu124` on Windows, regardless of the exact CUDA version
-`nvidia-smi` reports: it is the only one of `abetlen`'s CUDA wheel indexes
-that currently publishes Windows wheels for a recent `llama-cpp-python`
-release - `cu121`, `cu122` and `cu123` only carry Windows wheels for much
-older releases, and installing against one of them falls back to compiling
-from source (see Troubleshooting below). CUDA is driver-backward-compatible,
-so a `cu124` wheel runs fine on a driver that only advertises an older CUDA
-version.
+What the two lines in the middle are for: the wheel carries `llama.dll` and
+`ggml-cuda.dll` but not the CUDA runtime they link against
+(`cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`), and
+`llama_cpp\lib\` is a directory its loader already searches. Installing a
+CUDA 12.x Toolkit from <https://developer.nvidia.com/cuda-downloads> is the
+other way to supply the same three DLLs - about 3 GB, needs a fresh shell,
+and survives a reinstall of `llama-cpp-python`, which the copy does not.
 
-The wheel is not the whole GPU stack. It carries `llama.dll` and
-`ggml-cuda.dll`, never the CUDA runtime those link against
-(`cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`), and the loader
-looks for that only under `%CUDA_PATH%`. So a CUDA 12.x Toolkit has to be
-installed as well, or `llama.dll` refuses to load with a message that names
-the DLL rather than what is missing - see Troubleshooting.
+The CUDA index on the fourth line matters just as much. Installing without
+it gets the CPU build, the card sits idle, and nothing says so - check the
+llama.cpp banner on startup and confirm the layer count next to
+`assigned to device CUDA0` is not zero. Always `cu124`, regardless of the
+version `nvidia-smi` reports: it is the only one of `abetlen`'s CUDA wheel
+indexes that currently publishes Windows wheels for a recent
+`llama-cpp-python` release - `cu121`, `cu122` and `cu123` only carry
+Windows wheels for much older releases, and installing against one of them
+falls back to compiling from source. CUDA is driver-backward-compatible, so
+a `cu124` wheel runs fine on a driver that advertises an older version.
 
 ### Linux
 
@@ -134,16 +145,14 @@ that was in flight. This is why a job is a lease queue and not a list.
   change it back or pick another version confirmed present at
   <https://abetlen.github.io/llama-cpp-python/whl/cu124/llama-cpp-python/>.
 - **`Failed to load shared library ... llama.dll`** - the message ends
-  with "or one of its dependencies", and that is almost always what it is,
-  rather than `llama.dll` itself: the CUDA runtime is missing. Run
-  `dir .venv\Lib\site-packages\llama_cpp\lib` to tell the two apart. If
-  `llama.dll` is there, install a CUDA 12.x Toolkit (that is what sets
-  `CUDA_PATH`), or `pip install nvidia-cublas-cu12 nvidia-cuda-runtime-cu12`
-  and copy `cudart64_12.dll`, `cublas64_12.dll` and `cublasLt64_12.dll` into
-  that same `llama_cpp\lib\` directory, which is already on the DLL search
-  path. If `llama.dll` is absent and the directory holds `libllama.so`, the
-  installed wheel is for another platform - reinstall it from the `cu124`
-  index above. The worker prints this diagnosis itself on startup.
+  with "or one of its dependencies", and that is what it is: the CUDA
+  runtime, not `llama.dll` itself. Run the two-line recipe in the Windows
+  install section above (the two NVIDIA lines), or install a
+  CUDA 12.x Toolkit, then check with `py -c "import llama_cpp"`.
+  If instead `dir .venv\Lib\site-packages\llama_cpp\lib` shows no
+  `llama.dll` at all - `libllama.so`, say - the installed wheel is for
+  another platform, and the fix is to reinstall it from the `cu124` index.
+  The worker prints whichever of the two applies when it starts.
 - **`Could not open requirements file`** - the install commands above must
   be run from the `worker/` directory, not the repository root; `cd worker`
   first.

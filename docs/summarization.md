@@ -81,12 +81,23 @@ directory over, or clone the whole repository and `cd worker`.
 
 **Windows:**
 
-```powershell
+```bat
 cd worker
 py -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
+py -c "import glob,os,shutil,sysconfig;p=sysconfig.get_paths()['purelib'];[shutil.copy(f,os.path.join(p,'llama_cpp','lib')) for f in glob.glob(os.path.join(p,'nvidia','*','bin','*.dll'))]"
+py -c "import llama_cpp; print('llama_cpp ok')"
+py -m ctxworker.download
+py -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum
 ```
+
+That is the whole setup: `llama_cpp ok` and then a worker reporting files.
+The `nvidia-` install and the copy after it are not optional - the wheel carries
+`llama.dll` and `ggml-cuda.dll` but not the CUDA runtime they link against,
+and `llama_cpp\lib\` is where its loader looks. Installing a CUDA 12.x
+Toolkit instead supplies the same DLLs.
 
 Use the `cu124` index. It's the only one of `abetlen`'s CUDA indexes that
 currently publishes Windows wheels for a recent `llama-cpp-python` release -
@@ -95,14 +106,6 @@ CUDA is driver-backward-compatible, so `cu124` works regardless of which
 exact CUDA version `nvidia-smi` reports, as long as the driver is
 reasonably current.
 
-A CUDA 12.x Toolkit has to be installed as well. The wheel carries
-`llama.dll` and `ggml-cuda.dll` but not the CUDA runtime they link against
-(`cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`), and the loader
-looks for that only under `%CUDA_PATH%`. Without it the worker exits at
-startup with `Failed to load shared library ... llama.dll`, naming the DLL
-rather than what is actually missing - it now prints the remedy, and
-`worker/README.md` has the long form.
-
 **Linux:**
 
 ```bash
@@ -110,6 +113,9 @@ cd worker
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+python -c "import llama_cpp; print('llama_cpp ok')"
+python -m ctxworker.download
+python -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum
 ```
 
 Without a GPU, drop `--extra-index-url` and pass `--gpu-layers 0` when
@@ -124,12 +130,8 @@ Build Tools, "Desktop development with C++") and a matching CUDA Toolkit -
 avoidable by keeping the version pin on a release that actually publishes a
 wheel for `cu124`/win_amd64 (see `worker/requirements.txt`).
 
-Then, get the weights and run it:
-
-```bash
-py -m ctxworker.download                     # once
-py -m ctxworker --api http://192.168.1.10:3003 --project kurum
-```
+`WORKER_API_TOKEN` in the stack's `.env` is the token those last lines
+want, and the project is one of the names `make status` lists.
 
 Full flag reference, model catalogue and troubleshooting live in
 [`worker/README.md`](https://github.com/oberon-systems/claude-context-mcp/blob/main/worker/README.md).
