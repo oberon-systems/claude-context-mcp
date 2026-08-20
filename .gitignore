@@ -20,11 +20,15 @@ docs/.jekyll-cache/
 .idea/
 .vscode/
 
-# Agent state. The skill itself lives in skills/ and is installed from there by
-# `make skill-install`; what lands here is a rendered copy, and where it lands
-# depends on the machine.
-.claude/skills/
+# Rendered agent state. Every skill's source lives in skills/ and is tracked;
+# `make skill-install` renders a copy into these two directories, so only the
+# rendered output is ignored.
+/.claude/skills/
 .gemini/skills/
+
+# Personal permissions and the session checkpoint artifact: local, never shared.
+/.claude/settings.local.json
+/.claude/RESUME.md
 
 # The extractor's own output directory. Inside the container it is a volume;
 # this catches a copy left behind by running the extractor on the host.

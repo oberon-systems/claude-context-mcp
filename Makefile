@@ -422,8 +422,9 @@ clean: require-env  ## Remove the containers, the database and the built images
 	@$(MAKE) --no-print-directory -C $(WEB_DIR) \
 		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' clean
 
-# The skill is one file, and both agents read the same format. What it cannot
-# know from here is where it is being installed, which decides three things:
+# Every directory under skills/ holding a SKILL.md is one skill, and both
+# agents read the same format. What a skill cannot know from here is where it
+# is being installed, which decides three things:
 #
 #   AGENT_ROOT   where the agents look. Claude Code reads .claude/skills/ of
 #                the project root, and this repository is not that root when
@@ -437,45 +438,51 @@ clean: require-env  ## Remove the containers, the database and the built images
 #                argument now, so the rebuild command has to name the tree it
 #                belongs to, or it would re-index whatever .env points at.
 #
-# Which is why the skill is rendered rather than linked: the placeholders in
+# Which is why a skill is rendered rather than linked: the placeholders in
 # the source carry all three, and the installed copy names commands that
-# actually run where it is installed. Editing the source needs a reinstall.
+# actually run where it is installed. Editing a source needs a reinstall.
+# skills/ is the source of truth; .claude/skills/ is rendered output.
 AGENT_ROOT ?= $(CURDIR)
 MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
 SKILL_ROOT ?= $(abspath $(AGENT_ROOT))
-SKILL_SRC := skills/graphify/SKILL.md
-SKILL_DIR := $(AGENT_ROOT)/.claude/skills/graphify
+SKILLS := $(sort $(notdir $(patsubst %/SKILL.md,%,$(wildcard skills/*/SKILL.md))))
+SKILL_BASE := $(AGENT_ROOT)/.claude/skills
 
-skill-install: require-not-root  ## Register the graphify skill for Claude and Gemini
-	@mkdir -p $(SKILL_DIR)
-	@sed -e 's|@MAKE@|$(MAKE_PREFIX)|g' -e 's|@ROOT@|$(SKILL_ROOT)|g' \
-		$(SKILL_SRC) > $(SKILL_DIR)/SKILL.md
-	@echo "claude: $(SKILL_DIR)/SKILL.md"
+skill-install: require-not-root  ## Register every skill for Claude and Gemini
+	@for name in $(SKILLS); do \
+		mkdir -p "$(SKILL_BASE)/$$name"; \
+		sed -e 's|@MAKE@|$(MAKE_PREFIX)|g' -e 's|@ROOT@|$(SKILL_ROOT)|g' \
+			"skills/$$name/SKILL.md" > "$(SKILL_BASE)/$$name/SKILL.md"; \
+		echo "claude: $(SKILL_BASE)/$$name/SKILL.md"; \
+	done
 	@echo "        rebuilds with: $(MAKE_PREFIX) index PROJECT=$(SKILL_ROOT)"
 	@command -v gemini > /dev/null \
-		&& (cd $(AGENT_ROOT) && gemini skills link --consent --scope workspace \
-			$(SKILL_DIR) > /dev/null) \
-		&& echo "gemini: linked $(SKILL_DIR)" \
+		&& { for name in $(SKILLS); do \
+			(cd $(AGENT_ROOT) && gemini skills link --consent \
+				--scope workspace "$(SKILL_BASE)/$$name" > /dev/null) \
+				&& echo "gemini: linked $$name"; \
+		done; } \
 		|| echo "gemini: not installed, skipped"
 
-skill-uninstall: require-not-root  ## Remove the graphify skill from both agents
-	@rm -rf $(SKILL_DIR)
+skill-uninstall: require-not-root  ## Remove every skill from both agents
+	@for name in $(SKILLS); do rm -rf "$(SKILL_BASE)/$$name"; done
 	@echo "claude: removed"
 	@command -v gemini > /dev/null \
-		&& { (cd $(AGENT_ROOT) && gemini skills uninstall graphify) \
-			> /dev/null 2>&1 \
-			&& echo "gemini: removed" \
-			|| echo "gemini: was not installed"; } \
+		&& { for name in $(SKILLS); do \
+			(cd $(AGENT_ROOT) && gemini skills uninstall "$$name") \
+				> /dev/null 2>&1; \
+		done; echo "gemini: removed"; } \
 		|| echo "gemini: not installed, skipped"
 
-skill-status:  ## Show where the skill is registered
-	@test -f $(SKILL_DIR)/SKILL.md \
-		&& echo "claude: $(SKILL_DIR)/SKILL.md" \
-		|| echo "claude: not installed"
+skill-status:  ## Show which skills are registered
+	@for name in $(SKILLS); do \
+		test -f "$(SKILL_BASE)/$$name/SKILL.md" \
+			&& echo "claude: $(SKILL_BASE)/$$name/SKILL.md" \
+			|| echo "claude: $$name not installed"; \
+	done
 	@command -v gemini > /dev/null \
 		&& (cd $(AGENT_ROOT) && gemini skills list 2> /dev/null) \
-			| grep -i graphify \
-			|| echo "gemini: not listed"
+		|| echo "gemini: not listed"
 
 # The sub-Makefiles own their own target lists, so everything after the
 # subdivision name is passed straight through: `make mcp build`, `make mcp`.
@@ -511,6 +518,6 @@ require-env:
 # where the user running them never looks.
 require-not-root:
 	@test -z "$$SUDO_USER" || { \
-		echo "Run this without sudo: it registers the skill for $$SUDO_USER" >&2; \
+		echo "Run this without sudo: it registers the skills for $$SUDO_USER" >&2; \
 		exit 1; \
 	}

@@ -98,14 +98,14 @@ make install AGENT_ROOT=/home/you/work/api
 
 Six things, none of which replaces a file that already exists:
 
-| Step                               | What it leaves behind                                                                   |
-| ---------------------------------- | --------------------------------------------------------------------------------------- |
-| `.ctxkeep` / `.ctxignore`          | generated from the file types the tree actually holds, and verified                     |
-| `.mcp.json`                        | the `context` server for Claude Code, at `/mcp/<project>`                               |
-| `.gemini/settings.json`            | the same address for the Gemini CLI                                                     |
-| `.claude/skills/graphify/SKILL.md` | the skill, rendered for that root (`make skill-install` on its own)                     |
-| `CLAUDE.local.md`, `GEMINI.md`     | how an agent should use the graph, from `templates/CLAUDE.local.md`                     |
-| shell aliases                      | `context-index`, `context-reindex`, `context-status`, `context-install`, in `~/.bashrc` |
+| Step                           | What it leaves behind                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                     |
+| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                               |
+| `.gemini/settings.json`        | the same address for the Gemini CLI                                                     |
+| `.claude/skills/*/SKILL.md`    | every skill, rendered for that root (`make skill-install` on its own)                   |
+| `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md`                     |
+| shell aliases                  | `context-index`, `context-reindex`, `context-status`, `context-install`, in `~/.bashrc` |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 
@@ -341,21 +341,24 @@ make db new      write the next migration file, NAME=<slug>
 make web dev     serve the dashboard client from vite against the running stack
 make clean       remove containers, the database directory and the built images
 
-make skill-install    register the graphify skill for Claude and Gemini
-make skill-uninstall  remove it from both
-make skill-status     show where it is registered
+make skill-install    register every skill for Claude and Gemini
+make skill-uninstall  remove them from both
+make skill-status     show which ones are registered
 ```
 
-These three are what `make install` calls for the skill alone; run them
-directly to reinstall it without touching anything else.
+These three are what `make install` calls for the skills alone; run them
+directly to reinstall them without touching anything else.
 
-The skill lives in `skills/graphify/SKILL.md` and is rendered into
-`.claude/skills/graphify/` at install time; Gemini is linked to that rendered
-copy with `gemini skills link`. Nothing of this project lands in `$HOME`, and
+Every directory under `skills/` holding a `SKILL.md` is one skill, and all of
+them are installed: `graphify` (indexing a tree and the traps of reading the
+graph), `commit` (driving commitizen) and `delegate` (handing work to the
+Gemini CLI and reviewing it). Each is rendered into `.claude/skills/<name>/`
+at install time; Gemini is linked to that rendered copy with
+`gemini skills link`. Nothing of this project lands in `$HOME`, and
 the targets refuse to run under `sudo`, since the agents' own state belongs to
 the user who runs them. Editing the source needs a reinstall to take effect.
 
-Installing it into another codebase takes one variable, the root the agent
+Installing them into another codebase takes one variable, the root the agent
 reads. Everything the rendered copy needs follows from it:
 
 ```bash

@@ -1,224 +1,61 @@
 ---
 name: graphify
-description: Build and query the code graph of this project - files, entities and their relations, stored in PostgreSQL and served over MCP. Also reaches the graphs of the neighbouring projects in the same database. Use it before answering architecture questions, before a refactor that crosses files, and whenever "what uses this" or "how do these connect" comes up.
+description: Index a codebase into the graph, and read the graph without falling into its traps - node ids are per-project, edges never cross projects, and the second `graph` server serves a stale snapshot. Use when indexing, re-indexing, or reporting an answer that came from the graph.
 ---
 
 # /graphify
 
-The graph of this project lives in PostgreSQL and is reached through the
-`context` MCP server. This skill is how the graph gets built, inspected and
-looked at.
+The graph lives in PostgreSQL and is read through the `context` MCP server -
+call those tools directly; their schemas describe them. This file is the half
+the schemas cannot carry: how the graph is built, and what will make you
+confidently wrong when reading it.
 
-One database holds every indexed codebase, not just this one. The session is
-bound to this project by the address the client connected to, so nothing has
-to be named for the ordinary case; a `project` argument on any tool reads a
-neighbour's graph instead.
+Adapted from the graphify skill by Graphify-Labs (MIT). The extraction is the
+same; the storage is not. Upstream writes `graphify-out/` and reads it back,
+while here everything lands in the database, which is what lets summaries
+survive a re-index and lets two agents share one graph.
 
-Adapted from the graphify skill by Graphify-Labs (MIT). The extraction it
-describes is the same; the storage is not. Upstream writes `graphify-out/` and
-reads it back, while here everything lands in the database, which is what lets
-summaries survive a re-index and lets two agents share one graph.
-
-## Commands
-
-```text
-/graphify                  rebuild the graph for this project
-/graphify query "TEXT"     find nodes by name or identifier
-/graphify path A B         shortest chain of relations between two nodes
-/graphify explain NODE     what a node is, and what it connects to
-/graphify graph            open the interactive page
-/graphify status           is the stack up, and how much is indexed
-/graphify projects         what else is indexed in the same database
-/graphify index PATH       index another codebase into the same database
-/graphify drop NAME        remove an indexed codebase from the database
-```
-
-## What to do when invoked
-
-### /graphify - rebuild
-
-Run the indexer. It is a one-shot container job, so it prints and exits:
+## Operations
 
 ```bash
-@MAKE@ index PROJECT=@ROOT@
+@MAKE@ index PROJECT=@ROOT@      # incremental: only what changed
+@MAKE@ reindex PROJECT=@ROOT@    # full pass, trusting neither cache
+@MAKE@ unindex PROJECT=<name>    # drop one codebase (confirms first)
+@MAKE@ status                    # is the stack up, and how much is indexed
+@MAKE@ web                       # the interactive page
 ```
 
-Two producers write to the same database in one pass. Code goes through the
-graphifyy extractor (`.py .ts .js .go .rs .java .c .cpp .rb .cs .kt .scala
-.php`), everything else through the parsers in `graphify/src/ctxgraph`
-(Ansible, Puppet and its `.erb`/`.epp` templates, YAML, Terraform, Dockerfile,
-Make, Markdown, shell, TOML, SQL, JSON).
-Report the counts from the last two log lines and stop. Do not read the
-indexed files to "check" the result.
+The indexer is a one-shot container job: it prints and exits. The project mount
+is read only - nothing here writes to the indexed tree.
 
-The closing line says how many files were selected and how many of them a node
-was written for. When those differ, a warning block names the files left out
-and why - report that too, it is the graph admitting it does not describe the
-tree. If the reason is not a skipped file (too big, unreadable), re-run it as
-`@MAKE@ reindex PROJECT=@ROOT@`, which re-parses everything instead of trusting
-a cache (the same as `index` with `FRESH=1` appended).
+## Traps
 
-If it fails because the stack is down, run `@MAKE@ up` and say so.
-
-### /graphify query "TEXT"
-
-Call the `search_code_nodes` tool of the `context` MCP server. Pass the user's
-words as the query. Each row already carries a one line summary - answer from
-those. Open a file only when the summaries do not settle the question, and say
-which one you opened and why.
-
-### /graphify path A B
-
-Call `shortest_path` with the two node ids. If either name is not an exact id,
-resolve it with `search_code_nodes` first and say which id you picked. Read
-the returned chain out as relations, not as a list of strings.
-
-### /graphify explain NODE
-
-Three calls, in order:
-
-1. `get_node_summary` for the node itself
-2. `get_code_graph_neighbors` for what it touches
-3. `search_code_nodes` if the id needs resolving first
-
-Explain what the node is, what depends on it and what it depends on, and what
-that implies for changing it. The graph gives structure and one line of prose
-per file; if the question needs more than that, open the file and say so.
-
-Prefer `save_node_summary` over silence when you learn something the stored
-summary does not say. A manual summary is marked as such and survives the next
-re-index, while the generated one is replaced.
-
-### /graphify graph
-
-The page is at `http://localhost:3000/graph`. It is rendered from the database
-on every request, so it never goes stale. With more than one project indexed it
-opens on a list of them; `http://localhost:3000/graph/<project>` goes straight
-to one. Nodes are coloured by community and sized by degree; the inspector
-panel carries the summary on the source line. Say the address; do not try to
-open a browser.
-
-The dashboard at `http://localhost:3002` embeds the same page beside the
-projects and the plans. Say that address instead when the question is about
-what is indexed or what the plans hold, rather than about one graph.
-
-### /graphify status
-
-```bash
-@MAKE@ status
-```
-
-Reports the running containers, whether the MCP server answers, and how many
-nodes each indexed project has.
-
-### /graphify projects
-
-Call `list_projects`. It returns every project in the database with its type,
-root path and node count. This is what to check before naming a `project` or a
-`project_type` argument.
-
-### /graphify index PATH
-
-```bash
-@MAKE@ index PROJECT=/absolute/path
-```
-
-Indexes any tree into the same database, under a name taken from its last path
-segment. Add `TYPE=docs` or `TYPE=config` when the tree is not source code -
-that is what a search across the database narrows on, and it is stored once,
-so a later re-index without `TYPE=` keeps it. This is the same command the rebuild above runs, with another path.
-The target repository needs nothing of its own - no checkout of this project
-inside it, no configuration - because the path is an argument of the job rather
-than a setting. Say which name it landed under; the log line names it.
-
-### /graphify drop NAME
-
-Call `drop_project` with the name and nothing else. It reports what the drop
-costs and deletes nothing:
-
-```json
-{ "name": "api" }
-```
-
-Read the report out. The three parts are the point: nodes, edges, file hashes
-and embeddings come back with one `@MAKE@ index`, manually written summaries do
-not come back at all, and plans are not deleted at all - they keep the project
-name as a tag and stay readable through `get_plans`. Never pass `confirm: true` on your
-own - the user says the word, or the project stays. Resolve the name with
-`list_projects` first; a wrong one is refused with the list of real ones.
-
-`@MAKE@ unindex PROJECT=/absolute/path` does the same from a shell, with a
-confirmation prompt.
-
-## Searching every project at once
-
-`search_code_nodes` is the one read that need not stop at a project.
-`project: "*"` searches every graph in the database, and `project_type` narrows
-that to one kind of project - `codebase`, `docs`, `config` or `memory`:
-
-```json
-{ "query": "retention policy", "project_type": "docs" }
-```
-
-Reach for it when the question is "where is this written down" rather than
-"what does this repository do", since the answer may be in a repository you
-would not have thought to name. The limit is shared between the projects, so
-the answer is a spread rather than the first project's hits. Every row names
-its project; quote that when reporting. A named `project` and a `project_type`
-together are refused - one narrows what the other spans.
-
-## Querying a neighbouring project
-
-Every tool takes an optional `project`. Without it the session's own project is
-used, which is the one the client connected to; with it the same tool reads
-another graph in the same database:
-
-```json
-{ "query": "handlers", "project": "balor" }
-```
-
-Use it when a question crosses repositories - an Ansible role deploying a
-service whose code is indexed separately, an API and its client. Say which
-project an answer came from whenever it was not this one. Resolve the name with
-`list_projects` rather than guessing it; a wrong name is refused with the list
-of real ones, but that is a wasted turn.
-
-## Facts worth knowing
-
-- Edges carry a confidence: `EXTRACTED` was read out of the syntax tree,
+- **Node ids are unique within a project, not across the database.** `README.md`
+  is a node in every one of them. An id on its own is not an answer; the
+  project it belongs to is part of it.
+- **Edges never cross projects, and nothing can produce one.** The indexer is
+  handed a single tree and resolves every target inside it. A relation between
+  two codebases is something you conclude and say you concluded - never
+  something `shortest_path` returns.
+- **Edges carry a confidence.** `EXTRACTED` was read out of the syntax tree,
   `INFERRED` was guessed. Say which one you are relying on when it matters.
+- **The `graph` MCP server is not the `context` server.** It exposes
+  `query_graph`, `god_nodes`, `graph_stats`, `get_community` over a file
+  written at index time, so it lags until the next index run, and that file
+  holds whichever project was indexed last - it has no notion of projects at
+  all. `context` reads the database directly and does.
+- **`project` and `project_type` together are refused** - one narrows what the
+  other spans. `project: "*"` searches every graph, and the limit is shared
+  between them, so the answer is a spread rather than the first project's hits.
+  Every row names its project; quote that when reporting.
+- Resolve a neighbouring project's name with `list_projects` rather than
+  guessing. A wrong name is refused with the list of real ones - correct, but a
+  wasted turn.
 - Nodes carry the producer that found them in `metadata.source`, and the
   community they clustered into in `metadata.community`.
-- Node ids are unique within a project, not across the database: `README.md` is
-  a node in every one of them. An id on its own is not an answer; the project
-  it belongs to is part of it.
-- Edges never cross projects. Nothing can produce one: the indexer is handed a
-  single tree and resolves every target inside it. A relation between two
-  codebases is something you conclude, not something `shortest_path` returns.
-- A second MCP server, `graph`, exposes the same graph through the upstream
-  tools: `query_graph`, `god_nodes`, `graph_stats`, `get_community`. It reads
-  a file written at index time, so it lags until the next `@MAKE@ index`, and
-  that file holds whichever project was indexed last - it has no notion of
-  projects at all. The `context` server reads the database directly and does.
-- A plan carries a `type` as well as a `status`: `status` is where it stands,
-  `type` is what it is - `plan`, `template` or `procedure`. `get_plans` lists
-  `type: "plan"` unless another is named, so a procedure never appears where
-  approved pending work is read; `type: "*"` lists every kind.
-- Something worth keeping past this session goes into `_memory` through
-  `save_memory` - a convention, a decision, why something is the way it is.
-  It is tagged with what it is about, like a plan: a project name, or `"*"`
-  for one that belongs to no repository. `get_memory` reads a scope plus the
-  global ones; `drop_memory` deletes one that turned out to be wrong. Nothing
-  indexes into `_memory`, so a memory is never pruned by a re-index.
-- A gap the graph could not answer goes into `_suggestions` through
-  `save_suggestion` - what was missing, and the concrete change that would fix
-  it. The id is a stable slug derived from the gap, so saving under one that
-  exists counts a hit on that record instead of filing a duplicate: it keeps
-  the first sighting, moves the last, and reopens a suggestion that had been
-  resolved. `get_suggestions` reads the open ones of a scope plus the global
-  ones, most often hit first; retiring one is `save_suggestion` again with
-  `status: "resolved"` and `bump: false`, since `drop_suggestion` would erase
-  the count. A memory says what is true about a codebase, a suggestion says
-  what the tools could not tell you about it.
-- The project mount is read only. Nothing in this skill writes to the indexed
-  tree.
+
+## A stale index answers the wrong question
+
+An index older than the tree is the one failure that looks like a correct
+answer. If the graph disagrees with what you can see in a file, re-index before
+concluding anything - `@MAKE@ index PROJECT=@ROOT@`.

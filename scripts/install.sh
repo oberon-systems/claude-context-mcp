@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Onboard one codebase onto the stack in a single pass: agent configuration,
-# the skill, the instruction file, the file-selection pair and the shell
+# the skills, the instruction file, the file-selection pair and the shell
 # aliases.
 #
 # Reached through `make install`, which passes everything in the environment.
@@ -94,14 +94,14 @@ echo "Agents"
 "$python_bin" scripts/mcp_register.py "$target" "$project" "$port"
 note "agent configuration" "$project on port $port"
 
-# 3. The skill renders its own placeholders from AGENT_ROOT.
+# 3. Every skill under skills/ renders its own placeholders from AGENT_ROOT.
 echo
-echo "Skill"
+echo "Skills"
 # The gemini consent notice goes to stderr; folded in so the whole step is
 # indented like the rest, and pipefail still reports a failure.
 "$make_bin" --no-print-directory -C "$repo_root" skill-install \
     AGENT_ROOT="$target" 2>&1 | sed 's/^/  /'
-note "graphify skill" "installed for $target"
+note "skills" "installed for $target"
 
 # 4. The instruction file. Claude reads CLAUDE.local.md beside its CLAUDE.md;
 #    Gemini has no .local convention and reads GEMINI.md, so the same rendered
