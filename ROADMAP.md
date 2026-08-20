@@ -25,6 +25,7 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 
 Simplifying how users interact with the stack and how agents manage project context.
 
+- [ ] **reinstall target**: add target for re-install already onboarded tools (force)
 - [ ] **single entry point**: use nginx as ingress for all web-endpoints as a part of the stack
 - [x] **Cross-Project Plans:** One `plans` table for the whole database, with the project as a tag and `project: "*"` for a plan that belongs to none.
 - [x] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'docs') to enable targeted cross-repository searches.
