@@ -555,15 +555,35 @@ Indexing writes a summary for every file node in `graph_nodes` from its leading
 docstring, comment block or first heading. That is the fast producer and it is
 what a plain `make index` does, for both halves of the tree.
 
-A local GGUF model (SmolLM2-1.7B-Instruct, Q4_K_M) writes better ones, and it
-is slow: seconds per file, so a first index of a large tree would spend hours
-in it. It therefore runs as a pass of its own, after the graph exists:
+A local GGUF model writes better ones, and it is slow: seconds per file, so a
+first index of a large tree would spend hours in it. It therefore runs as a
+pass of its own, after the graph exists:
 
 ```bash
 make llm-model-install               # once: ~1 GB of weights
 make summarize PROJECT=$(pwd)        # describe what has no model summary yet
 make summarize PROJECT=$(pwd) BG=1   # the same, detached, for a large tree
+make summarize PROJECT=$(pwd) LIMIT=20  # stop after 20, to time the rest
 ```
+
+`MODEL=` picks the weights, for both the download and the run:
+
+| `MODEL=`              | size    | ~s per file at 8 threads            |
+| --------------------- | ------- | ----------------------------------- |
+| `qwen-1.5b` (default) | 1.12 GB | ~8                                  |
+| `qwen-3b`             | 2.10 GB | ~20, wants `GRAPHIFY_MEM=6g`        |
+| `qwen-0.5b`           | 0.49 GB | ~4                                  |
+| `smollm2`             | 1.06 GB | ~13, and it declines far more files |
+
+The default is Qwen2.5-Coder-1.5B-Instruct because it is trained on code:
+measured against SmolLM2-1.7B on the same 15 files of this repository, it was
+faster and declined none of them, where SmolLM2 answered four with the file
+name. Qwen3 is not on the list on purpose - its GGUF release is Q8_0 only, and
+it is a thinking model, which is the opposite of a one-line summary.
+
+Several models can sit in `~/.local/share/context-mcp/models` at once; the make
+targets name the one they downloaded, and a hand-rolled `docker run` picks the
+only one there or is told through `LLM_MODEL_PATH`.
 
 The pass commits per file and only visits files whose summary still comes from
 the head of the file, so it can be stopped and started again without repeating
@@ -577,14 +597,15 @@ rest. The cache belongs to the project and goes with it on `make unindex`.
 The container is capped while it runs: `GRAPHIFY_CPUS` and `GRAPHIFY_MEM` in
 `.env` (2 cpus and 4g by default), with `LLM_THREADS` at or below the cpu
 count, and the weights are released as soon as the pass ends. The cpu count is
-also the throughput: on this repository the pass measured ~45 s per file at the
-default 2, and ~13 s per file at 8. Budget accordingly before pointing it at a
-large tree - it is per file, and it is why the pass detaches.
+also the throughput: with the default model this repository measured ~30 s per
+file at the default 2 cpus and ~8 s at 8. Budget accordingly before pointing it
+at a large tree - it is per file, and it is why the pass detaches, and why
+`LIMIT=` exists.
 
-Expect it to decline some files: a 1.7B model reading the head of a changelog
-or a compose file tends to answer with the file name, and an answer that says
+Expect it to decline a file now and then: a small model reading the head of a
+changelog or a lock file can answer with the file name, and an answer that says
 no more than the node id is rejected rather than stored. Those keep the
-head-of-file summary and are reported as failures in the closing line.
+head-of-file summary and are counted in the closing line.
 
 Node metadata records which of the three wrote the summary in `summary_source`:
 `auto` for the head of the file, `llm` for the model, `manual` for one written

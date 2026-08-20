@@ -25,6 +25,6 @@ from ctxgraph.summarizer import Summarizer  # noqa: E402
 @pytest.fixture
 def summarizer(monkeypatch: pytest.MonkeyPatch) -> Summarizer:
     """Build a Summarizer whose model is a mock and whose weights are not read."""
-    monkeypatch.setattr("ctxgraph.summarizer.ensure_model", lambda _path: None)
+    monkeypatch.setattr("ctxgraph.summarizer.resolve_model", lambda path: path)
     monkeypatch.setattr("ctxgraph.summarizer.Llama", MagicMock())
     return Summarizer("/models/absent.gguf")

@@ -8,7 +8,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from ctxgraph.config import LLM_INPUT_CHARS, MAX_SUMMARY_LENGTH
-from ctxgraph.summarizer import Summarizer, ensure_model, shape, useful
+from ctxgraph.summarizer import (
+    Summarizer,
+    ensure_model,
+    resolve_model,
+    shape,
+    strip_preamble,
+    useful,
+)
 
 
 def reply(text: str) -> dict[str, list[dict[str, dict[str, str]]]]:
@@ -37,6 +44,29 @@ def test_ensure_model_accepts_the_magic(tmp_path: Path) -> None:
     ensure_model(str(weights))
 
 
+def test_resolve_model_takes_the_only_one(tmp_path: Path) -> None:
+    """The usual case: one file under the mount and nothing to decide."""
+    weights = tmp_path / "qwen2.5-coder-1.5b-instruct-q4_k_m.gguf"
+    weights.write_bytes(b"GGUF" + b"\x00" * 16)
+
+    assert resolve_model("", str(tmp_path)) == str(weights)
+
+
+def test_resolve_model_refuses_to_guess(tmp_path: Path) -> None:
+    """Two models on disk is an A/B, and sort order is not an answer."""
+    for name in ("a-q4_k_m.gguf", "b-q4_k_m.gguf"):
+        (tmp_path / name).write_bytes(b"GGUF" + b"\x00" * 16)
+
+    with pytest.raises(RuntimeError, match="LLM_MODEL_PATH"):
+        resolve_model("", str(tmp_path))
+
+
+def test_resolve_model_reports_an_empty_mount(tmp_path: Path) -> None:
+    """Nothing downloaded yet says how to download it."""
+    with pytest.raises(RuntimeError, match="llm-model-install"):
+        resolve_model("", str(tmp_path))
+
+
 def test_shape_keeps_one_ascii_line() -> None:
     """A summary is one line of ASCII, whatever the model felt like writing."""
     written = "```\nStores the \u201cgraph\u201d \u2013 nodes.\nAnd more.\n```"
@@ -48,6 +78,20 @@ def test_shape_truncates_like_every_other_summary() -> None:
     assert len(shape("word " * 200)) <= MAX_SUMMARY_LENGTH
 
 
+def test_shape_keeps_the_first_sentence_whole() -> None:
+    """Told to write one sentence, the model writes two often enough."""
+    reply = "Builds the graph. " + "Then it does something else. " * 20
+    assert shape(reply) == "Builds the graph."
+
+
+def test_shape_cuts_on_a_word() -> None:
+    """A summary sliced mid-word reads as damage, not as a summary."""
+    result = shape("Stores " + "everything " * 60)
+    assert len(result) <= MAX_SUMMARY_LENGTH
+    assert result.endswith("...")
+    assert "everythi..." not in result
+
+
 def test_summarize_clamps_the_prompt(summarizer: Summarizer) -> None:
     """A file may be a megabyte; the context window is two thousand tokens."""
     summarizer.llm.create_chat_completion.return_value = reply("A summary.")
@@ -55,6 +99,32 @@ def test_summarize_clamps_the_prompt(summarizer: Summarizer) -> None:
 
     messages = summarizer.llm.create_chat_completion.call_args.kwargs["messages"]
     assert len(messages[1]["content"]) <= LLM_INPUT_CHARS + len("File: big.tf\n\n")
+
+
+def test_strip_preamble_drops_the_file_it_names() -> None:
+    """The node carries the path; the sentence should carry the meaning."""
+    assert (
+        strip_preamble("The file `indexer.py` builds the graph.", "src/indexer.py")
+        == "Builds the graph."
+    )
+    assert (
+        strip_preamble("The .cz.yaml file configures commitizen.", ".cz.yaml")
+        == "Configures commitizen."
+    )
+    assert (
+        strip_preamble("This file defines a GitHub Actions workflow.", "ci.yml")
+        == "Defines a GitHub Actions workflow."
+    )
+    assert (
+        strip_preamble("The file Makefile is a build script for it.", "Makefile")
+        == "A build script for it."
+    )
+
+
+def test_strip_preamble_leaves_another_file_alone() -> None:
+    """A summary naming a different file is saying something."""
+    said = "The file `config.py` it reads is generated."
+    assert strip_preamble(said, "src/indexer.py") == said
 
 
 def test_useful_rejects_the_file_name_back() -> None:

@@ -19,6 +19,7 @@ from ctxgraph.config import (
     FORCE_REEXTRACT,
     LLM_MODEL_PATH,
     PROJECT_PATH,
+    SUMMARY_LIMIT,
 )
 from ctxgraph.discovery import read_source
 from ctxgraph.indexer import SUMMARY_HEAD_LINES, resolve_project
@@ -47,6 +48,9 @@ def summarize_project() -> None:
     try:
         with conn.cursor() as cursor:
             pending = list_files_without_llm_summary(cursor, project, FORCE_REEXTRACT)
+        if SUMMARY_LIMIT:
+            LOG.info("Stopping after %d files (SUMMARY_LIMIT)", SUMMARY_LIMIT)
+            pending = pending[:SUMMARY_LIMIT]
         LOG.info("Summarizing %d files of project %s", len(pending), project)
 
         written = 0

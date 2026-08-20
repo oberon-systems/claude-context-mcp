@@ -72,6 +72,11 @@ services:
       # Set by `make index SUMMARIZE=1`: describe each file with the model as
       # the run goes. `make summarize` does the same work on its own instead.
       SUMMARIZE: ${SUMMARIZE:-}
+      # Which weights to load, and how many files to stop after. Both are set
+      # per run by the make targets; empty means the one model mounted below
+      # and no limit.
+      LLM_MODEL_PATH: ${LLM_MODEL_PATH:-}
+      SUMMARY_LIMIT: ${SUMMARY_LIMIT:-}
       # Threads llama.cpp runs the summarizing model on. Kept at or below the
       # cpu quota below: threads oversubscribed against a quota buy context
       # switches, not throughput.

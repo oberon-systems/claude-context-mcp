@@ -49,7 +49,7 @@ endif
 .PHONY: help init install shell lint check build pull up down restart logs ps \
 	status index reindex summarize unindex backup restore psql clean graphify \
 	mcp db web skill-install skill-uninstall skill-status llm-model-install \
-	require-venv require-env require-not-root
+	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
 	@echo "$(NAME) $(VERSION)"
@@ -240,6 +240,9 @@ FRESH ?=
 # without holding up the graph.
 SUMMARIZE ?=
 BG ?=
+# Stop after this many files. A first pass over a large tree is measured in
+# hours, and this is how it is timed before one is spent.
+LIMIT ?=
 FILE ?=
 # Backups rotate by default: a target that only ever grows is a target nobody
 # prunes. KEEP= empty turns it off for one run and keeps everything.
@@ -251,7 +254,7 @@ index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(if $(FRESH),FORCE_REEXTRACT=1) \
-		$(if $(SUMMARIZE),SUMMARIZE=1) \
+		$(if $(SUMMARIZE),SUMMARIZE=1 LLM_MODEL_PATH='$(MODEL_PATH)') \
 		$(COMPOSE) --profile index run --rm graphify
 
 # The slow half of indexing, on its own: the model describes the files whose
@@ -259,10 +262,12 @@ index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
 # own. It commits per file, so an interrupted run keeps what it wrote and the
 # next one starts from what is left. FRESH=1 re-describes everything instead,
 # cache included; BG=1 detaches, for the hours a large tree takes.
-summarize: require-env  ## Summarize PROJECT with the model (BG=1 detaches)
+summarize: require-env require-model  ## Summarize PROJECT with the model (BG=1 detaches)
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(if $(FRESH),FORCE_REEXTRACT=1) \
+		$(if $(LIMIT),SUMMARY_LIMIT='$(LIMIT)') \
+		LLM_MODEL_PATH='$(MODEL_PATH)' \
 		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
 		graphify python -m ctxgraph.summarize
 
@@ -284,16 +289,38 @@ unindex: require-env  ## Drop PROJECT= or PROJECT_NAME= from the database
 	@COMPOSE='$(COMPOSE)' UNINDEX_PATH='$(INDEXED)' \
 		UNINDEX_NAME='$(PROJECT_NAME)' FORCE='$(FORCE)' scripts/unindex.sh
 
-# The weights the indexer summarizes with. Mounted read-only at /models by
-# compose, so the path below is the host half of that mount.
+# The weights the summarizer runs. Mounted read-only at /models by compose, so
+# MODEL_DIR is the host half of that mount and MODEL_NAME is the same file name
+# on both sides - which is what stops the download and the container disagreeing
+# about which model is in use.
+#
+# MODEL= picks one of the names below. The upstream file name is kept as it is,
+# so several can sit in the directory at once and LLM_MODEL_PATH says which one
+# a run uses.
+MODEL ?= qwen-1.5b
+REPO_qwen-1.5b := Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF
+FILE_qwen-1.5b := qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
+REPO_qwen-3b := Qwen/Qwen2.5-Coder-3B-Instruct-GGUF
+FILE_qwen-3b := qwen2.5-coder-3b-instruct-q4_k_m.gguf
+REPO_qwen-0.5b := Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF
+FILE_qwen-0.5b := qwen2.5-coder-0.5b-instruct-q4_k_m.gguf
+REPO_smollm2 := HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF
+FILE_smollm2 := smollm2-1.7b-instruct-q4_k_m.gguf
+MODELS := qwen-1.5b qwen-3b qwen-0.5b smollm2
+
 MODEL_DIR := $(HOME)/.local/share/context-mcp/models
-MODEL_URL := https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF/resolve/main/smollm2-1.7b-instruct-q4_k_m.gguf
-MODEL_FILE := $(MODEL_DIR)/smollm2-1.7b-instruct.Q4_K_M.gguf
+MODEL_REPO := $(REPO_$(MODEL))
+MODEL_NAME := $(FILE_$(MODEL))
+MODEL_URL := https://huggingface.co/$(MODEL_REPO)/resolve/main/$(MODEL_NAME)
+MODEL_FILE := $(MODEL_DIR)/$(MODEL_NAME)
+# What the container is told to load. Named from the same variable the download
+# used, so `make summarize MODEL=qwen-3b` needs nothing else.
+MODEL_PATH := /models/$(MODEL_NAME)
 
 # Downloaded beside the target name and moved into place only once it is a
 # GGUF file: without `-f` curl saves the error page under the model's name and
 # exits 0, and llama.cpp is then the one to report it, a run later.
-llm-model-install:  ## Download the summarizer weights (FORCE=1 re-downloads)
+llm-model-install: require-model  ## Download the summarizer weights (MODEL=, FORCE=1)
 	@test -z '$(FORCE)' && test -s '$(MODEL_FILE)' \
 		&& echo "model: kept ($(MODEL_FILE))" && exit 0; \
 	mkdir -p '$(MODEL_DIR)'; \
@@ -302,6 +329,12 @@ llm-model-install:  ## Download the summarizer weights (FORCE=1 re-downloads)
 		|| { echo "not a GGUF file, kept as $(MODEL_FILE).part" >&2; exit 1; }; \
 	mv '$(MODEL_FILE).part' '$(MODEL_FILE)'; \
 	echo "model: written to $(MODEL_FILE)"
+
+require-model:
+	@test -n '$(MODEL_NAME)' || { \
+		echo "unknown MODEL=$(MODEL), pick one of: $(MODELS)" >&2; \
+		exit 1; \
+	}
 
 # The other maintenance pair: `backup` writes, `restore` puts back. Both take
 # the same selectors as `unindex` - nothing named means the whole database -

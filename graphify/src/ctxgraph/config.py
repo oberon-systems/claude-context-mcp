@@ -149,12 +149,13 @@ SUMMARIZE = os.getenv("SUMMARIZE", "").strip().lower() not in {
     "false",
     "no",
 }
-# Where the GGUF weights the summarizer loads are mounted. `make
-# llm-model-install` puts them under ~/.local/share/context-mcp/models on the
-# host, and docker-compose mounts that directory read-only at /models.
-LLM_MODEL_PATH = os.getenv(
-    "LLM_MODEL_PATH", "/models/smollm2-1.7b-instruct.Q4_K_M.gguf"
-)
+# Which GGUF weights to load. `make llm-model-install` puts them under
+# ~/.local/share/context-mcp/models on the host, mounted read-only at
+# LLM_MODEL_DIR, and every `make` target that runs the model names the file it
+# downloaded. Left empty, the directory is searched instead, which is what
+# keeps a hand-rolled `docker run` working.
+LLM_MODEL_DIR = os.getenv("LLM_MODEL_DIR", "/models")
+LLM_MODEL_PATH = os.getenv("LLM_MODEL_PATH", "").strip()
 # Kept at or below the cpu quota the container runs under: llama.cpp threads
 # oversubscribed against a quota buy context switches, not throughput.
 LLM_THREADS = int(os.getenv("LLM_THREADS", "2"))
@@ -166,3 +167,6 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "64"))
 # 64 tokens whatever the input was. About 25 lines of code, against the 40
 # `extract_summary` reads for the same purpose.
 LLM_INPUT_CHARS = int(os.getenv("LLM_INPUT_CHARS", "2000"))
+# Stop the summarizing pass after this many files. Zero is all of them. It is
+# how a first pass over a large tree is timed before one is spent on it.
+SUMMARY_LIMIT = int(os.getenv("SUMMARY_LIMIT", "") or 0)
