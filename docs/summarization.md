@@ -79,7 +79,31 @@ The worker is a standalone Python package (`worker/`) - no Docker, no
 checkout of the code it describes, no database access. Copy just that
 directory over, or clone the whole repository and `cd worker`.
 
-**Windows:**
+There are two ways to run the model, and the worker treats them the same.
+Either it loads the weights itself through `llama-cpp-python`, or it talks
+over HTTP to a `llama-server` that holds them.
+
+**Through a llama.cpp server** - the route that works on any CPU, and the
+only one if the machine running the loop is not the machine with the GPU:
+
+```bat
+cd worker
+get-llama-server.bat
+llama-server\llama-server.exe -m %LOCALAPPDATA%\context-mcp\models\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf -c 8192 -ngl 99 --host 127.0.0.1 --port 8080 --parallel 1
+py -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum --llama-server http://127.0.0.1:8080
+```
+
+`get-llama-server.bat` takes the llama.cpp release matching the driver and
+unpacks it into `worker\llama-server\`. In the server's log,
+`loaded CPU backend from ...ggml-cpu-<variant>.dll` is the line that matters:
+the release binaries carry one such library per instruction set and choose at
+load time, where a wheel is compiled for exactly one and dies with
+`0xc000001d` on a CPU that lacks it. With this backend the worker needs no
+weights and no `llama-cpp-python` at all, so it can run anywhere - see "Three
+machines, or one" in the worker README for driving a server across the LAN,
+where `--api-key` stops being optional.
+
+**In the worker's own process, Windows:**
 
 ```bat
 cd worker
@@ -106,7 +130,7 @@ CUDA is driver-backward-compatible, so `cu124` works regardless of which
 exact CUDA version `nvidia-smi` reports, as long as the driver is
 reasonably current.
 
-**Linux:**
+**In the worker's own process, Linux:**
 
 ```bash
 cd worker
