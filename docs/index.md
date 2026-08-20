@@ -1,8 +1,14 @@
-# Welcome to claude-context-mcp
+---
+layout: default
+title: Welcome
+nav_order: 1
+---
 
 This service provides an isolated PostgreSQL database with vector capabilities (pgvector) and a graph-based code indexing engine. It allows you to transform codebases into searchable graphs and expose them as context to AI coding agents via the Model Context Protocol (MCP).
 
 ## What it does
+
+...
 
 1. **Indexes Codebases:** Maps your files, entities, and relationships into a searchable graph.
 2. **Stores Vectors:** Prepares your codebase for vector-based semantic search.

@@ -1,6 +1,12 @@
-# Usage
+---
+layout: default
+title: Usage
+nav_order: 7
+---
 
-Practical daily operations using `make` targets.
+## Usage
+
+...
 
 ## Essential Commands
 

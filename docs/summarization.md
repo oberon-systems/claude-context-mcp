@@ -1,5 +1,12 @@
-# Summarizing on another machine
+---
+layout: default
+title: Summarization
+nav_order: 5
+---
 
+## Summarizing on another machine
+
+...
 The pass described above runs on whatever CPU the stack was given. A machine with a GPU does the same work in about a second a file, so the model half can be moved to it - without giving that machine a checkout of your code, a database port or a share. It reads the text of each file from the graph, over HTTP.
 
 That means the text has to be in the graph, which it now is: an index run keeps the first `CONTENT_STORE_CHARS` characters (16000 by default, about 4k tokens) of every file in `graph_nodes.content`. Files named like secrets - `.env`, `*.pem`, `*.tfvars`, `id_rsa*` and the rest - still get a node and a head-of-file summary, but their text is never stored. `CONTENT_STORE_CHARS=0` turns the whole thing off.

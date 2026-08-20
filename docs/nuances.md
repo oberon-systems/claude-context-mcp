@@ -1,6 +1,12 @@
-# System Nuances
+---
+layout: default
+title: System Nuances
+nav_order: 6
+---
 
-Important constraints and behaviors to understand.
+## System Nuances
+
+...
 
 ## Read-Only Access
 

@@ -1,6 +1,12 @@
-# Supported Formats
+---
+layout: default
+title: Supported Formats
+nav_order: 3
+---
 
-The indexer understands various file types and structures.
+## Supported Formats
+
+...
 
 ## Languages and Infrastructure
 

@@ -1,6 +1,12 @@
-# Deployment and Capabilities
+---
+layout: default
+title: Deployment
+nav_order: 4
+---
 
-This project is containerized using Docker Compose.
+## Deployment and Capabilities
+
+...
 
 ## Deployment
 

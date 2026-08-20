@@ -1,6 +1,12 @@
-# Onboarding
+---
+layout: default
+title: Onboarding
+nav_order: 2
+---
 
-This section explains how to get started with the project.
+## Onboarding
+
+...
 
 ## Prerequisites
 
