@@ -1,3 +1,59 @@
+## v0.11.0 (2026-08-20)
+
+### Features
+
+- **graphify**: summarize file nodes with a local model in its own pass
+- **make**: implement context reindex command
+- **web**: show the projects, the graph and the plans
+- **web**: read and write the plans of every project
+- **web**: browse the nodes, their neighbours and the files
+- **web**: serve the projects and the viewer's graph
+- **web**: add the dashboard service, empty but wired
+- **index.ts**: let the plan tools read and write the type
+- **migrations**: add a type column to plans, apart from status
+- **plans**: implement cross-project plans
+- **make**: unified onboarding added
+- **database**: implement schema management
+- **make**: implement support for local builds
+- **Makefile**: keep the seven newest backups by default
+- **scripts**: back up and restore the graph database
+- **index**: re-index must invalidate the extractor cach
+- **tools**: drop a project from the graph
+- **compose**: use latest tag for applicaiton images
+- **database**: move the database out of the working tree
+- **PuppetParser**: resolve qualified names into reads_var and references edges
+- **JsonParser**: index .json and read what its manifests declare
+
+### Bug Fixes
+
+- **config.py**: index .tsx, which arrived with the dashboard
+- **Makefile**: build and run one image reference, tagged latest
+- **database**: DATA_DIR removed completly
+- **MakeParser**: read the whole Makefile and keep only its real targets
+- **indexer**: link every entity to the file that declares it
+
+### Build
+
+- **github**: update build triggers and cache using
+- **Makefile**: install the commit adapter best-effort
+- **github**: actions: added tag latest
+- **github**: action for build images added
+- **gemini**: update instructions
+- **CLAUDE.local.md**: write down the commitizen question flow and how to drive it
+- **CLAUDE.local.md**: record template plans, the suggestions recap line and the gemini trust flag
+- **.ctxkeep**: index this repository through an explicit keep list
+- **CLAUDE.local.md**: require a recap of how the answer was produced
+
+### Documentation
+
+- **README.md**: document the dashboard and the plan type
+- **README.md**: drop every trace of DATA_DIR and COMPOSE_PROJECT_NAME
+- **CLAUDE.md**: drop the puppet residue and stop assuming one cz adapter
+- **roadmap**: refatored and updated
+- **ROADMAP.md**: rank the deferred work by cost and record the gaps found since
+- **01-init.sql**: describe both metadata keys the indexer writes
+- **ROADMAP.md**: drop the finished Make parser item and renumber
+
 ## v0.10.1 (2026-08-17)
 
 ### Bug Fixes
