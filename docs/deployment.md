@@ -73,8 +73,9 @@ Both directions print what's about to be replaced and ask first
 failed restore can't leave a half-restored database.
 
 Worth doing before `make unindex` and before `make clean`: nodes, edges,
-hashes and embeddings come back with one `make index`, but plans and
-manually written summaries don't come back from anywhere else.
+hashes and embeddings come back with one `make index`, but plans, manually
+written summaries and everything in `_memory` don't come back from anywhere
+else.
 
 ## GitHub Pages Setup
 

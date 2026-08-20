@@ -62,7 +62,10 @@ export function ProjectPage() {
           Drop project
         </button>
       </div>
-      <p className="path">{project.root_path}</p>
+      <p>
+        <span className="kind">{project.type}</span>{" "}
+        <span className="path">{project.root_path}</span>
+      </p>
       <p>
         <Freshness
           indexedAt={project.indexed_at}

@@ -26,12 +26,12 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 Simplifying how users interact with the stack and how agents manage project context.
 
 - [x] **Cross-Project Plans:** One `plans` table for the whole database, with the project as a tag and `project: "*"` for a plan that belongs to none.
-- [ ] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'docs') to enable targeted cross-repository searches.
+- [x] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'docs') to enable targeted cross-repository searches.
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
 - [x] **Maintenance Tools:** Backup/Restore (`make backup`, `make restore`).
 - [x] **Local Build:** Streamlined `make build` with stable tagging.
 - [ ] **Gap Tracking:** Persistent storage for agent-reported missing context/gaps.
-- [ ] **Shared Records (\_common):** Handle cross-project conventions, the way plans are already handled.
+- [ ] **Shared Records (\_common):** Handle cross-project conventions, the way plans are already handled. The `_` prefix is reserved for these: `make index` refuses a project name starting with one.
 - [ ] **Cross-Project Lookups:** Link relations between codebases.
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
 
@@ -41,12 +41,12 @@ Adding vector context and agent memory.
 
 - [ ] **Lexical Search:** Add GIN/trigram index for literal content search (`grep` over the graph).
 - [ ] **Semantic Search:** Implement vector embedding generation and HNSW search.
-- [ ] **Agent Memory:** Persistent store for project-wide conventions and knowledge.
 
 ---
 
 ## Completed Items
 
+- Project types and agent memory: `projects.type` categorises a project as `codebase`, `docs`, `config` or `memory` (`make index TYPE=`, stored once so a plain re-index keeps it), `search_code_nodes` gained `project: "*"` and `project_type` to search every project or every project of one kind with the limit shared between them, and `save_memory`/`get_memory`/`drop_memory` write conventions and decisions into `_memory` - a built-in project of type `memory` holding records rather than files, tagged with what each is about the way a plan is
 - Model summaries: `make summarize` describes every file node of both halves of the tree with a local GGUF model (Qwen2.5-Coder-1.5B-Instruct Q4_K_M by default, MODEL= for the others) reading the head of the file - a resumable pass of its own rather than part of indexing, since it costs seconds per file - cached by content hash in `summary_cache`, marked `summary_source: llm` so a re-index keeps it, and capped by the cpu and memory limits on the indexer container. Entity nodes still carry no summary of their own
 - A dashboard on loopback port 3002: the indexed projects with their counts and how old each index is, a browsable node index with summaries and neighbours, the viewer's graph embedded through a same-origin proxy, and every plan in the database readable, filterable by project, status and the new type, and editable in place
 - Unified onboarding: one `make install` registers the `context` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.ctxkeep`/`.ctxignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists

@@ -6,6 +6,7 @@ import * as sql from "../queries.js";
 
 type ProjectRow = {
   name: string;
+  type: string;
   root_path: string;
   indexed_at: Date | null;
   stale_seconds: string | null;
@@ -29,6 +30,7 @@ type DropReportRow = {
 function project(row: ProjectRow) {
   return {
     name: row.name,
+    type: row.type,
     root_path: row.root_path,
     indexed_at: row.indexed_at,
     stale_seconds:

@@ -15,8 +15,12 @@ only greps and reads. The `context` MCP tools are the way in:
 - `get_code_graph_neighbors` - what a node connects to, and how
 - `get_node_summary` - what a node is
 - `shortest_path` - the chain of relations between two nodes
-- `list_projects` - the other codebases in the same database, readable by
-  passing their name as the `project` argument of any tool
+- `list_projects` - the other projects in the same database, with the type of
+  each, readable by passing their name as the `project` argument of any tool
+- `search_code_nodes` with `project: "*"`, or with `project_type: "docs"` -
+  one search across every project, or across every project of one kind, for
+  when the question is "where is this written down" rather than "what does this
+  repository do"
 
 Fall back to reading files only when the graph cannot answer:
 
@@ -32,6 +36,21 @@ Fall back to reading files only when the graph cannot answer:
 A node that exists with no summary is worth filling in: write one and persist it
 with `save_node_summary`, so the next lookup finds it in the graph instead of
 re-deriving it from the source.
+
+## Memory: what to keep past this session
+
+Something worked out that the tree does not record - a convention, a decision,
+why something is the way it is - goes into the built-in `_memory` project:
+
+- `save_memory` - a slug, a title, the text, and `about` naming what it applies
+  to (`"@PROJECT@"` here, or `"*"` for something that belongs to no repository)
+- `get_memory` - a scope's memories plus the global ones, in full
+- `drop_memory` - one that turned out to be wrong
+
+It is a project, so `search_code_nodes` with `project_type: "memory"` finds
+memories too. Nothing indexes into it, so a memory is never pruned by a
+re-index. A memory is for what stays true past the task; a plan is for what to
+do next. Do not use one for the other.
 
 ## Plans live in the graph, not in the session
 
@@ -70,7 +89,7 @@ Close a task that took more than one answer with a short **Recap** - counts, not
 adjectives:
 
 1. **Graph calls** - how many, which tools, what each was looking for, and which
-   lookups came back empty.
+   lookups came back empty. Name the `get_plans` check and any memory written.
 2. **Direct Read / Grep / Write** - how many, on which files, and why the graph
    was not enough.
 3. **Subagents and delegates** - one line each, or "none".

@@ -169,8 +169,8 @@ SELECT format('DELETE FROM projects WHERE name = %L;', :'name');
 -- cascade to them and the COPY below would collide on the primary key.
 SELECT format('DELETE FROM plans WHERE project = %L;', :'name');
 
-\qecho 'COPY projects (name, root_path, indexed_at) FROM stdin;'
-COPY (SELECT name, root_path, indexed_at
+\qecho 'COPY projects (name, root_path, indexed_at, type) FROM stdin;'
+COPY (SELECT name, root_path, indexed_at, type
         FROM projects WHERE name = :'name') TO STDOUT;
 \qecho '\\.'
 

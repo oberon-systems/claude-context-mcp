@@ -5,7 +5,7 @@
 // column added to `plans` touches this file, that one, and scripts/backup.sh.
 
 export const PROJECTS = `
-  SELECT p.name, p.root_path, p.indexed_at,
+  SELECT p.name, p.type, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name) AS nodes,
@@ -19,7 +19,7 @@ export const PROJECTS = `
    ORDER BY p.name`;
 
 export const PROJECT = `
-  SELECT p.name, p.root_path, p.indexed_at,
+  SELECT p.name, p.type, p.root_path, p.indexed_at,
          EXTRACT(EPOCH FROM (now() - p.indexed_at)) AS stale_seconds,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name) AS nodes,

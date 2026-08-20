@@ -244,6 +244,14 @@ pre {
   color: var(--muted);
 }
 
+.kind {
+  padding: 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  color: var(--muted);
+  font-size: 0.8em;
+}
+
 .count {
   font-variant-numeric: tabular-nums;
 }

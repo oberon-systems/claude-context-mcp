@@ -19,11 +19,13 @@ from ctxgraph.config import (
     FORCE_REEXTRACT,
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
+    KNOWN_PROJECT_TYPES,
     LLM_MODEL_PATH,
     MAX_NODE_ID_LENGTH,
     PROJECT_NAME,
     PROJECT_PATH,
     PROJECT_ROOT,
+    PROJECT_TYPE,
     SOURCE_GRAPHIFYY,
     SUMMARIZE,
 )
@@ -272,6 +274,12 @@ def scan_and_build_graph() -> None:
         raise RuntimeError(f"{PROJECT_PATH} is not a directory")
 
     project, root_path = resolve_project()
+    if PROJECT_TYPE is not None and PROJECT_TYPE not in KNOWN_PROJECT_TYPES:
+        LOG.warning(
+            "TYPE=%s is not one of %s; storing it anyway",
+            PROJECT_TYPE,
+            ", ".join(sorted(KNOWN_PROJECT_TYPES)),
+        )
     # Only when asked for. Loading the weights costs a gigabyte and seconds
     # per file after that, so an index run is the fast producer by default and
     # `make summarize` is where the model earns its time. Before the database
@@ -284,12 +292,12 @@ def scan_and_build_graph() -> None:
         # name already claimed by a different checkout has to stop the run
         # rather than merge two codebases into one graph.
         with conn.cursor() as cursor:
-            ensure_project(cursor, project, root_path)
+            ensure_project(cursor, project, root_path, PROJECT_TYPE)
             conn.commit()
             # A project can leave the database through `make unindex` or the
             # drop_project tool, neither of which can reach this volume.
             dropped, entries = prune_extractor_caches(
-                {name for name, _, _ in list_projects(cursor)}
+                {name for name, _, _, _ in list_projects(cursor)}
             )
             if entries:
                 LOG.info(

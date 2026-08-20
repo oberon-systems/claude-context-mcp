@@ -44,6 +44,12 @@ You can index multiple codebases into the same database stack:
 
 ```bash
 make index PROJECT=/path/to/another/project
+make index PROJECT=/path/to/a/handbook TYPE=docs
 ```
 
 The stack manages them by path, and you can access them by name via MCP.
+`TYPE=` categorises a project - `codebase` (the default), `docs` or `config` -
+which is what `search_code_nodes` narrows on when it searches every project at
+once. It is stored once, so a later re-index without `TYPE=` keeps it. Names
+beginning with `_` are refused: they belong to the built-in projects, `_memory`
+today.

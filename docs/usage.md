@@ -13,7 +13,7 @@ make lint        run every pre-commit hook over every file
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
-make index       index PROJECT=<path>, or PROJECT_PATH from .env
+make index       index PROJECT=<path>, TYPE=docs|config categorises it
 make reindex     index PROJECT=<path> again, trusting neither cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
@@ -37,7 +37,7 @@ problem from the stack being down.
 | Tool                       | Arguments                                                           | Returns                                                                |
 | -------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `get_code_graph_neighbors` | `node_id`                                                           | Incoming and outgoing edges of a node, with the relation type          |
-| `search_code_nodes`        | `query`, optional `limit`                                           | Nodes whose name or id matches the substring                           |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                | Nodes whose name or id matches, in one project or across a whole kind  |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                       | Shortest chain of relations between two nodes                          |
 | `save_node_summary`        | `node_id`, `summary`                                                | Saves or updates a summary for a specific node                         |
 | `get_node_summary`         | `node_id`                                                           | Retrieves summary, file path and type for a node                       |
@@ -45,6 +45,9 @@ problem from the stack being down.
 | `get_plans`                | optional `project`, `status`, `type`                                | Plans of one project plus the global ones; `project: "*"` lists all    |
 | `drop_plan`                | `plan_id`                                                           | Deletes one plan outright, for one written by mistake                  |
 | `drop_project`             | `name`, optional `confirm`                                          | Reports what dropping a project costs, and drops it on `confirm: true` |
+| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`   | Writes a memory into `_memory`; `about: "*"` makes it global           |
+| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`             | Memories of one scope plus the global ones, in full                    |
+| `drop_memory`              | `memory_id`, optional `about`                                       | Deletes one memory that turned out to be wrong                         |
 
 Example - find how two pieces of code are related:
 
@@ -55,6 +58,48 @@ shortest_path(source_id: "src/index.ts::handleRequest", target_id: "src/storage.
 
 Errors come back as a tool result with `isError` set, rather than tearing
 down the client session.
+
+## Project types and searching across them
+
+Every project carries a type: `codebase` (the default), `docs` and `config`
+for indexed trees, and `memory` for the built-in `_memory` project. It is set
+by `make index PROJECT=... TYPE=docs` and stored once - a later run without
+`TYPE=` keeps it rather than resetting it.
+
+The type earns its place in `search_code_nodes`, which is the one read that
+need not stop at a project:
+
+```text
+search_code_nodes(query: "retention", project: "*")
+search_code_nodes(query: "retention", project_type: "docs")
+```
+
+The first searches every graph in the database, the second every project of
+one kind. Each row names its project, and the limit is shared out between the
+projects rather than spent on whichever sorts first, so six indexed codebases
+answer with six projects' hits. A named `project` and a `project_type` cannot
+be combined - one narrows what the other spans.
+
+## Memory
+
+What an agent works out about a repository - a convention, a decision, why
+something is the way it is - has nowhere to live in a tree it may only read.
+`save_memory` writes it into `_memory`, a built-in project of type `memory`
+created by the migration, holding records rather than files:
+
+```text
+save_memory(memory_id: "commit-style", title: "Commits go through cz",
+            text: "...", about: "*", tags: ["git"])
+get_memory(about: "api")
+drop_memory(memory_id: "api/commit-style")
+```
+
+A memory is tagged with what it is about, the way a plan is - a project name,
+or `"*"` for one belonging to no repository in particular - and reading one
+scope always returns the global ones alongside it. Nothing indexes into
+`_memory`: `make index` refuses a project name starting with `_`, so a memory
+is never pruned by a re-index the way a derived node is. It is also not a
+plan: a memory is what stays true after the task, a plan is what to do next.
 
 ## Plans
 

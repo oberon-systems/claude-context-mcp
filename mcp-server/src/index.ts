@@ -33,6 +33,25 @@ const DEFAULT_RESULTS = 20;
 const MAX_HOPS = 10;
 const DEFAULT_HOPS = 6;
 
+// The built-in project holding what an agent wrote down rather than what an
+// indexer derived. It is a project so the graph tools already read it; it is
+// named apart so nothing indexes a tree into it.
+const MEMORY_PROJECT = "_memory";
+
+// A memory's node id is `<about>/<id>`, which is what keeps two repositories
+// from colliding on `commit-style`. A memory about no repository in
+// particular needs a segment of its own, and "*" is not one.
+const GLOBAL_SCOPE = "_global";
+
+// What a project is, apart from where it lives. Free text in the database, so
+// this list is what the tools advertise rather than what they enforce.
+const PROJECT_TYPES =
+  '"codebase" (the default), "docs", "config" - all indexed trees, differing ' +
+  'only as a search filter - and "memory", which is not a tree at all: the ' +
+  "built-in " +
+  MEMORY_PROJECT +
+  " holds records written through save_memory.";
+
 // One database holds the graph of every indexed codebase, so every statement
 // below is scoped to one project. A session gets its default from the address
 // the client connected to (`/mcp/<project>`), and any single call can name a
@@ -64,6 +83,36 @@ function planScopeDescription(
     : `${subject}. Defaults to "${sessionProject}". ${star}`;
 }
 
+// Searching is the one graph read that is not confined to a project: "*"
+// spans the database, and a project type narrows that span to the half of it
+// worth reading.
+function searchScopeDescription(sessionProject: string | null): string {
+  const base =
+    sessionProject === null
+      ? "Project to search. This session was opened on /mcp without naming " +
+        "one, so a search here spans every project unless one is named."
+      : `Project to search. Defaults to "${sessionProject}".`;
+  return (
+    base + ' "*" searches every project; pass project_type to narrow that.'
+  );
+}
+
+// A memory is tagged with what it is about, the way a plan is: the repository
+// it applies to, or "*" for one that applies to none in particular. A read
+// always sees the global memories on top of whatever scope it named.
+function memoryScopeDescription(sessionProject: string | null): string {
+  const base =
+    sessionProject === null
+      ? "What this memory is about. Required when writing: this session was " +
+        "opened on /mcp without naming a project."
+      : `What this memory is about. Defaults to "${sessionProject}".`;
+  return (
+    base +
+    ' "*" is a memory about no project in particular, and those are read ' +
+    "alongside every scope."
+  );
+}
+
 // What the record is, as opposed to where it stands. A template was a status
 // until the type column existed, which left it unable to be completed.
 const PLAN_TYPE_DESCRIPTION =
@@ -86,13 +135,18 @@ const listToolsHandler = async (
     type: "string",
     description: planScopeDescription(sessionProject, false),
   };
+  const memoryScope = {
+    type: "string",
+    description: memoryScopeDescription(sessionProject),
+  };
   return {
     tools: [
       {
         name: "list_projects",
         description:
-          "List the codebases indexed in this database, with their root " +
-          "paths and node counts",
+          "List the projects in this database, with their type, root paths " +
+          "and node counts. Types are " +
+          PROJECT_TYPES,
         inputSchema: {
           type: "object",
           properties: {},
@@ -140,18 +194,30 @@ const listToolsHandler = async (
       },
       {
         name: "search_code_nodes",
-        description: "Find code nodes by name or identifier",
+        description:
+          "Find nodes by name or identifier, in one project or across every " +
+          "project of a kind",
         inputSchema: {
           type: "object",
           properties: {
-            project,
+            project: {
+              type: "string",
+              description: searchScopeDescription(sessionProject),
+            },
+            project_type: {
+              type: "string",
+              description:
+                "Search every project of this kind instead of one project. " +
+                "Cannot be combined with a named project. Types are " +
+                PROJECT_TYPES,
+            },
             query: {
               type: "string",
               description: "Substring matched against the node name and id",
             },
             limit: {
               type: "number",
-              description: `Maximum rows to return (default ${DEFAULT_RESULTS}, max ${MAX_RESULTS})`,
+              description: `Maximum rows to return (default ${DEFAULT_RESULTS}, max ${MAX_RESULTS}). A search spanning projects splits it between them rather than spending it all on the first`,
             },
           },
           required: ["query"],
@@ -296,6 +362,99 @@ const listToolsHandler = async (
         },
       },
       {
+        name: "save_memory",
+        description:
+          "Write down something worth keeping across sessions: a convention, " +
+          "a decision, a fact about how a repository works. Stored in the " +
+          "built-in " +
+          MEMORY_PROJECT +
+          " project, not derived from any tree, so nothing re-indexes it away",
+        inputSchema: {
+          type: "object",
+          properties: {
+            about: memoryScope,
+            memory_id: {
+              type: "string",
+              description:
+                "Short slug naming the topic, for example " +
+                '"commit-style". Unique within one `about` scope; saving ' +
+                "under an existing one overwrites that memory",
+            },
+            title: {
+              type: "string",
+              description: "One line naming what this is",
+            },
+            text: {
+              type: "string",
+              description: "The memory itself",
+            },
+            summary: {
+              type: "string",
+              description:
+                "One-line gist, which is what listings and searches show. " +
+                "Taken from the title when absent",
+            },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description: "Free-text labels a later read can filter on",
+            },
+          },
+          required: ["memory_id", "title", "text"],
+        },
+      },
+      {
+        name: "get_memory",
+        description:
+          "Read stored memories in full. Without a memory_id it lists the " +
+          "scope, and memories about no project in particular are always " +
+          "included",
+        inputSchema: {
+          type: "object",
+          properties: {
+            about: memoryScope,
+            memory_id: {
+              type: "string",
+              description:
+                "Read one memory. Either the slug, which is looked up in " +
+                'the named scope and then globally, or a full "<about>/<slug>" id',
+            },
+            tags: {
+              type: "array",
+              items: { type: "string" },
+              description: "Keep only memories carrying all of these tags",
+            },
+            query: {
+              type: "string",
+              description:
+                "Substring matched against the title, the gist and the text",
+            },
+            limit: {
+              type: "number",
+              description: `Maximum memories to return (default ${DEFAULT_RESULTS}, max ${MAX_RESULTS})`,
+            },
+          },
+        },
+      },
+      {
+        name: "drop_memory",
+        description:
+          "Delete a memory that turned out to be wrong or is no longer true",
+        inputSchema: {
+          type: "object",
+          properties: {
+            memory_id: {
+              type: "string",
+              description:
+                'Full "<about>/<slug>" id, as get_memory reports it. A bare ' +
+                "slug is resolved against `about`",
+            },
+            about: memoryScope,
+          },
+          required: ["memory_id"],
+        },
+      },
+      {
         name: "get_file_hash",
         description: "Get the stored MD5 hash for a file",
         inputSchema: {
@@ -410,6 +569,76 @@ function readProject(
   );
 }
 
+/** Read an optional string argument, rejecting a present but wrong-typed one. */
+function readOptionalString(
+  args: Record<string, unknown> | undefined,
+  key: string,
+): string | null {
+  const value = args?.[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error(`Argument "${key}" must be a string`);
+  }
+  return value.trim() === "" ? null : value.trim();
+}
+
+/** Read an optional array-of-strings argument. */
+function readTags(
+  args: Record<string, unknown> | undefined,
+  key: string,
+): string[] | null {
+  const value = args?.[key];
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Array.isArray(value) || value.some((tag) => typeof tag !== "string")) {
+    throw new Error(`Argument "${key}" must be an array of strings`);
+  }
+  const tags = (value as string[]).map((tag) => tag.trim()).filter(Boolean);
+  return tags.length === 0 ? null : tags;
+}
+
+/** Which project a search covers, or null for every project in the database.
+ *
+ * Unlike readProject this never throws on a session without a default: a
+ * search that names nothing spans the database rather than refusing.
+ */
+function readSearchProject(
+  args: Record<string, unknown> | undefined,
+  sessionProject: string | null,
+): string | null {
+  const named = readOptionalString(args, "project");
+  if (named !== null) {
+    return named === "*" ? null : named;
+  }
+  if (readOptionalString(args, "project_type") !== null) {
+    return null;
+  }
+  return sessionProject;
+}
+
+/** The scope tag a memory call is about, and whether it was named outright. */
+function readMemoryScope(
+  args: Record<string, unknown> | undefined,
+  sessionProject: string | null,
+): { explicit: boolean; about: string | null } {
+  const named = readOptionalString(args, "about");
+  if (named !== null) {
+    return { explicit: true, about: named === "*" ? null : named };
+  }
+  return { explicit: false, about: sessionProject };
+}
+
+/** The node id a memory is stored under: its scope, then its slug. */
+function memoryNodeId(about: string | null, memoryId: string): string {
+  if (memoryId.includes("/")) {
+    return memoryId;
+  }
+  return `${about ?? GLOBAL_SCOPE}/${memoryId}`;
+}
+
 /** What project a plan call is about: its own argument, else the session's.
  *
  * `explicit` separates a caller that named "*" from one that named nothing on
@@ -454,9 +683,11 @@ async function requireProject(project: string): Promise<string> {
 // rows back, nothing brings a hand-written summary back, and a plan is not
 // tied to the project row at all - it is tagged with the name and stays.
 const DROP_REPORT = `
-  SELECT p.root_path, p.indexed_at,
+  SELECT p.root_path, p.indexed_at, p.type,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name) AS nodes,
+         (SELECT count(*) FROM graph_nodes AS g
+           WHERE g.project = p.name AND g.type = 'memory') AS memories,
          (SELECT count(*) FROM graph_edges AS e
            WHERE e.project = p.name) AS edges,
          (SELECT count(*) FROM file_hashes AS f
@@ -467,6 +698,7 @@ const DROP_REPORT = `
            WHERE l.project = p.name) AS plans,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name
+             AND g.type <> 'memory'
              AND g.metadata ->> 'summary_source' = 'manual') AS summaries
     FROM projects AS p
    WHERE p.name = $1`;
@@ -476,7 +708,9 @@ const DROP_REPORT = `
 type DropReport = {
   root_path: string;
   indexed_at: Date | null;
+  type: string;
   nodes: string;
+  memories: string;
   edges: string;
   hashes: string;
   embeddings: string;
@@ -494,11 +728,24 @@ function describeDrop(
     row.indexed_at === null
       ? "never indexed"
       : `indexed ${row.indexed_at.toISOString()}`;
+  // Nothing rebuilds a memory project: there is no tree behind it, so its
+  // nodes belong on the other side of the ledger from a codebase's.
+  const derived =
+    row.type === "memory"
+      ? []
+      : [
+          `  rebuilt by one \`make index\`: ${row.nodes} nodes, ` +
+            `${row.edges} edges, ${row.hashes} file hashes, ` +
+            `${row.embeddings} embeddings`,
+        ];
+  const lost = [`${row.summaries} manual summaries`];
+  if (row.memories !== "0") {
+    lost.push(`${row.memories} memories, which no index run brings back`);
+  }
   const lines = [
     `${dropped ? "dropped" : "project"} "${project}" (${row.root_path}, ${when})`,
-    `  rebuilt by one \`make index\`: ${row.nodes} nodes, ${row.edges} edges, ` +
-      `${row.hashes} file hashes, ${row.embeddings} embeddings`,
-    `  not rebuilt, gone for good: ${row.summaries} manual summaries`,
+    ...derived,
+    `  not rebuilt, gone for good: ${lost.join(", ")}`,
     `  kept, tagged with the name: ${row.plans} plans, still readable with ` +
       `get_plans project: "${project}"`,
   ];
@@ -521,10 +768,10 @@ function makeCallToolHandler(
     try {
       if (name === "list_projects") {
         const res = await dbPool.query(
-          `SELECT p.name, p.root_path, p.indexed_at, COUNT(n.id) AS nodes
+          `SELECT p.name, p.type, p.root_path, p.indexed_at, COUNT(n.id) AS nodes
              FROM projects AS p
              LEFT JOIN graph_nodes AS n ON n.project = p.name
-            GROUP BY p.name, p.root_path, p.indexed_at
+            GROUP BY p.name, p.type, p.root_path, p.indexed_at
             ORDER BY p.name`,
         );
 
@@ -730,6 +977,269 @@ function makeCallToolHandler(
         };
       }
 
+      // The memory tools always work on the built-in project, never on the
+      // session's, so they sit above the project lookup like the plan tools.
+      if (name === "save_memory") {
+        const memoryId = requireString(args, "memory_id");
+        const title = requireString(args, "title");
+        const text = requireString(args, "text");
+        const gist = readOptionalString(args, "summary") ?? title;
+        const tags = readTags(args, "tags") ?? [];
+        const scope = readMemoryScope(args, sessionProject);
+
+        // Storing a memory against no project at all is a decision, so it is
+        // made rather than fallen into by omission - as with save_plan.
+        if (!scope.explicit && scope.about === null) {
+          throw new Error(
+            'Argument "about" is required: this session was opened on /mcp ' +
+              'without naming a project. Name the project this is about, or "*" ' +
+              "for a memory about none in particular.",
+          );
+        }
+        if (memoryId.includes("/")) {
+          throw new Error(
+            'Argument "memory_id" is a slug, not a path: the scope is taken ' +
+              'from "about" and prefixed automatically.',
+          );
+        }
+
+        const nodeId = memoryNodeId(scope.about, memoryId);
+        const client = await dbPool.connect();
+        try {
+          await client.query("BEGIN");
+          // Re-created rather than assumed: dropping the project would
+          // otherwise turn every later save into a foreign key error.
+          await client.query(
+            `INSERT INTO projects (name, root_path, type)
+             VALUES ($1, 'memory://agent', 'memory')
+             ON CONFLICT (name) DO NOTHING`,
+            [MEMORY_PROJECT],
+          );
+          await client.query(
+            `INSERT INTO graph_nodes (
+               project, id, name, type, summary, content, metadata
+             )
+             VALUES ($1, $2, $3, 'memory', $4, $5,
+                     JSONB_BUILD_OBJECT(
+                       'about', $6::text,
+                       'tags', $7::jsonb,
+                       'summary_source', 'manual',
+                       'updated_at', to_char(
+                         now() AT TIME ZONE 'UTC',
+                         'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                       )
+                     ))
+             ON CONFLICT (project, id) DO UPDATE SET
+               name = EXCLUDED.name,
+               type = 'memory',
+               summary = EXCLUDED.summary,
+               content = EXCLUDED.content,
+               metadata = graph_nodes.metadata || EXCLUDED.metadata`,
+            [
+              MEMORY_PROJECT,
+              nodeId,
+              title,
+              gist,
+              text,
+              scope.about,
+              JSON.stringify(tags),
+            ],
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+
+        const where =
+          scope.about === null ? "no project in particular" : scope.about;
+        const lines = [`Memory ${nodeId} saved (about ${where}).`];
+        // The scope is free text with nothing to check it, exactly as a plan's
+        // project tag is, so a typo would file it where nothing looks.
+        if (scope.about !== null) {
+          const known = await dbPool.query(
+            `SELECT 1 FROM projects WHERE name = $1`,
+            [scope.about],
+          );
+          if (known.rowCount === 0) {
+            lines.push(
+              `No project named "${scope.about}" in this database. The memory ` +
+                "was stored anyway and will be read once one is indexed under " +
+                "that name.",
+            );
+          }
+        }
+
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      if (name === "get_memory") {
+        const scope = readMemoryScope(args, sessionProject);
+        const wanted = readOptionalString(args, "memory_id");
+        const tags = readTags(args, "tags");
+        const query = readOptionalString(args, "query");
+
+        // A bare slug is looked for in the named scope and globally, since
+        // those are the two places a read of that scope can see.
+        const ids =
+          wanted === null
+            ? null
+            : wanted.includes("/")
+              ? [wanted]
+              : [memoryNodeId(scope.about, wanted), memoryNodeId(null, wanted)];
+
+        const res = await dbPool.query(
+          `SELECT id, name AS title, summary, content,
+                  metadata ->> 'about' AS about,
+                  metadata -> 'tags' AS tags,
+                  metadata ->> 'updated_at' AS updated_at,
+                  created_at
+             FROM graph_nodes
+            WHERE project = $1
+              AND type = 'memory'
+              AND ($2::text[] IS NULL OR id = ANY ($2))
+              AND ($3::text IS NULL
+                   OR metadata ->> 'about' = $3
+                   OR metadata ->> 'about' IS NULL)
+              AND ($4::jsonb IS NULL OR metadata -> 'tags' @> $4)
+              AND ($5::text IS NULL
+                   OR name ILIKE $5 OR summary ILIKE $5 OR content ILIKE $5)
+            ORDER BY (metadata ->> 'about' IS NULL), id
+            LIMIT $6`,
+          [
+            MEMORY_PROJECT,
+            ids,
+            scope.about,
+            tags === null ? null : JSON.stringify(tags),
+            query === null ? null : `%${query}%`,
+            readLimit(args),
+          ],
+        );
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
+
+      if (name === "drop_memory") {
+        const memoryId = requireString(args, "memory_id");
+        const scope = readMemoryScope(args, sessionProject);
+        const nodeId = memoryNodeId(scope.about, memoryId);
+        const res = await dbPool.query<{ name: string }>(
+          `DELETE FROM graph_nodes
+            WHERE project = $1 AND id = $2 AND type = 'memory'
+        RETURNING name`,
+          [MEMORY_PROJECT, nodeId],
+        );
+
+        // A typo and a delete have to read differently, or the caller cannot
+        // tell which of the two just happened.
+        if (res.rowCount === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No memory "${nodeId}". Nothing was deleted.`,
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Dropped memory ${nodeId} ("${res.rows[0].name}").`,
+            },
+          ],
+        };
+      }
+
+      // Above the project lookup below, because a search is the one read that
+      // can span the database: "*" and a project type name no single project.
+      if (name === "search_code_nodes") {
+        const pattern = `%${requireString(args, "query")}%`;
+        const limit = readLimit(args);
+        const named = readSearchProject(args, sessionProject);
+        const kind = readOptionalString(args, "project_type");
+
+        if (named !== null && kind !== null) {
+          throw new Error(
+            'Arguments "project" and "project_type" cannot be combined: ' +
+              "project_type narrows a search across projects, so pass " +
+              'project: "*" or leave it out.',
+          );
+        }
+        if (named !== null) {
+          await requireProject(named);
+        }
+
+        // Round robin, not concatenation: taking each project's first hit,
+        // then each project's second, is what keeps a search across the
+        // database from spending its whole limit on whichever project sorts
+        // first - while still returning as many rows as were asked for.
+        const res = await dbPool.query(
+          `WITH scope AS (
+             SELECT name, type FROM projects
+              WHERE ($1::text IS NULL OR name = $1)
+                AND ($2::text IS NULL OR type = $2)
+           ),
+           hits AS (
+             SELECT n.project, s.type AS project_type, n.id, n.name, n.type,
+                    n.file_path, n.summary,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY n.project ORDER BY n.id
+                    ) AS rn
+               FROM graph_nodes AS n
+               JOIN scope AS s ON s.name = n.project
+              WHERE n.name ILIKE $3 OR n.id ILIKE $3
+           )
+           SELECT project, project_type, id, name, type, file_path, summary
+             FROM hits
+            ORDER BY rn, project, id
+            LIMIT $4`,
+          [named, kind, pattern, limit],
+        );
+
+        // A single project keeps the shape it always had; the project columns
+        // are noise when every row carries the same two values. Across
+        // projects the rows are regrouped, since the round robin above orders
+        // them by rank and a reader wants them by project.
+        const rows =
+          named === null
+            ? [...res.rows].sort((a, b) =>
+                a.project === b.project
+                  ? String(a.id).localeCompare(String(b.id))
+                  : String(a.project).localeCompare(String(b.project)),
+              )
+            : res.rows.map(
+                ({ project: _p, project_type: _t, ...rest }) => rest,
+              );
+
+        if (rows.length === 0 && kind !== null) {
+          const types = await dbPool.query(
+            `SELECT DISTINCT type FROM projects ORDER BY type`,
+          );
+          const known = types.rows.map((row) => row.type as string).join(", ");
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  `No node matching the query in any project of type ` +
+                  `"${kind}". Types in this database: ${known || "none"}.`,
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(rows, null, 2) }],
+        };
+      }
+
       const project = await requireProject(readProject(args, sessionProject));
 
       if (name === "get_code_graph_neighbors") {
@@ -752,22 +1262,6 @@ function makeCallToolHandler(
           ORDER BY n.direction, n.relation_type, n.node_id
           LIMIT $3`,
           [project, nodeId, MAX_RESULTS],
-        );
-
-        return {
-          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
-        };
-      }
-
-      if (name === "search_code_nodes") {
-        const query = `%${requireString(args, "query")}%`;
-        const res = await dbPool.query(
-          `SELECT id, name, type, file_path, summary
-           FROM graph_nodes
-          WHERE project = $1 AND (name ILIKE $2 OR id ILIKE $2)
-          ORDER BY id
-          LIMIT $3`,
-          [project, query, readLimit(args)],
         );
 
         return {

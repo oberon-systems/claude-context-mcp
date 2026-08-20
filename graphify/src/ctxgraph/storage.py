@@ -17,6 +17,7 @@ from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
 from ctxgraph.config import (
+    DEFAULT_PROJECT_TYPE,
     MAX_NAME_LENGTH,
     MAX_NODE_ID_LENGTH,
     MAX_TYPE_LENGTH,
@@ -38,7 +39,12 @@ def get_db_connection() -> Connection:
     return psycopg2.connect(get_db_url())
 
 
-def ensure_project(cursor: Cursor, project: str, root_path: str) -> None:
+def ensure_project(
+    cursor: Cursor,
+    project: str,
+    root_path: str,
+    project_type: str | None = None,
+) -> None:
     """Register the project being indexed, or refresh when it was.
 
     Both directions of the name/path pairing are checked first, and neither is
@@ -47,13 +53,24 @@ def ensure_project(cursor: Cursor, project: str, root_path: str) -> None:
     unrelated codebases into one graph. A path arriving under a new name means
     a rename, which is legitimate but has to move the existing rows rather
     than orphan them, so it is refused here rather than half done.
+
+    `project_type` categorises the project for the cross-project MCP search.
+    None means "leave whatever is stored alone", so a plain re-index does not
+    demote a project that was registered as something other than the default.
     """
-    cursor.execute("SELECT root_path FROM projects WHERE name = %s;", (project,))
+    cursor.execute("SELECT root_path, type FROM projects WHERE name = %s;", (project,))
     row = cursor.fetchone()
     if row is not None and row[0] != root_path:
         raise RuntimeError(
             f"project {project!r} is already indexed from {row[0]!r}; "
             f"pass PROJECT_NAME to index {root_path!r} under another name"
+        )
+    # A memory project holds records written through the MCP tools; there is
+    # no tree behind it, and an index run would prune every one of them.
+    if row is not None and row[1] == "memory":
+        raise RuntimeError(
+            f"project {project!r} holds agent memory, not an indexed tree; "
+            "indexing into it would delete every memory it holds"
         )
 
     cursor.execute("SELECT name FROM projects WHERE root_path = %s;", (root_path,))
@@ -66,22 +83,24 @@ def ensure_project(cursor: Cursor, project: str, root_path: str) -> None:
 
     cursor.execute(
         """
-        INSERT INTO projects (name, root_path, indexed_at)
-        VALUES (%s, %s, CURRENT_TIMESTAMP)
-        ON CONFLICT (name) DO UPDATE SET indexed_at = CURRENT_TIMESTAMP;
+        INSERT INTO projects (name, root_path, indexed_at, type)
+        VALUES (%s, %s, CURRENT_TIMESTAMP, COALESCE(%s, %s))
+        ON CONFLICT (name) DO UPDATE SET
+            indexed_at = CURRENT_TIMESTAMP,
+            type = COALESCE(%s, projects.type);
         """,
-        (project, root_path),
+        (project, root_path, project_type, DEFAULT_PROJECT_TYPE, project_type),
     )
 
 
-def list_projects(cursor: Cursor) -> list[tuple[str, str, int]]:
-    """Read every indexed project with its root and its node count."""
+def list_projects(cursor: Cursor) -> list[tuple[str, str, str, int]]:
+    """Read every indexed project with its root, its type and its node count."""
     cursor.execute(
         """
-        SELECT p.name, p.root_path, COUNT(n.id)
+        SELECT p.name, p.root_path, p.type, COUNT(n.id)
           FROM projects AS p
           LEFT JOIN graph_nodes AS n ON n.project = p.name
-         GROUP BY p.name, p.root_path
+         GROUP BY p.name, p.root_path, p.type
          ORDER BY p.name;
         """
     )

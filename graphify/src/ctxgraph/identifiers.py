@@ -10,6 +10,7 @@ import posixpath
 import re
 
 from ctxgraph.config import (
+    BUILTIN_NAME_PREFIX,
     ENTITY_SEPARATOR,
     MAX_NODE_ID_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
@@ -43,6 +44,15 @@ def project_name(explicit: str, root_path: str) -> str:
     directory and nothing else.
     """
     candidate = explicit.strip() or posixpath.basename(root_path.rstrip("/"))
+    # Checked before the cleaning below, which would turn `_memory` into
+    # `memory` and index a tree into the built-in project without saying so.
+    if candidate.startswith(BUILTIN_NAME_PREFIX):
+        raise RuntimeError(
+            f"project name {candidate!r} is reserved: names starting with "
+            f"{BUILTIN_NAME_PREFIX!r} belong to the built-in projects, which "
+            "hold records written by an agent rather than an indexed tree; "
+            "pass PROJECT_NAME to index this one under another name"
+        )
     cleaned = _PROJECT_NAME_ALLOWED.sub("-", candidate.lower()).strip("-")
     # "." and ".." survive the allowed set and would name the parent of every
     # per-project directory the name is used for.

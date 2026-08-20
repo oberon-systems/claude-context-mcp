@@ -17,6 +17,17 @@ PROJECT_ROOT = os.getenv("PROJECT_ROOT", "")
 # the MCP tools, and the /mcp/<name> endpoint a client connects to. Derived
 # from the last segment of PROJECT_ROOT when not set.
 PROJECT_NAME = os.getenv("PROJECT_NAME", "")
+# What kind of thing the project is, stored on the projects row and used by
+# the MCP tools to narrow a cross-project search. Empty means "leave it as it
+# is", so a re-index without TYPE= does not demote a project to the default.
+PROJECT_TYPE = os.getenv("PROJECT_TYPE", "").strip() or None
+# Documentation, not validation: the column is deliberately unconstrained, so
+# an unknown value is warned about and then stored.
+KNOWN_PROJECT_TYPES = frozenset({"codebase", "docs", "config", "memory"})
+DEFAULT_PROJECT_TYPE = "codebase"
+# Reserved for built-in projects the indexer never writes: `_memory` today,
+# `_common` when shared records land.
+BUILTIN_NAME_PREFIX = "_"
 IGNORE_FILE = ".ctxignore"
 KEEP_FILE = ".ctxkeep"
 # Re-extract every file instead of trusting either cache: the extractor's own

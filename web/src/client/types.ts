@@ -1,5 +1,6 @@
 export type Project = {
   name: string;
+  type: string;
   root_path: string;
   indexed_at: string | null;
   stale_seconds: number | null;

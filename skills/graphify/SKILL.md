@@ -113,8 +113,9 @@ nodes each indexed project has.
 
 ### /graphify projects
 
-Call `list_projects`. It returns every codebase in the database with its root
-path and node count. This is what to check before naming a `project` argument.
+Call `list_projects`. It returns every project in the database with its type,
+root path and node count. This is what to check before naming a `project` or a
+`project_type` argument.
 
 ### /graphify index PATH
 
@@ -123,7 +124,9 @@ path and node count. This is what to check before naming a `project` argument.
 ```
 
 Indexes any tree into the same database, under a name taken from its last path
-segment. This is the same command the rebuild above runs, with another path.
+segment. Add `TYPE=docs` or `TYPE=config` when the tree is not source code -
+that is what a search across the database narrows on, and it is stored once,
+so a later re-index without `TYPE=` keeps it. This is the same command the rebuild above runs, with another path.
 The target repository needs nothing of its own - no checkout of this project
 inside it, no configuration - because the path is an argument of the job rather
 than a setting. Say which name it landed under; the log line names it.
@@ -146,6 +149,23 @@ own - the user says the word, or the project stays. Resolve the name with
 
 `@MAKE@ unindex PROJECT=/absolute/path` does the same from a shell, with a
 confirmation prompt.
+
+## Searching every project at once
+
+`search_code_nodes` is the one read that need not stop at a project.
+`project: "*"` searches every graph in the database, and `project_type` narrows
+that to one kind of project - `codebase`, `docs`, `config` or `memory`:
+
+```json
+{ "query": "retention policy", "project_type": "docs" }
+```
+
+Reach for it when the question is "where is this written down" rather than
+"what does this repository do", since the answer may be in a repository you
+would not have thought to name. The limit is shared between the projects, so
+the answer is a spread rather than the first project's hits. Every row names
+its project; quote that when reporting. A named `project` and a `project_type`
+together are refused - one narrows what the other spans.
 
 ## Querying a neighbouring project
 
@@ -184,5 +204,11 @@ of real ones, but that is a wasted turn.
   `type` is what it is - `plan`, `template` or `procedure`. `get_plans` lists
   `type: "plan"` unless another is named, so a procedure never appears where
   approved pending work is read; `type: "*"` lists every kind.
+- Something worth keeping past this session goes into `_memory` through
+  `save_memory` - a convention, a decision, why something is the way it is.
+  It is tagged with what it is about, like a plan: a project name, or `"*"`
+  for one that belongs to no repository. `get_memory` reads a scope plus the
+  global ones; `drop_memory` deletes one that turned out to be wrong. Nothing
+  indexes into `_memory`, so a memory is never pruned by a re-index.
 - The project mount is read only. Nothing in this skill writes to the indexed
   tree.

@@ -36,6 +36,7 @@ export function ProjectsPage() {
         <thead>
           <tr>
             <th>Project</th>
+            <th>Type</th>
             <th>Root</th>
             <th className="num">Nodes</th>
             <th className="num">Edges</th>
@@ -51,6 +52,9 @@ export function ProjectsPage() {
                 <Link to={`/projects/${encodeURIComponent(project.name)}`}>
                   {project.name}
                 </Link>
+              </td>
+              <td>
+                <span className="kind">{project.type}</span>
               </td>
               <td className="path">{project.root_path}</td>
               <td className="num">

@@ -122,7 +122,8 @@ install: require-env require-not-root  ## Onboard AGENT_ROOT and index it
 		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
 		scripts/install.sh
 	@test '$(INDEX)' = '0' \
-		|| $(MAKE) --no-print-directory index PROJECT='$(abspath $(AGENT_ROOT))'
+		|| $(MAKE) --no-print-directory index TYPE='$(TYPE)' \
+			PROJECT='$(abspath $(AGENT_ROOT))'
 
 shell: require-venv  ## Open an interactive subshell with the virtualenv activated
 	@$(SHELL) --rcfile <(cat ~/.bashrc 2> /dev/null; \
@@ -274,6 +275,10 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 # which means "skip the confirmation" for `unindex` and `clean`.
 PROJECT ?=
 PROJECT_NAME ?=
+# What the project is, for the cross-project MCP search: codebase (the
+# default), docs, config. Unset keeps whatever is already stored, so it is
+# given once and not on every re-index.
+TYPE ?=
 FRESH ?=
 # SUMMARIZE=1 has the index run write model summaries as it goes. Off by
 # default because it costs seconds per file: `make summarize` is the same work
@@ -290,9 +295,10 @@ KEEP ?= 7
 BACKUP_DIR ?=
 INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 
-index: require-env  ## Index PROJECT (default: PROJECT_PATH from .env)
+index: require-env  ## Index PROJECT (TYPE= categorises it)
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
+		$(if $(TYPE),PROJECT_TYPE='$(TYPE)') \
 		$(if $(FRESH),FORCE_REEXTRACT=1) \
 		$(if $(SUMMARIZE),SUMMARIZE=1 LLM_MODEL_PATH='$(MODEL_PATH)') \
 		$(COMPOSE) --profile index run --rm graphify
@@ -318,7 +324,8 @@ summarize: require-env require-model  ## Summarize PROJECT with the model (BG=1 
 # longer has.
 reindex: require-env  ## Re-index PROJECT, trusting neither cache
 	@$(MAKE) --no-print-directory index FRESH=1 \
-		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
+		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)' \
+		TYPE='$(TYPE)'
 
 # The other end of `index`: one project leaves the database, the rest stay.
 # Naming it is deliberate work - PROJECT= resolves through the projects table by

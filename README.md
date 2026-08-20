@@ -154,11 +154,25 @@ It is the named form of `make index PROJECT=... FRESH=1`, and the
 `context-reindex` alias is the same thing for the tree you stand in.
 
 Each lands under a name taken from the last segment of its path (`api`,
-`infra`; override with `PROJECT_NAME=`). The indexed repository needs nothing
+`infra`; override with `PROJECT_NAME=`). Names beginning with `_` are reserved
+for the built-in projects described under [Agent memory](#agent-memory). The indexed repository needs nothing
 of its own for this - no checkout of this project inside it, no `.env`, no
 Makefile - because the path is an argument of the indexing job rather than a
 setting. All it may optionally carry is `.ctxignore` / `.ctxkeep`, described
 below.
+
+`TYPE=` says what kind of project it is, which is what a search across the
+database narrows on:
+
+```bash
+make index PROJECT=/home/you/work/handbook TYPE=docs
+make index PROJECT=/home/you/work/infra TYPE=config
+```
+
+`codebase` is the default, and `docs` and `config` are the other two an index
+run may write. They are all indexed trees and differ only as a filter - the
+fourth, `memory`, is not a tree at all. The type is stored once: a later
+`make index` without `TYPE=` keeps it rather than resetting it to the default.
 
 An agent connects to one project and can read the others:
 
@@ -169,7 +183,15 @@ claude mcp add --transport http --scope project context http://localhost:3000/mc
 Every tool then works on `api` without being told, and takes an optional
 `project` argument to reach another graph in the same database - which is what
 answers a question spanning two repositories, an Ansible role and the service
-it deploys, an API and its client. `list_projects` returns what is indexed.
+it deploys, an API and its client. `list_projects` returns what is indexed,
+with each project's type.
+
+`search_code_nodes` is the one read that need not stop at a project.
+`project: "*"` searches every graph in the database, and `project_type: "docs"`
+searches every project of that kind - which is how a convention is found
+without knowing which repository wrote it down. The limit is shared out between
+the projects rather than spent on whichever sorts first, so a search over six
+codebases answers with all six.
 
 Removing one is the same shape:
 
@@ -300,6 +322,7 @@ make pull        pull the published images, discarding a local build
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env
+                 TYPE=docs|config categorises it; unset keeps what is stored
                  FRESH=1 re-parses every file instead of trusting a cache
 make reindex     index PROJECT=<path> again, trusting neither cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
@@ -375,7 +398,7 @@ make mcp help
 | Tool                       | Arguments                                                           | Returns                                                                |
 | -------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | `get_code_graph_neighbors` | `node_id`                                                           | Incoming and outgoing edges of a node, with the relation type          |
-| `search_code_nodes`        | `query`, optional `limit`                                           | Nodes whose name or id matches the substring                           |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                | Nodes whose name or id matches, in one project or across a whole kind  |
 | `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                       | Shortest chain of relations between two nodes                          |
 | `save_node_summary`        | `node_id`, `summary`                                                | Saves or updates a summary for a specific node                         |
 | `get_node_summary`         | `node_id`                                                           | Retrieves summary, file path, and type for a node                      |
@@ -383,6 +406,9 @@ make mcp help
 | `get_plans`                | optional `project`, `status`, `type`                                | Plans of one project plus the global ones; `project: "*"` lists all    |
 | `drop_plan`                | `plan_id`                                                           | Deletes one plan outright, for one written by mistake                  |
 | `drop_project`             | `name`, optional `confirm`                                          | Reports what dropping a project costs, and drops it on `confirm: true` |
+| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`   | Writes a memory into `_memory`; `about: "*"` makes it global           |
+| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`             | Memories of one scope plus the global ones, in full                    |
+| `drop_memory`              | `memory_id`, optional `about`                                       | Deletes one memory that turned out to be wrong                         |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
@@ -412,6 +438,22 @@ foreign key, so a plan survives `make unindex` and `drop_project`. Full
 lifecycle (`status` vs `type`, the `"*"` project):
 [usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
 
+### Agent memory
+
+What an agent works out about a repository - a convention, a decision, why
+something is the way it is - has nowhere to live in a tree it may only read.
+`save_memory`, `get_memory` and `drop_memory` write it into `_memory`, a
+built-in project of type `memory` that is created by the migration and holds
+records rather than files. Nothing indexes into it: names beginning with `_`
+are refused by `make index`, so a memory is never pruned by a re-index the way
+a derived node is.
+
+A memory is tagged with what it is about, the way a plan is - a project name,
+or `"*"` for one that belongs to no repository in particular - and a read of
+one scope always sees the global ones alongside it. Because `_memory` is a
+project like any other, `search_code_nodes` with `project_type: "memory"`
+finds memories, and `project: "*"` finds them next to what the code says.
+
 ## Web interface
 
 `make up` publishes a dashboard on <http://127.0.0.1:3002> (loopback only):
@@ -436,8 +478,9 @@ Full walkthrough: [deployment](https://oberon-systems.github.io/claude-context-m
 
 Schema migrations are goose-managed (`migrations/`); `make up` applies
 whatever is pending before anything else touches the database. Core tables:
-`graph_nodes`, `graph_edges`, `code_embeddings` (unused for now) and
-`plans` - the last one has no foreign key to a project, so it survives
+`projects` - one row per project, carrying the `type` a search narrows on -
+plus `graph_nodes`, `graph_edges`, `code_embeddings` (unused for now) and
+`plans`; the last one has no foreign key to a project, so it survives
 `make unindex` and `make clean`. Full internals, including how
 `make db <target>` drives goose and what a restore needs:
 [nuances](https://oberon-systems.github.io/claude-context-mcp/nuances.html).

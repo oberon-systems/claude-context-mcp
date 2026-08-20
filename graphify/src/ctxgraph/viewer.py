@@ -55,7 +55,7 @@ INDEX_TEMPLATE = """<!doctype html>
 """
 
 
-def render_index(projects: list[tuple[str, str, int]]) -> bytes:
+def render_index(projects: list[tuple[str, str, str, int]]) -> bytes:
     """List the projects in the database, each linking to its own graph.
 
     Shown when the address names no project and more than one is indexed.
@@ -64,12 +64,13 @@ def render_index(projects: list[tuple[str, str, int]]) -> bytes:
     """
     items = "".join(
         '<li><a href="/graph?project={name}">{name}</a> '
-        "- {count} nodes, {root}</li>".format(
+        "- {kind}, {count} nodes, {root}</li>".format(
             name=html.escape(name),
+            kind=html.escape(project_type),
             count=count,
             root=html.escape(root_path),
         )
-        for name, root_path, count in projects
+        for name, root_path, project_type, count in projects
     )
     return INDEX_TEMPLATE.format(items=items or "<li>nothing indexed yet</li>").encode()
 
@@ -140,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-        names = [name for name, _, _ in projects]
+        names = [name for name, _, _, _ in projects]
         if requested:
             if requested not in names:
                 raise RuntimeError(
