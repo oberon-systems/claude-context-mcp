@@ -56,8 +56,10 @@ export function DropModal({
           </li>
         </ul>
         <p className="muted">
-          <Count value={report.plans} /> plans tagged with this name are kept:
-          the tag is not a foreign key, and a plan outlives its codebase.
+          <Count value={report.plans} /> plans and{" "}
+          <Count value={report.suggestions} /> suggestions tagged with this name
+          are kept: the tag is not a foreign key, and both outlive the codebase
+          they were written about.
         </p>
         {error !== null && <ErrorBox message={error} />}
         <label>

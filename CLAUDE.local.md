@@ -130,12 +130,49 @@ and skip a line only when its count is genuinely zero:
    that re-derived half its answer by hand and still reports "none" is the one line the
    user will not believe.
 
+   **Do not only write this line - persist it.** Every gap named here gets a
+   `save_suggestion` call, and the recap names each one by the slug it was saved under,
+   so the reader can go and look. The slug is derived from the gap and kept stable:
+   that is what makes the second sighting count a hit on the existing record rather
+   than file a duplicate, and it is why no read is needed before the write. Pass the
+   `lever` (`tokens`, `coverage`, `runtime`) and a `kind`, put the concrete fix in the
+   detail, and use `bump: false` when correcting wording rather than reporting a fresh
+   sighting. A gap that turns out to be closed is retired with `save_suggestion`,
+   `status: "resolved"`, `bump: false` - never `drop_suggestion`, which erases the
+   count it accumulated. See the suggestions section below.
+
 The point is auditability of method: the user is comparing what the graph answered
 against what was re-derived by hand, and cannot see the tool calls. So the recap is
 written from what actually happened in the turn, never rounded, never reconstructed
 from what the workflow says should have happened. The suggestions line is the other
 half of that: line 2 says what had to be re-derived by hand, line 5 says what would have
-made it unnecessary, so the tooling gets fixed instead of worked around every turn.
+made it unnecessary, so the tooling gets fixed instead of worked around every turn. That
+last part only works because line 5 lands in the database: a gap reported eight times
+across eight sessions is a ranked backlog item, and the same gap printed eight times
+into eight transcripts is nothing at all.
+
+## Suggestions: the gap backlog in the graph
+
+The built-in `_suggestions` project holds what the graph could not answer, the way
+`_memory` holds what is true about a codebase. A memory says what the code is; a
+suggestion says what the tools failed to tell you about it, and unlike a memory it has
+a lifecycle and a count.
+
+- `save_suggestion` - a slug, a title, the detail, `about` naming the repository
+  (`"*"` for a gap that belongs to none), plus `kind`, `lever` and `status`. Saving
+  under an existing slug is how a gap is reported again: it keeps `first_seen`, moves
+  `last_seen`, increments `hits`, and reopens a suggestion that had been resolved.
+- `get_suggestions` - the open gaps of a scope plus the global ones, most hit first.
+  `status: "*"` reads every status.
+- `drop_suggestion` - one written by mistake, and only that.
+
+Vocabularies, free text in the database and documented rather than enforced. `kind`:
+`empty-lookup`, `missing-summary`, `thin-summary`, `not-indexed`, `no-parser`,
+`stale-index`, `missing-tool`. `lever`: `tokens`, `coverage`, `runtime`. `status`:
+`open`, `resolved`, `wontfix`.
+
+They are graph nodes, so `search_code_nodes` with `project_type: "suggestions"` finds
+them, and the dashboard lists them on its Suggestions tab, sorted by hits.
 
 ## Model routing across the workflow
 

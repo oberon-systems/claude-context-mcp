@@ -34,9 +34,18 @@ Core tables:
   populated yet
 - `plans` - one row per plan, keyed on an id unique across the database
 
+Memories and suggestions have no table of their own: they are `graph_nodes`
+rows under the built-in projects `_memory` and `_suggestions`, created by a
+migration rather than by an index run. That is why they are searchable like
+any other node, and why a suggestion's status and hit count live in the
+node's `metadata` rather than in columns.
+
 `make unindex` cascades from the `projects` row, so one `DELETE` there takes
 that project's nodes, edges, hashes and embeddings, and nothing of any other
-project. Plans are not derived and have no foreign key, so they stay. The
+project. Plans are not derived and have no foreign key, so they stay. So do
+memories and suggestions about that project: they sit under a built-in
+project the drop does not touch, and go on naming a codebase that is gone -
+the drop report counts them for exactly that reason. The
 data directory is a bind mount, not a volume - `docker compose down -v`
 does not remove it, and a regenerated `POSTGRES_PASSWORD` needs
 `make clean` to take effect, since the entrypoint skips initialisation

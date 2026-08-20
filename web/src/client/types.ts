@@ -28,6 +28,7 @@ export type DropReport = {
   hashes: number;
   embeddings: number;
   plans: number;
+  suggestions: number;
   summaries: number;
   dropped: boolean;
 };
@@ -92,4 +93,30 @@ export type Page<T> = {
   total: number;
   limit: number;
   offset: number;
+};
+
+export type SuggestionRow = {
+  id: string;
+  title: string;
+  summary: string | null;
+  about: string | null;
+  kind: string | null;
+  lever: string | null;
+  status: string;
+  hits: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  created_at: string;
+  detail_length: number;
+};
+
+export type Suggestion = Omit<SuggestionRow, "detail_length"> & {
+  detail: string;
+};
+
+export type SuggestionFacets = {
+  abouts: string[];
+  statuses: string[];
+  kinds: string[];
+  global_suggestions: number;
 };

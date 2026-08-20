@@ -395,20 +395,27 @@ make mcp help
 
 ## MCP tools
 
-| Tool                       | Arguments                                                           | Returns                                                                |
-| -------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `get_code_graph_neighbors` | `node_id`                                                           | Incoming and outgoing edges of a node, with the relation type          |
-| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                | Nodes whose name or id matches, in one project or across a whole kind  |
-| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                       | Shortest chain of relations between two nodes                          |
-| `save_node_summary`        | `node_id`, `summary`                                                | Saves or updates a summary for a specific node                         |
-| `get_node_summary`         | `node_id`                                                           | Retrieves summary, file path, and type for a node                      |
-| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type` | Creates or updates a persistent plan; `project: "*"` makes it global   |
-| `get_plans`                | optional `project`, `status`, `type`                                | Plans of one project plus the global ones; `project: "*"` lists all    |
-| `drop_plan`                | `plan_id`                                                           | Deletes one plan outright, for one written by mistake                  |
-| `drop_project`             | `name`, optional `confirm`                                          | Reports what dropping a project costs, and drops it on `confirm: true` |
-| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`   | Writes a memory into `_memory`; `about: "*"` makes it global           |
-| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`             | Memories of one scope plus the global ones, in full                    |
-| `drop_memory`              | `memory_id`, optional `about`                                       | Deletes one memory that turned out to be wrong                         |
+| Tool                       | Arguments                                                                                          | Returns                                                                                             |
+| -------------------------- | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `get_code_graph_neighbors` | `node_id`                                                                                          | Incoming and outgoing edges of a node, with the relation type                                       |
+| `search_code_nodes`        | `query`, optional `project`, `project_type`, `limit`                                               | Nodes whose name or id matches, in one project or across a whole kind                               |
+| `shortest_path`            | `source_id`, `target_id`, optional `max_hops`                                                      | Shortest chain of relations between two nodes                                                       |
+| `save_node_summary`        | `node_id`, `summary`                                                                               | Saves or updates a summary for a specific node                                                      |
+| `get_node_summary`         | `node_id`                                                                                          | Retrieves summary, file path, and type for a node                                                   |
+| `save_plan`                | `plan_id`, `title`, `content`, optional `project`, `status`, `type`                                | Creates or updates a persistent plan; `project: "*"` makes it global                                |
+| `get_plans`                | optional `project`, `status`, `type`                                                               | Plans of one project plus the global ones; `project: "*"` lists all                                 |
+| `drop_plan`                | `plan_id`                                                                                          | Deletes one plan outright, for one written by mistake                                               |
+| `drop_project`             | `name`, optional `confirm`                                                                         | Reports what dropping a project costs, and drops it on `confirm: true`                              |
+| `save_memory`              | `memory_id`, `title`, `text`, optional `about`, `summary`, `tags`                                  | Writes a memory into `_memory`; `about: "*"` makes it global                                        |
+| `get_memory`               | optional `memory_id`, `about`, `tags`, `query`, `limit`                                            | Memories of one scope plus the global ones, in full                                                 |
+| `drop_memory`              | `memory_id`, optional `about`                                                                      | Deletes one memory that turned out to be wrong                                                      |
+| `save_suggestion`          | `suggestion_id`, `title`, `detail`, optional `about`, `summary`, `kind`, `lever`, `status`, `bump` | Records a gap in `_suggestions`; saving under an existing slug counts a hit rather than duplicating |
+| `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                              | Open gaps of one scope plus the global ones, most often hit first                                   |
+| `drop_suggestion`          | `suggestion_id`, optional `about`                                                                  | Deletes one suggestion written by mistake; a closed gap is retired instead                          |
+| `list_indexed_files`       | optional `project`                                                                                 | The files tracked in `file_hashes`, which is the parser half of the tree                            |
+| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored hash of one file, or nothing when it was never indexed                                   |
+| `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                            |
+| `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                 |
 
 Both return JSON text. Errors come back as a tool result with `isError` set,
 rather than tearing down the client session.
@@ -454,11 +461,31 @@ one scope always sees the global ones alongside it. Because `_memory` is a
 project like any other, `search_code_nodes` with `project_type: "memory"`
 finds memories, and `project: "*"` finds them next to what the code says.
 
+### Gap tracking
+
+An agent that had to answer something by hand knows exactly what the graph was
+missing, and until now said so in a sentence that died with the session. So the
+same gap was rediscovered every session and never accumulated evidence: one
+reported eight times looked exactly like one reported once. `save_suggestion`,
+`get_suggestions` and `drop_suggestion` write it into `_suggestions`, a
+built-in project alongside `_memory`, holding what the graph could not answer
+and the concrete change that would fix it.
+
+The identifier is the mechanism. It is a stable slug derived from the gap, so
+reporting the same gap again is the same call: the record keeps its first
+sighting, moves its last, counts a hit, and reopens if it had been marked
+resolved - a gap hit again is not a resolved one. Each carries a `kind`, a
+`status`, and the `lever` closing it would move: `tokens` when the answer was
+re-derived by hand, `coverage` when the graph does not describe it at all,
+`runtime` when it was answerable but slow. Reading defaults to the open ones,
+most often hit first, which is the ranking the whole thing exists for.
+
 ## Web interface
 
 `make up` publishes a dashboard on <http://127.0.0.1:3002> (loopback only):
 indexed projects and their staleness, a per-project node/graph/file browser,
-and every plan in the database, editable in place. Details:
+every plan in the database, editable in place, and the recorded gaps, ranked by
+how often they were hit. Details:
 [usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
 
 ## Backup and restore

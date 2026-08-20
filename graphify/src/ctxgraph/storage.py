@@ -17,6 +17,7 @@ from psycopg2.extensions import connection as Connection
 from psycopg2.extensions import cursor as Cursor
 
 from ctxgraph.config import (
+    BUILTIN_PROJECT_TYPES,
     DEFAULT_PROJECT_TYPE,
     MAX_NAME_LENGTH,
     MAX_NODE_ID_LENGTH,
@@ -65,12 +66,12 @@ def ensure_project(
             f"project {project!r} is already indexed from {row[0]!r}; "
             f"pass PROJECT_NAME to index {root_path!r} under another name"
         )
-    # A memory project holds records written through the MCP tools; there is
-    # no tree behind it, and an index run would prune every one of them.
-    if row is not None and row[1] == "memory":
+    # A built-in project holds records written through the MCP tools; there
+    # is no tree behind it, and an index run would prune every one of them.
+    if row is not None and row[1] in BUILTIN_PROJECT_TYPES:
         raise RuntimeError(
-            f"project {project!r} holds agent memory, not an indexed tree; "
-            "indexing into it would delete every memory it holds"
+            f"project {project!r} holds agent {row[1]}, not an indexed tree; "
+            f"indexing into it would delete every record it holds"
         )
 
     cursor.execute("SELECT name FROM projects WHERE root_path = %s;", (root_path,))

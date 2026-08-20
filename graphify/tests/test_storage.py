@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from ctxgraph.config import BUILTIN_PROJECT_TYPES
 from ctxgraph.storage import ensure_project
 
 
@@ -58,11 +59,13 @@ def test_a_plain_reindex_leaves_the_stored_type_alone() -> None:
     assert upsert_params(cursor)[4] is None
 
 
-def test_refuses_to_index_into_a_memory_project() -> None:
-    """There is no tree behind a memory project; a run would prune it empty."""
-    cursor = FakeCursor([("memory://agent", "memory")])
-    with pytest.raises(RuntimeError, match="agent memory"):
-        ensure_project(cursor, "_memory", "memory://agent")
+@pytest.mark.parametrize("project_type", sorted(BUILTIN_PROJECT_TYPES))
+def test_refuses_to_index_into_a_builtin_project(project_type: str) -> None:
+    """There is no tree behind one of these; a run would prune it empty."""
+    root = f"{project_type}://agent"
+    cursor = FakeCursor([(root, project_type)])
+    with pytest.raises(RuntimeError, match=f"agent {project_type}"):
+        ensure_project(cursor, f"_{project_type}", root)
 
 
 def test_still_refuses_a_name_pointing_at_another_path() -> None:

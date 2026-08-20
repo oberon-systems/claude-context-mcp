@@ -1,8 +1,9 @@
 // Every SQL string the dashboard runs.
 //
-// The graph and plan queries are deliberate copies of the MCP tools in
-// mcp-server/src/index.ts: the two services share a schema, not a process. A
-// column added to `plans` touches this file, that one, and scripts/backup.sh.
+// The graph, plan and suggestion queries are deliberate copies of the MCP
+// tools in mcp-server/src/index.ts: the two services share a schema, not a
+// process. A column added to `plans` touches this file, that one, and
+// scripts/backup.sh.
 
 export const PROJECTS = `
   SELECT p.name, p.type, p.root_path, p.indexed_at,
@@ -72,6 +73,10 @@ export const DROP_REPORT = `
            WHERE c.project = p.name) AS embeddings,
          (SELECT count(*) FROM plans AS l
            WHERE l.project = p.name) AS plans,
+         (SELECT count(*) FROM graph_nodes AS g
+           WHERE g.type = 'suggestion'
+             AND (g.project = p.name
+                  OR g.metadata ->> 'about' = p.name)) AS suggestions,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name
              AND g.metadata ->> 'summary_source' = 'manual') AS summaries
@@ -203,3 +208,90 @@ export const DROP_PLAN = `
   DELETE FROM plans
    WHERE id = $1
   RETURNING id, project, title, status, type`;
+
+// Suggestions are graph nodes under a built-in project rather than a table of
+// their own, so every statement below carries the project and the node type.
+// Mirrors the save_suggestion / get_suggestions / drop_suggestion tools.
+
+// $1 the about tag or null for every scope, $2 the '_global' switch, $3
+// status, $4 kind, $5 the search pattern.
+export const SUGGESTIONS = `
+  SELECT id, name AS title, summary,
+         metadata ->> 'about' AS about,
+         metadata ->> 'kind' AS kind,
+         metadata ->> 'lever' AS lever,
+         metadata ->> 'status' AS status,
+         COALESCE((metadata ->> 'hits')::int, 0) AS hits,
+         metadata ->> 'first_seen' AS first_seen,
+         metadata ->> 'last_seen' AS last_seen,
+         created_at, length(content) AS detail_length,
+         count(*) OVER () AS total
+    FROM graph_nodes
+   WHERE project = '_suggestions' AND type = 'suggestion'
+     AND ($1::text IS NULL OR metadata ->> 'about' = $1)
+     AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
+     AND ($3::text IS NULL OR metadata ->> 'status' = $3)
+     AND ($4::text IS NULL OR metadata ->> 'kind' = $4)
+     AND ($5::text IS NULL
+          OR name ILIKE $5 OR summary ILIKE $5 OR content ILIKE $5)
+   ORDER BY COALESCE((metadata ->> 'hits')::int, 0) DESC,
+            metadata ->> 'last_seen' DESC NULLS LAST
+   LIMIT $6 OFFSET $7`;
+
+export const SUGGESTION_FACETS = `
+  SELECT
+    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM graph_nodes
+      WHERE project = '_suggestions' AND type = 'suggestion'
+        AND metadata ->> 'about' IS NOT NULL) AS abouts,
+    (SELECT array_agg(DISTINCT metadata ->> 'status') FROM graph_nodes
+      WHERE project = '_suggestions' AND type = 'suggestion') AS statuses,
+    (SELECT array_agg(DISTINCT metadata ->> 'kind') FROM graph_nodes
+      WHERE project = '_suggestions' AND type = 'suggestion'
+        AND metadata ->> 'kind' IS NOT NULL) AS kinds,
+    (SELECT count(*) FROM graph_nodes
+      WHERE project = '_suggestions' AND type = 'suggestion'
+        AND metadata ->> 'about' IS NULL) AS global_suggestions`;
+
+export const SUGGESTION = `
+  SELECT id, name AS title, summary, content AS detail,
+         metadata ->> 'about' AS about,
+         metadata ->> 'kind' AS kind,
+         metadata ->> 'lever' AS lever,
+         metadata ->> 'status' AS status,
+         COALESCE((metadata ->> 'hits')::int, 0) AS hits,
+         metadata ->> 'first_seen' AS first_seen,
+         metadata ->> 'last_seen' AS last_seen,
+         created_at
+    FROM graph_nodes
+   WHERE project = '_suggestions' AND type = 'suggestion' AND id = $1`;
+
+// Triage, not authorship: the dashboard edits the wording and the lifecycle,
+// and never touches hits or first_seen, which are the agent's record of how
+// often this gap was actually hit.
+export const PATCH_SUGGESTION = `
+  UPDATE graph_nodes
+     SET name = COALESCE($2, name),
+         summary = COALESCE($3, summary),
+         content = COALESCE($4, content),
+         metadata = metadata || JSONB_BUILD_OBJECT(
+           'status', COALESCE($5::text, metadata ->> 'status'),
+           'kind', COALESCE($6::text, metadata ->> 'kind'),
+           'lever', COALESCE($7::text, metadata ->> 'lever')
+         )
+   WHERE project = '_suggestions' AND type = 'suggestion' AND id = $1
+  RETURNING id, name AS title, summary, content AS detail,
+            metadata ->> 'about' AS about,
+            metadata ->> 'kind' AS kind,
+            metadata ->> 'lever' AS lever,
+            metadata ->> 'status' AS status,
+            COALESCE((metadata ->> 'hits')::int, 0) AS hits,
+            metadata ->> 'first_seen' AS first_seen,
+            metadata ->> 'last_seen' AS last_seen,
+            created_at`;
+
+export const DROP_SUGGESTION = `
+  DELETE FROM graph_nodes
+   WHERE project = '_suggestions' AND type = 'suggestion' AND id = $1
+  RETURNING id, name AS title,
+            metadata ->> 'about' AS about,
+            metadata ->> 'status' AS status`;

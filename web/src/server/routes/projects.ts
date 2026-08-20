@@ -24,6 +24,7 @@ type DropReportRow = {
   hashes: string;
   embeddings: string;
   plans: string;
+  suggestions: string;
   summaries: string;
 };
 
@@ -52,6 +53,7 @@ function dropReport(name: string, row: DropReportRow, dropped: boolean) {
     hashes: count(row.hashes),
     embeddings: count(row.embeddings),
     plans: count(row.plans),
+    suggestions: count(row.suggestions),
     summaries: count(row.summaries),
     dropped,
   };

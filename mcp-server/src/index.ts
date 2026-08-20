@@ -38,8 +38,14 @@ const DEFAULT_HOPS = 6;
 // named apart so nothing indexes a tree into it.
 const MEMORY_PROJECT = "_memory";
 
-// A memory's node id is `<about>/<id>`, which is what keeps two repositories
-// from colliding on `commit-style`. A memory about no repository in
+// The built-in project holding what the graph could not answer: a lookup that
+// came back empty, a summary too thin to use, a file type no parser reads.
+// Kept apart from memory because a suggestion is a defect of the tooling
+// rather than a fact about a codebase, and so it has a lifecycle and a count.
+const SUGGESTIONS_PROJECT = "_suggestions";
+
+// A record's node id is `<about>/<id>`, which is what keeps two repositories
+// from colliding on `commit-style`. A record about no repository in
 // particular needs a segment of its own, and "*" is not one.
 const GLOBAL_SCOPE = "_global";
 
@@ -47,10 +53,12 @@ const GLOBAL_SCOPE = "_global";
 // this list is what the tools advertise rather than what they enforce.
 const PROJECT_TYPES =
   '"codebase" (the default), "docs", "config" - all indexed trees, differing ' +
-  'only as a search filter - and "memory", which is not a tree at all: the ' +
-  "built-in " +
+  'only as a search filter - and "memory" and "suggestions", which are not ' +
+  "trees at all: the built-in " +
   MEMORY_PROJECT +
-  " holds records written through save_memory.";
+  " and " +
+  SUGGESTIONS_PROJECT +
+  " hold records written through save_memory and save_suggestion.";
 
 // One database holds the graph of every indexed codebase, so every statement
 // below is scoped to one project. A session gets its default from the address
@@ -97,18 +105,22 @@ function searchScopeDescription(sessionProject: string | null): string {
   );
 }
 
-// A memory is tagged with what it is about, the way a plan is: the repository
-// it applies to, or "*" for one that applies to none in particular. A read
-// always sees the global memories on top of whatever scope it named.
-function memoryScopeDescription(sessionProject: string | null): string {
+// A memory or a suggestion is tagged with what it is about, the way a plan
+// is: the repository it applies to, or "*" for one that applies to none in
+// particular. A read always sees the global records on top of whatever scope
+// it named.
+function recordScopeDescription(
+  sessionProject: string | null,
+  noun: string,
+): string {
   const base =
     sessionProject === null
-      ? "What this memory is about. Required when writing: this session was " +
+      ? `What this ${noun} is about. Required when writing: this session was ` +
         "opened on /mcp without naming a project."
-      : `What this memory is about. Defaults to "${sessionProject}".`;
+      : `What this ${noun} is about. Defaults to "${sessionProject}".`;
   return (
     base +
-    ' "*" is a memory about no project in particular, and those are read ' +
+    ` "*" is a ${noun} about no project in particular, and those are read ` +
     "alongside every scope."
   );
 }
@@ -119,6 +131,23 @@ const PLAN_TYPE_DESCRIPTION =
   'What the record is, apart from its lifecycle: "plan" (the default) for ' +
   'work executed once, "template" for a form to copy, "procedure" for a ' +
   "routine run on demand. Free text, like status.";
+
+// The three vocabularies a suggestion carries. Free text in the database, so
+// these are what the tools advertise rather than what they enforce.
+const SUGGESTION_KIND_DESCRIPTION =
+  'What kind of gap this is: "empty-lookup" (a query that found nothing ' +
+  'that exists), "missing-summary", "thin-summary" (one that reads like a ' +
+  'summary and answers nothing), "not-indexed", "no-parser", "stale-index", ' +
+  '"missing-tool". Free text';
+
+const SUGGESTION_LEVER_DESCRIPTION =
+  'Which lever closing this gap moves: "tokens" (the answer was re-derived ' +
+  'by hand), "coverage" (the graph does not describe it at all) or ' +
+  '"runtime" (it was answerable, but slowly). Free text';
+
+const SUGGESTION_STATUS_DESCRIPTION =
+  'Where this stands: "open" (the default), "resolved" once the change ' +
+  'landed, "wontfix" when it will not. Free text, like a plan\'s status';
 
 const listToolsHandler = async (
   sessionProject: string | null,
@@ -137,7 +166,11 @@ const listToolsHandler = async (
   };
   const memoryScope = {
     type: "string",
-    description: memoryScopeDescription(sessionProject),
+    description: recordScopeDescription(sessionProject, "memory"),
+  };
+  const suggestionScope = {
+    type: "string",
+    description: recordScopeDescription(sessionProject, "suggestion"),
   };
   return {
     tools: [
@@ -455,6 +488,123 @@ const listToolsHandler = async (
         },
       },
       {
+        name: "save_suggestion",
+        description:
+          "Record a gap: something the graph or the context did not have, " +
+          "and the concrete change that would fix it. Saving under an id " +
+          "that already exists is how a gap is reported again - it keeps the " +
+          "first sighting, moves the last, counts the hit, and reopens a " +
+          "suggestion that had been resolved. Stored in the built-in " +
+          SUGGESTIONS_PROJECT +
+          " project",
+        inputSchema: {
+          type: "object",
+          properties: {
+            about: suggestionScope,
+            suggestion_id: {
+              type: "string",
+              description:
+                'Short slug naming the gap, for example "hcl-no-parser". ' +
+                "Derive it from the gap itself and keep it stable: that is " +
+                "what makes the second report count rather than duplicate. " +
+                "Unique within one `about` scope",
+            },
+            title: {
+              type: "string",
+              description: "One line naming what was missing",
+            },
+            detail: {
+              type: "string",
+              description:
+                "What was missing, what had to be done by hand instead, and " +
+                "the concrete change that would remove the need",
+            },
+            summary: {
+              type: "string",
+              description:
+                "One-line gist, which is what listings show. Taken from the " +
+                "title when absent",
+            },
+            kind: { type: "string", description: SUGGESTION_KIND_DESCRIPTION },
+            lever: {
+              type: "string",
+              description: SUGGESTION_LEVER_DESCRIPTION,
+            },
+            status: {
+              type: "string",
+              description: SUGGESTION_STATUS_DESCRIPTION,
+            },
+            bump: {
+              type: "boolean",
+              description:
+                "Whether this call is a fresh sighting (default true). Pass " +
+                "false to correct the wording or set the status without " +
+                "counting a hit",
+            },
+          },
+          required: ["suggestion_id", "title", "detail"],
+        },
+      },
+      {
+        name: "get_suggestions",
+        description:
+          "Read recorded gaps, the most often hit first. Defaults to the " +
+          "open ones, and gaps about no project in particular are always " +
+          "included",
+        inputSchema: {
+          type: "object",
+          properties: {
+            about: suggestionScope,
+            suggestion_id: {
+              type: "string",
+              description:
+                "Read one suggestion. Either the slug, which is looked up " +
+                "in the named scope and then globally, or a full " +
+                '"<about>/<slug>" id',
+            },
+            status: {
+              type: "string",
+              description:
+                SUGGESTION_STATUS_DESCRIPTION +
+                '. Defaults to "open"; "*" reads every status',
+            },
+            kind: {
+              type: "string",
+              description: "Keep only gaps of this kind",
+            },
+            query: {
+              type: "string",
+              description:
+                "Substring matched against the title, the gist and the detail",
+            },
+            limit: {
+              type: "number",
+              description: `Maximum suggestions to return (default ${DEFAULT_RESULTS}, max ${MAX_RESULTS})`,
+            },
+          },
+        },
+      },
+      {
+        name: "drop_suggestion",
+        description:
+          "Delete a suggestion written by mistake. A gap that has since been " +
+          'closed is retired instead, with save_suggestion status: "resolved" ' +
+          "and bump: false, so the count it accumulated is not lost",
+        inputSchema: {
+          type: "object",
+          properties: {
+            suggestion_id: {
+              type: "string",
+              description:
+                'Full "<about>/<slug>" id, as get_suggestions reports it. A ' +
+                "bare slug is resolved against `about`",
+            },
+            about: suggestionScope,
+          },
+          required: ["suggestion_id"],
+        },
+      },
+      {
         name: "get_file_hash",
         description: "Get the stored MD5 hash for a file",
         inputSchema: {
@@ -619,8 +769,14 @@ function readSearchProject(
   return sessionProject;
 }
 
-/** The scope tag a memory call is about, and whether it was named outright. */
-function readMemoryScope(
+/** The scope tag a memory or suggestion call is about, and whether it was
+ * named outright.
+ *
+ * `explicit` separates a caller that named "*" from one that named nothing on
+ * a session without a default, exactly as it does for a plan: both are null
+ * and they mean opposite things when writing.
+ */
+function readRecordScope(
   args: Record<string, unknown> | undefined,
   sessionProject: string | null,
 ): { explicit: boolean; about: string | null } {
@@ -631,12 +787,12 @@ function readMemoryScope(
   return { explicit: false, about: sessionProject };
 }
 
-/** The node id a memory is stored under: its scope, then its slug. */
-function memoryNodeId(about: string | null, memoryId: string): string {
-  if (memoryId.includes("/")) {
-    return memoryId;
+/** The node id a record is stored under: its scope, then its slug. */
+function scopedRecordId(about: string | null, recordId: string): string {
+  if (recordId.includes("/")) {
+    return recordId;
   }
-  return `${about ?? GLOBAL_SCOPE}/${memoryId}`;
+  return `${about ?? GLOBAL_SCOPE}/${recordId}`;
 }
 
 /** What project a plan call is about: its own argument, else the session's.
@@ -682,12 +838,23 @@ async function requireProject(project: string): Promise<string> {
 // Counted per project rather than summed: one `make index` brings the derived
 // rows back, nothing brings a hand-written summary back, and a plan is not
 // tied to the project row at all - it is tagged with the name and stays.
+//
+// Memories and suggestions are counted by what they are about rather than by
+// which project row holds them, because they all live under a built-in
+// project. Counting them by `g.project` would report zero for every codebase
+// and hide exactly the records a drop leaves pointing at a name that is gone.
 const DROP_REPORT = `
   SELECT p.root_path, p.indexed_at, p.type,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name) AS nodes,
          (SELECT count(*) FROM graph_nodes AS g
-           WHERE g.project = p.name AND g.type = 'memory') AS memories,
+           WHERE g.type = 'memory'
+             AND (g.project = p.name
+                  OR g.metadata ->> 'about' = p.name)) AS memories,
+         (SELECT count(*) FROM graph_nodes AS g
+           WHERE g.type = 'suggestion'
+             AND (g.project = p.name
+                  OR g.metadata ->> 'about' = p.name)) AS suggestions,
          (SELECT count(*) FROM graph_edges AS e
            WHERE e.project = p.name) AS edges,
          (SELECT count(*) FROM file_hashes AS f
@@ -711,6 +878,7 @@ type DropReport = {
   type: string;
   nodes: string;
   memories: string;
+  suggestions: string;
   edges: string;
   hashes: string;
   embeddings: string;
@@ -728,10 +896,10 @@ function describeDrop(
     row.indexed_at === null
       ? "never indexed"
       : `indexed ${row.indexed_at.toISOString()}`;
-  // Nothing rebuilds a memory project: there is no tree behind it, so its
+  // Nothing rebuilds a built-in project: there is no tree behind one, so its
   // nodes belong on the other side of the ledger from a codebase's.
   const derived =
-    row.type === "memory"
+    row.type === "memory" || row.type === "suggestions"
       ? []
       : [
           `  rebuilt by one \`make index\`: ${row.nodes} nodes, ` +
@@ -739,15 +907,29 @@ function describeDrop(
             `${row.embeddings} embeddings`,
         ];
   const lost = [`${row.summaries} manual summaries`];
-  if (row.memories !== "0") {
+  // A record about this project lives under the built-in project holding it,
+  // so dropping this one does not cascade it away - it is kept, like a plan,
+  // and goes on naming a project that is gone.
+  const builtin = row.type === "memory" || row.type === "suggestions";
+  if (row.memories !== "0" && builtin) {
     lost.push(`${row.memories} memories, which no index run brings back`);
+  }
+  const kept = [
+    `${row.plans} plans, still readable with get_plans project: "${project}"`,
+  ];
+  if (row.memories !== "0" && !builtin) {
+    kept.push(`${row.memories} memories about it, in ${MEMORY_PROJECT}`);
+  }
+  if (row.suggestions !== "0") {
+    kept.push(
+      `${row.suggestions} suggestions about it, in ${SUGGESTIONS_PROJECT}`,
+    );
   }
   const lines = [
     `${dropped ? "dropped" : "project"} "${project}" (${row.root_path}, ${when})`,
     ...derived,
     `  not rebuilt, gone for good: ${lost.join(", ")}`,
-    `  kept, tagged with the name: ${row.plans} plans, still readable with ` +
-      `get_plans project: "${project}"`,
+    `  kept, tagged with the name: ${kept.join(", ")}`,
   ];
   if (!dropped) {
     lines.push(
@@ -985,7 +1167,7 @@ function makeCallToolHandler(
         const text = requireString(args, "text");
         const gist = readOptionalString(args, "summary") ?? title;
         const tags = readTags(args, "tags") ?? [];
-        const scope = readMemoryScope(args, sessionProject);
+        const scope = readRecordScope(args, sessionProject);
 
         // Storing a memory against no project at all is a decision, so it is
         // made rather than fallen into by omission - as with save_plan.
@@ -1003,7 +1185,7 @@ function makeCallToolHandler(
           );
         }
 
-        const nodeId = memoryNodeId(scope.about, memoryId);
+        const nodeId = scopedRecordId(scope.about, memoryId);
         const client = await dbPool.connect();
         try {
           await client.query("BEGIN");
@@ -1076,7 +1258,7 @@ function makeCallToolHandler(
       }
 
       if (name === "get_memory") {
-        const scope = readMemoryScope(args, sessionProject);
+        const scope = readRecordScope(args, sessionProject);
         const wanted = readOptionalString(args, "memory_id");
         const tags = readTags(args, "tags");
         const query = readOptionalString(args, "query");
@@ -1088,7 +1270,10 @@ function makeCallToolHandler(
             ? null
             : wanted.includes("/")
               ? [wanted]
-              : [memoryNodeId(scope.about, wanted), memoryNodeId(null, wanted)];
+              : [
+                  scopedRecordId(scope.about, wanted),
+                  scopedRecordId(null, wanted),
+                ];
 
         const res = await dbPool.query(
           `SELECT id, name AS title, summary, content,
@@ -1125,8 +1310,8 @@ function makeCallToolHandler(
 
       if (name === "drop_memory") {
         const memoryId = requireString(args, "memory_id");
-        const scope = readMemoryScope(args, sessionProject);
-        const nodeId = memoryNodeId(scope.about, memoryId);
+        const scope = readRecordScope(args, sessionProject);
+        const nodeId = scopedRecordId(scope.about, memoryId);
         const res = await dbPool.query<{ name: string }>(
           `DELETE FROM graph_nodes
             WHERE project = $1 AND id = $2 AND type = 'memory'
@@ -1152,6 +1337,239 @@ function makeCallToolHandler(
             {
               type: "text",
               text: `Dropped memory ${nodeId} ("${res.rows[0].name}").`,
+            },
+          ],
+        };
+      }
+
+      // The suggestion tools sit here for the same reason the memory ones do:
+      // they always work on the built-in project, never on the session's.
+      if (name === "save_suggestion") {
+        const suggestionId = requireString(args, "suggestion_id");
+        const title = requireString(args, "title");
+        const detail = requireString(args, "detail");
+        const gist = readOptionalString(args, "summary") ?? title;
+        const kind = readOptionalString(args, "kind");
+        const lever = readOptionalString(args, "lever");
+        const status = readOptionalString(args, "status");
+        const bump = args?.bump === false ? 0 : 1;
+        const scope = readRecordScope(args, sessionProject);
+
+        if (!scope.explicit && scope.about === null) {
+          throw new Error(
+            'Argument "about" is required: this session was opened on /mcp ' +
+              'without naming a project. Name the project this gap is in, or "*" ' +
+              "for one that belongs to none in particular.",
+          );
+        }
+        if (suggestionId.includes("/")) {
+          throw new Error(
+            'Argument "suggestion_id" is a slug, not a path: the scope is ' +
+              'taken from "about" and prefixed automatically.',
+          );
+        }
+
+        const nodeId = scopedRecordId(scope.about, suggestionId);
+        let saved: { hits: number; status: string; created: boolean };
+        const client = await dbPool.connect();
+        try {
+          await client.query("BEGIN");
+          // Re-created rather than assumed, as save_memory does: dropping the
+          // project would otherwise turn every later save into a foreign key
+          // error.
+          await client.query(
+            `INSERT INTO projects (name, root_path, type)
+             VALUES ($1, 'suggestions://agent', 'suggestions')
+             ON CONFLICT (name) DO NOTHING`,
+            [SUGGESTIONS_PROJECT],
+          );
+          // The tail object is what makes a repeat report accumulate instead
+          // of overwrite, so it is concatenated last and every sticky field
+          // falls back to what is already stored. Reopening on a bump is
+          // deliberate: a gap hit again is not a resolved one.
+          const res = await client.query<{
+            hits: number;
+            status: string;
+            created: boolean;
+          }>(
+            `INSERT INTO graph_nodes (
+               project, id, name, type, summary, content, metadata
+             )
+             VALUES ($1, $2, $3, 'suggestion', $4, $5,
+                     JSONB_BUILD_OBJECT(
+                       'about', $6::text,
+                       'kind', $7::text,
+                       'lever', $8::text,
+                       'status', COALESCE($9::text, 'open'),
+                       'hits', 1,
+                       'first_seen', to_char(
+                         now() AT TIME ZONE 'UTC',
+                         'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                       ),
+                       'last_seen', to_char(
+                         now() AT TIME ZONE 'UTC',
+                         'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                       )
+                     ))
+             ON CONFLICT (project, id) DO UPDATE SET
+               name = EXCLUDED.name,
+               type = 'suggestion',
+               summary = EXCLUDED.summary,
+               content = EXCLUDED.content,
+               metadata = graph_nodes.metadata
+                 || EXCLUDED.metadata
+                 || JSONB_BUILD_OBJECT(
+                      'kind',
+                      COALESCE($7::text, graph_nodes.metadata ->> 'kind'),
+                      'lever',
+                      COALESCE($8::text, graph_nodes.metadata ->> 'lever'),
+                      'status',
+                      COALESCE($9::text,
+                               CASE WHEN $10::int > 0 THEN 'open' END,
+                               graph_nodes.metadata ->> 'status',
+                               'open'),
+                      'first_seen',
+                      COALESCE(graph_nodes.metadata ->> 'first_seen',
+                               EXCLUDED.metadata ->> 'first_seen'),
+                      'hits',
+                      COALESCE((graph_nodes.metadata ->> 'hits')::int, 0)
+                        + $10::int
+                    )
+             RETURNING (metadata ->> 'hits')::int AS hits,
+                       metadata ->> 'status' AS status,
+                       (xmax = 0) AS created`,
+            [
+              SUGGESTIONS_PROJECT,
+              nodeId,
+              title,
+              gist,
+              detail,
+              scope.about,
+              kind,
+              lever,
+              status,
+              bump,
+            ],
+          );
+          saved = res.rows[0];
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK");
+          throw error;
+        } finally {
+          client.release();
+        }
+
+        const where =
+          scope.about === null ? "no project in particular" : scope.about;
+        const verb = saved.created ? "recorded" : "updated";
+        const lines = [
+          `Suggestion ${nodeId} ${verb} (about ${where}, ` +
+            `${saved.status}, hits ${saved.hits}).`,
+        ];
+        // The scope is free text with nothing to check it, exactly as a
+        // memory's is, so a typo would file it where nothing looks.
+        if (scope.about !== null) {
+          const known = await dbPool.query(
+            `SELECT 1 FROM projects WHERE name = $1`,
+            [scope.about],
+          );
+          if (known.rowCount === 0) {
+            lines.push(
+              `No project named "${scope.about}" in this database. The ` +
+                "suggestion was stored anyway and will be read once one is " +
+                "indexed under that name.",
+            );
+          }
+        }
+
+        return { content: [{ type: "text", text: lines.join("\n") }] };
+      }
+
+      if (name === "get_suggestions") {
+        const scope = readRecordScope(args, sessionProject);
+        const wanted = readOptionalString(args, "suggestion_id");
+        const named = readOptionalString(args, "status");
+        const status = named === "*" ? null : (named ?? "open");
+        const kind = readOptionalString(args, "kind");
+        const query = readOptionalString(args, "query");
+
+        const ids =
+          wanted === null
+            ? null
+            : wanted.includes("/")
+              ? [wanted]
+              : [
+                  scopedRecordId(scope.about, wanted),
+                  scopedRecordId(null, wanted),
+                ];
+
+        const res = await dbPool.query(
+          `SELECT id, name AS title, summary, content AS detail,
+                  metadata ->> 'about' AS about,
+                  metadata ->> 'kind' AS kind,
+                  metadata ->> 'lever' AS lever,
+                  metadata ->> 'status' AS status,
+                  COALESCE((metadata ->> 'hits')::int, 0) AS hits,
+                  metadata ->> 'first_seen' AS first_seen,
+                  metadata ->> 'last_seen' AS last_seen
+             FROM graph_nodes
+            WHERE project = $1
+              AND type = 'suggestion'
+              AND ($2::text[] IS NULL OR id = ANY ($2))
+              AND ($3::text IS NULL
+                   OR metadata ->> 'about' = $3
+                   OR metadata ->> 'about' IS NULL)
+              AND ($4::text IS NULL OR metadata ->> 'status' = $4)
+              AND ($5::text IS NULL OR metadata ->> 'kind' = $5)
+              AND ($6::text IS NULL
+                   OR name ILIKE $6 OR summary ILIKE $6 OR content ILIKE $6)
+            ORDER BY COALESCE((metadata ->> 'hits')::int, 0) DESC,
+                     metadata ->> 'last_seen' DESC NULLS LAST
+            LIMIT $7`,
+          [
+            SUGGESTIONS_PROJECT,
+            ids,
+            scope.about,
+            status,
+            kind,
+            query === null ? null : `%${query}%`,
+            readLimit(args),
+          ],
+        );
+
+        return {
+          content: [{ type: "text", text: JSON.stringify(res.rows, null, 2) }],
+        };
+      }
+
+      if (name === "drop_suggestion") {
+        const suggestionId = requireString(args, "suggestion_id");
+        const scope = readRecordScope(args, sessionProject);
+        const nodeId = scopedRecordId(scope.about, suggestionId);
+        const res = await dbPool.query<{ name: string }>(
+          `DELETE FROM graph_nodes
+            WHERE project = $1 AND id = $2 AND type = 'suggestion'
+        RETURNING name`,
+          [SUGGESTIONS_PROJECT, nodeId],
+        );
+
+        if (res.rowCount === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `No suggestion "${nodeId}". Nothing was deleted.`,
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Dropped suggestion ${nodeId} ("${res.rows[0].name}").`,
             },
           ],
         };

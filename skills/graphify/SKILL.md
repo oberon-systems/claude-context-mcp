@@ -210,5 +210,15 @@ of real ones, but that is a wasted turn.
   for one that belongs to no repository. `get_memory` reads a scope plus the
   global ones; `drop_memory` deletes one that turned out to be wrong. Nothing
   indexes into `_memory`, so a memory is never pruned by a re-index.
+- A gap the graph could not answer goes into `_suggestions` through
+  `save_suggestion` - what was missing, and the concrete change that would fix
+  it. The id is a stable slug derived from the gap, so saving under one that
+  exists counts a hit on that record instead of filing a duplicate: it keeps
+  the first sighting, moves the last, and reopens a suggestion that had been
+  resolved. `get_suggestions` reads the open ones of a scope plus the global
+  ones, most often hit first; retiring one is `save_suggestion` again with
+  `status: "resolved"` and `bump: false`, since `drop_suggestion` would erase
+  the count. A memory says what is true about a codebase, a suggestion says
+  what the tools could not tell you about it.
 - The project mount is read only. Nothing in this skill writes to the indexed
   tree.

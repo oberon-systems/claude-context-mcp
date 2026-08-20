@@ -52,6 +52,7 @@ indexed_projects() {
 # there, plans survive the drop, and here they only survive in this file.
 report_project() {
     local row root indexed nodes edges hashes embeddings plans manual
+    local memories suggestions
     row="$(psql_query -v name="$1" <<< "
         SELECT p.root_path,
                coalesce(to_char(p.indexed_at, 'YYYY-MM-DD HH24:MI'), 'never'),
@@ -60,16 +61,28 @@ report_project() {
                (SELECT count(*) FROM file_hashes f WHERE f.project = p.name),
                (SELECT count(*) FROM code_embeddings c WHERE c.project = p.name),
                (SELECT count(*) FROM plans l WHERE l.project = p.name),
+               (SELECT count(*) FROM graph_nodes g WHERE g.type = 'memory'
+                  AND g.metadata ->> 'about' = p.name),
+               (SELECT count(*) FROM graph_nodes g WHERE g.type = 'suggestion'
+                  AND g.metadata ->> 'about' = p.name),
                (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name
                   AND g.metadata ->> 'summary_source' = 'manual')
           FROM projects p
          WHERE p.name = :'name'")"
-    IFS='|' read -r root indexed nodes edges hashes embeddings plans manual \
-        <<< "$row"
+    IFS='|' read -r root indexed nodes edges hashes embeddings plans \
+        memories suggestions manual <<< "$row"
     echo "project \"$1\" ($root, indexed $indexed)"
     echo "  rebuilt by one 'make index': $nodes nodes, $edges edges," \
         "$hashes file hashes, $embeddings embeddings"
     echo "  not rebuilt, gone for good: $plans plans, $manual manual summaries"
+    # Memories and suggestions about this project live under the built-in
+    # projects that hold them, and a per-project file is one project. Saying
+    # so beats a file that looks complete and is not.
+    if [ "$memories" != "0" ] || [ "$suggestions" != "0" ]; then
+        echo "  about it but not in this file: $memories memories," \
+            "$suggestions suggestions - they live in _memory and" \
+            "_suggestions, and travel in the whole-database archive"
+    fi
 }
 
 if [ -n "${KEEP:-}" ] && ! [[ "$KEEP" =~ ^[1-9][0-9]*$ ]]; then

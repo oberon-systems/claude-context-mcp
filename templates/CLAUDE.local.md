@@ -52,6 +52,43 @@ memories too. Nothing indexes into it, so a memory is never pruned by a
 re-index. A memory is for what stays true past the task; a plan is for what to
 do next. Do not use one for the other.
 
+## Suggestions: gaps recorded, not printed
+
+A gap is the other half of a recap. When the graph could not answer something
+and the work had to be done by hand, that is a defect of the tooling, and it
+belongs in the built-in `_suggestions` project rather than in a sentence that
+dies with the session:
+
+- `save_suggestion` - a slug, a title, the detail, and `about` naming the
+  repository the gap is in (`"@PROJECT@"` here, or `"*"` for one that belongs
+  to no repository)
+- `get_suggestions` - the open gaps of a scope plus the global ones, most often
+  hit first
+- `drop_suggestion` - one written by mistake
+
+**The slug is the whole mechanism.** Derive it from the gap itself and keep it
+stable, so reporting the same gap next week counts a hit on the existing record
+instead of filing a duplicate. `save_suggestion` keeps the first sighting,
+moves the last, increments the count, and reopens a gap that had been resolved
+
+- because a gap hit again is not a resolved one. Pass `bump: false` to correct
+  the wording or set the status without claiming a fresh sighting.
+
+Name the `lever` each gap moves - `tokens` when the answer was re-derived by
+hand, `coverage` when the graph does not describe it at all, `runtime` when it
+was answerable but slow - and say in the detail what concrete change would
+close it: a summary to save, a `.ctxkeep` pattern to add, a parser that does
+not exist, a tool that is missing. A gap whose fix is not named is a complaint,
+not a suggestion.
+
+Retire one with `save_suggestion` again, `status: "resolved"` and
+`bump: false`, once the change lands. `drop_suggestion` erases the count it
+accumulated, so it is for a mistake rather than for finished work - the same
+rule plans follow.
+
+A memory says what is true about a codebase; a suggestion says what the tools
+could not tell you about it.
+
 ## Plans live in the graph, not in the session
 
 A plan held in the client's own state is invisible to every other session. The
@@ -95,7 +132,11 @@ adjectives:
 3. **Subagents and delegates** - one line each, or "none".
 4. **Gaps** - what the graph did not have and what would fix it: a summary to
    save, a `.ctxkeep` pattern to add, a parser that does not exist, an index
-   older than the tree.
+   older than the tree. Do not only say it: call `save_suggestion` for each
+   one, and name the gaps in the recap by the slug you saved them under.
 
 The point is auditability: the reader cannot see the tool calls, and is
-comparing what the graph answered against what was re-derived by hand.
+comparing what the graph answered against what was re-derived by hand. Item 4
+is the half that gets acted on - item 2 says what had to be done by hand, item
+4 records what would remove the need, and recording it is what turns a
+repeated complaint into a ranked backlog.
