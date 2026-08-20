@@ -22,10 +22,13 @@ from typing import Any
 from ctxworker.catalogue import DEFAULT_MODEL, default_dir, file_name
 from ctxworker.client import ApiError, Client
 from ctxworker.runner import Runner
+from ctxworker.server import ServerRunner
 
 LOG = logging.getLogger("ctxworker")
 
 IDLE_SLEEP = 10.0
+# Left for the answer when asking whether a job's text fits the window.
+RESERVED_TOKENS = 64
 WORKER_ID_LIMIT = 64
 
 _stopping = threading.Event()
@@ -65,6 +68,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ctx", type=int, default=int(os.getenv("WORKER_CTX", "8192")))
     parser.add_argument("--worker-id", default=os.getenv("WORKER_ID", ""))
     parser.add_argument("--once", action="store_true", help="run one batch and stop")
+    parser.add_argument(
+        "--llama-server",
+        default=os.getenv("WORKER_LLAMA_SERVER", ""),
+        help="URL of a llama.cpp server to use instead of loading the model",
+    )
+    parser.add_argument(
+        "--llama-server-key", default=os.getenv("WORKER_LLAMA_SERVER_KEY", "")
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="show what llama.cpp prints: the CPU features and the GPU it found",
+    )
     return parser.parse_args()
 
 
@@ -74,6 +91,18 @@ def resolve_weights(args: argparse.Namespace) -> str:
         return args.model_path
     directory = Path(args.model_dir) if args.model_dir else default_dir()
     return str(directory / file_name(args.model))
+
+
+def build_runner(args: argparse.Namespace) -> Runner | ServerRunner:
+    """Settle on where the model runs: in this process, or over HTTP."""
+    if args.llama_server:
+        return ServerRunner(args.llama_server, api_key=args.llama_server_key)
+    return Runner(
+        resolve_weights(args),
+        n_ctx=args.ctx,
+        gpu_layers=args.gpu_layers,
+        verbose=args.verbose,
+    )
 
 
 def beat(client: Client, job_id: int, worker_id: str, token: str, every: float) -> None:
@@ -87,7 +116,11 @@ def beat(client: Client, job_id: int, worker_id: str, token: str, every: float) 
 
 
 def run_batch(
-    client: Client, runner: Runner, worker_id: str, job_id: int, lease: dict[str, Any]
+    client: Client,
+    runner: Runner | ServerRunner,
+    worker_id: str,
+    job_id: int,
+    lease: dict[str, Any],
 ) -> int:
     """Describe every file of one batch. Returns how many were answered."""
     token = lease["lease_token"]
@@ -153,7 +186,7 @@ def main() -> None:
     client = Client(args.api, args.token)
     LOG.info("API at %s is %s", args.api, client.health()["status"])
 
-    runner = Runner(resolve_weights(args), n_ctx=args.ctx, gpu_layers=args.gpu_layers)
+    runner = build_runner(args)
 
     job = (
         client.job(args.job_id)
@@ -170,10 +203,11 @@ def main() -> None:
         input_chars,
     )
 
-    if not runner.fits(input_chars, 64):
+    if not runner.fits(input_chars, RESERVED_TOKENS):
         raise SystemExit(
-            f"--ctx {args.ctx} cannot hold {input_chars} characters; "
-            "raise it or create the job with a smaller input_chars"
+            f"a context window of {runner.n_ctx} cannot hold {input_chars} "
+            f"characters; {runner.widen_hint}, or create the job with a "
+            "smaller input_chars"
         )
 
     described = 0

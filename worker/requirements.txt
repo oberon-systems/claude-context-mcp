@@ -1,5 +1,7 @@
-# The only dependency. Everything else this package needs is in the standard
-# library, so a fresh Windows machine installs one wheel and is done.
+# The only dependency, and not always that: pointed at a llama.cpp server with
+# --llama-server, the worker loads no model and needs nothing here at all.
+# Everything else this package uses is in the standard library, so a fresh
+# Windows machine installs one wheel and is done.
 #
 # On a machine with an NVIDIA GPU, install it from the CUDA index instead, or
 # the wheel that arrives is the CPU build and the card sits idle:

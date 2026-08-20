@@ -100,8 +100,14 @@ def load_llama() -> type[Llama]:
 class Runner:
     """One loaded model."""
 
+    widen_hint = "raise --ctx"
+
     def __init__(
-        self, model_path: str, n_ctx: int = 8192, gpu_layers: int = -1
+        self,
+        model_path: str,
+        n_ctx: int = 8192,
+        gpu_layers: int = -1,
+        verbose: bool = False,
     ) -> None:
         """Load the weights onto the GPU. Raises when they are not weights."""
         path = Path(model_path)
@@ -121,7 +127,7 @@ class Runner:
             model_path=str(path),
             n_ctx=n_ctx,
             n_gpu_layers=gpu_layers,
-            verbose=False,
+            verbose=verbose,
         )
 
     def fits(self, input_chars: int, max_tokens: int) -> bool:
