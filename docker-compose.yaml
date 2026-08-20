@@ -116,6 +116,49 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # The queue a summarizing worker on another machine claims work from. Same
+  # image as the indexer, run as another module, the way the viewer is. Bound
+  # to every interface on purpose - the GPU that answers it is not on this
+  # host - which is why it is the one service here that carries a token of its
+  # own, and why it stays behind a profile: nobody who does not use a remote
+  # worker has to configure one.
+  worker-api:
+    image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
+    restart: unless-stopped
+    command: ["python", "-m", "ctxgraph.workerapi"]
+    profiles: [remote]
+    ports:
+      - "${WORKER_API_PORT:-3003}:3003"
+    environment:
+      DATABASE_URL: *database-url
+      WORKER_API_PORT: 3003
+      # No compose-level `:?` guard: an unset token must stop this service
+      # alone, not every `make index` on a stack that never publishes it.
+      # The application refuses to start without one.
+      WORKER_API_TOKEN: ${WORKER_API_TOKEN:-}
+      WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-300}
+      WORKER_MAX_BATCH: ${WORKER_MAX_BATCH:-8}
+      WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
+      CONTENT_STORE_CHARS: ${CONTENT_STORE_CHARS:-16000}
+    networks: [base]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # python, not curl: the runtime image is python:3.11-slim and carries
+      # neither curl nor wget.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:3003/health', timeout=3).status == 200 else 1)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # The dashboard: indexed projects, their nodes, and every plan in the
   # database. The graph itself is the viewer's page, proxied through here so it
   # and the API share one origin.

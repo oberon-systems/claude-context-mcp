@@ -170,3 +170,50 @@ LLM_INPUT_CHARS = int(os.getenv("LLM_INPUT_CHARS", "2000"))
 # Stop the summarizing pass after this many files. Zero is all of them. It is
 # how a first pass over a large tree is timed before one is spent on it.
 SUMMARY_LIMIT = int(os.getenv("SUMMARY_LIMIT", "") or 0)
+
+# How much of each file's text is kept in graph_nodes.content, which is where
+# a summarizing worker on another machine reads it from: it has no checkout of
+# the tree and no mount. Zero stores nothing and turns remote summarizing off.
+# Deliberately larger than the head the fast summary is written from - a GPU
+# can afford a context a CPU could not - and the dial to turn down on a very
+# large tree, since an index run holds one of these per code file at once.
+CONTENT_STORE_CHARS = int(os.getenv("CONTENT_STORE_CHARS", "16000") or 0)
+# Files that get a node and a head-of-file summary like any other, but whose
+# text is never stored. Storing it would put a secret in a table the worker
+# API serves over the network, and a tree without a .ctxignore is the case
+# this exists for.
+CONTENT_DENIED_NAMES = (
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "*.jwt",
+    "*.tfvars",
+    ".htpasswd",
+    "authorized_keys",
+    "credentials",
+    "id_rsa*",
+    "id_ed25519*",
+)
+
+# The worker API. It is the one service here that is meant to be reached from
+# another machine, so the token is not optional: it refuses to start without
+# one, and a short one is a configuration mistake rather than a choice.
+WORKER_API_PORT = int(os.getenv("WORKER_API_PORT", "3003"))
+WORKER_API_TOKEN = os.getenv("WORKER_API_TOKEN", "")
+WORKER_API_TOKEN_MIN = 16
+# FastAPI cannot put its own docs page behind the token, and an open route on
+# a published port is the thing being avoided.
+WORKER_API_DOCS = bool(os.getenv("WORKER_API_DOCS", ""))
+# How long a claimed batch is held before it returns to the queue, and how
+# many files one claim may take.
+WORKER_LEASE_SECONDS = int(os.getenv("WORKER_LEASE_SECONDS", "300"))
+WORKER_MAX_BATCH = int(os.getenv("WORKER_MAX_BATCH", "8"))
+# A file that reliably kills the worker is dropped rather than retried
+# forever.
+WORKER_MAX_ATTEMPTS = int(os.getenv("WORKER_MAX_ATTEMPTS", "3"))
+# A reply longer than this is refused before it is shaped: the worker is a
+# network peer, and the summary it is answering with is one sentence.
+WORKER_MAX_REPLY_CHARS = int(os.getenv("WORKER_MAX_REPLY_CHARS", "4000"))

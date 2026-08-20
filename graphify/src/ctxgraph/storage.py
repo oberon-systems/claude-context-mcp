@@ -25,12 +25,17 @@ from ctxgraph.config import (
 from ctxgraph.identifiers import entity_node_id, truncate
 
 
-def get_db_connection() -> Connection:
-    """Open a connection using DATABASE_URL."""
+def get_db_url() -> str:
+    """Read DATABASE_URL, or say which variable is missing."""
     db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL is not set")
-    return psycopg2.connect(db_url)
+    return db_url
+
+
+def get_db_connection() -> Connection:
+    """Open a connection using DATABASE_URL."""
+    return psycopg2.connect(get_db_url())
 
 
 def ensure_project(cursor: Cursor, project: str, root_path: str) -> None:
@@ -89,6 +94,7 @@ def upsert_file_node(
     rel_path: str,
     summary: str,
     source: str = SOURCE_NATIVE,
+    content: str = "",
 ) -> None:
     """Insert or refresh the node standing for a file.
 
@@ -103,16 +109,17 @@ def upsert_file_node(
     cursor.execute(
         """
         INSERT INTO graph_nodes (
-            project, id, name, type, file_path, summary, metadata
+            project, id, name, type, file_path, summary, content, metadata
         )
         VALUES (
-            %s, %s, %s, 'file', %s, %s,
+            %s, %s, %s, 'file', %s, %s, %s,
             JSONB_BUILD_OBJECT('summary_source', 'auto', 'source', %s)
         )
         ON CONFLICT (project, id) DO UPDATE SET
             name = EXCLUDED.name,
             type = 'file',
             file_path = EXCLUDED.file_path,
+            content = COALESCE(EXCLUDED.content, graph_nodes.content),
             metadata = graph_nodes.metadata || JSONB_BUILD_OBJECT('source', %s),
             summary = CASE
                 WHEN COALESCE(
@@ -128,9 +135,31 @@ def upsert_file_node(
             truncate(posixpath.basename(rel_path), MAX_NAME_LENGTH),
             rel_path,
             summary,
+            content or None,
             source,
             source,
         ),
+    )
+
+
+def store_file_content(
+    cursor: Cursor, project: str, rel_path: str, content: str
+) -> None:
+    """Write a file node's text without re-parsing the file.
+
+    An unchanged file skips indexing entirely, so a tree indexed before
+    content was stored would never fill the column for the files our own
+    parsers own - the extractor rewrites its half on every run regardless.
+    """
+    if not content:
+        return
+    cursor.execute(
+        """
+        UPDATE graph_nodes SET content = %s
+         WHERE project = %s AND id = %s AND type = 'file'
+           AND content IS DISTINCT FROM %s;
+        """,
+        (content, project, truncate(rel_path, MAX_NODE_ID_LENGTH), content),
     )
 
 

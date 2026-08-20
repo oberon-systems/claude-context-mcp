@@ -40,7 +40,8 @@ SHELL := /bin/bash
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
 	logs ps status index reindex summarize unindex backup restore psql clean \
-	skill-install skill-uninstall skill-status llm-model-install $(SUBS)
+	skill-install skill-uninstall skill-status llm-model-install \
+	api-up api-down api-logs jobs job $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -49,7 +50,8 @@ endif
 .PHONY: help init install shell lint check build pull up down restart logs ps \
 	status index reindex summarize unindex backup restore psql clean graphify \
 	mcp db web skill-install skill-uninstall skill-status llm-model-install \
-	require-venv require-env require-not-root require-model
+	api-up api-down api-logs jobs job \
+	require-venv require-env require-not-root require-model require-api
 
 help:  ## Show the current version and the available targets
 	@echo "$(NAME) $(VERSION)"
@@ -171,6 +173,44 @@ down:  ## Stop the stack, keeping the database volume
 	$(COMPOSE) --profile index down --remove-orphans
 
 restart: down up  ## Recreate the running services
+
+# The token is read from .env and handed to curl on stdin rather than as an
+# argument: an argument is visible in `ps` to every user of this machine.
+WORKER_API_PORT ?= $(shell sed -n 's/^WORKER_API_PORT=//p' .env 2>/dev/null)
+WORKER_API_PORT := $(or $(WORKER_API_PORT),3003)
+API_URL := http://127.0.0.1:$(WORKER_API_PORT)
+CURL_AUTH = printf 'header = "Authorization: Bearer %s"\n' \
+	"$$(sed -n 's/^WORKER_API_TOKEN=//p' .env)" | curl -sS --config -
+
+api-up: require-env require-api  ## Start the remote summarization API
+	$(COMPOSE) --profile remote up -d worker-api
+
+api-down:  ## Stop the remote summarization API
+	$(COMPOSE) --profile remote stop worker-api
+
+api-logs:  ## Follow the remote summarization API log
+	$(COMPOSE) --profile remote logs -f worker-api
+
+jobs: require-api  ## Queue a summarization job: make jobs PROJECT_NAME=kurum
+	@test -n '$(PROJECT_NAME)' || { \
+		echo "PROJECT_NAME= is required" >&2; exit 1; \
+	}
+	@$(CURL_AUTH) -X POST '$(API_URL)/jobs' \
+		-H 'Content-Type: application/json' \
+		-d '{"project":"$(PROJECT_NAME)","refresh":$(if $(FRESH),true,false)}'
+	@echo
+
+job: require-api  ## Show a summarization job: make job ID=7
+	@test -n '$(ID)' || { echo "ID= is required" >&2; exit 1; }
+	@$(CURL_AUTH) '$(API_URL)/jobs/$(ID)'
+	@echo
+
+require-api:
+	@grep -q '^WORKER_API_TOKEN=..' .env 2>/dev/null || { \
+		echo "WORKER_API_TOKEN is not set in .env." >&2; \
+		echo "Generate one with: openssl rand -hex 24" >&2; \
+		exit 1; \
+	}
 
 logs:  ## Follow the logs of the running services
 	$(COMPOSE) logs -f
@@ -298,37 +338,25 @@ unindex: require-env  ## Drop PROJECT= or PROJECT_NAME= from the database
 # so several can sit in the directory at once and LLM_MODEL_PATH says which one
 # a run uses.
 MODEL ?= qwen-1.5b
-REPO_qwen-1.5b := Qwen/Qwen2.5-Coder-1.5B-Instruct-GGUF
-FILE_qwen-1.5b := qwen2.5-coder-1.5b-instruct-q4_k_m.gguf
-REPO_qwen-3b := Qwen/Qwen2.5-Coder-3B-Instruct-GGUF
-FILE_qwen-3b := qwen2.5-coder-3b-instruct-q4_k_m.gguf
-REPO_qwen-0.5b := Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF
-FILE_qwen-0.5b := qwen2.5-coder-0.5b-instruct-q4_k_m.gguf
-REPO_smollm2 := HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF
-FILE_smollm2 := smollm2-1.7b-instruct-q4_k_m.gguf
-MODELS := qwen-1.5b qwen-3b qwen-0.5b smollm2
-
+# The table of models lives in worker/ctxworker/catalogue.py, which is also
+# what the machine with the GPU reads: two copies would drift, and the Windows
+# half cannot run this Makefile.
+# Any interpreter answers: the catalogue is a table and imports nothing. The
+# venv is preferred only so a machine without a system python3 still works.
+CATALOGUE_PYTHON := $(if $(wildcard $(PYTHON)),$(PYTHON),python3)
+CATALOGUE := PYTHONPATH='$(CURDIR)/worker' $(CATALOGUE_PYTHON) -m ctxworker.catalogue
+MODELS := $(shell $(CATALOGUE) list 2>/dev/null)
+MODEL_NAME := $(shell $(CATALOGUE) file '$(MODEL)' 2>/dev/null)
 MODEL_DIR := $(HOME)/.local/share/context-mcp/models
-MODEL_REPO := $(REPO_$(MODEL))
-MODEL_NAME := $(FILE_$(MODEL))
-MODEL_URL := https://huggingface.co/$(MODEL_REPO)/resolve/main/$(MODEL_NAME)
 MODEL_FILE := $(MODEL_DIR)/$(MODEL_NAME)
-# What the container is told to load. Named from the same variable the download
-# used, so `make summarize MODEL=qwen-3b` needs nothing else.
 MODEL_PATH := /models/$(MODEL_NAME)
 
 # Downloaded beside the target name and moved into place only once it is a
 # GGUF file: without `-f` curl saves the error page under the model's name and
 # exits 0, and llama.cpp is then the one to report it, a run later.
 llm-model-install: require-model  ## Download the summarizer weights (MODEL=, FORCE=1)
-	@test -z '$(FORCE)' && test -s '$(MODEL_FILE)' \
-		&& echo "model: kept ($(MODEL_FILE))" && exit 0; \
-	mkdir -p '$(MODEL_DIR)'; \
-	curl -fL --progress-bar '$(MODEL_URL)' -o '$(MODEL_FILE).part' || exit 1; \
-	head -c 4 '$(MODEL_FILE).part' | grep -q GGUF \
-		|| { echo "not a GGUF file, kept as $(MODEL_FILE).part" >&2; exit 1; }; \
-	mv '$(MODEL_FILE).part' '$(MODEL_FILE)'; \
-	echo "model: written to $(MODEL_FILE)"
+	@PYTHONPATH='$(CURDIR)/worker' $(CATALOGUE_PYTHON) -m ctxworker.download \
+		--model '$(MODEL)' --dir '$(MODEL_DIR)' $(if $(FORCE),--force)
 
 require-model:
 	@test -n '$(MODEL_NAME)' || { \

@@ -196,6 +196,7 @@ def import_extraction(
     project: str,
     extraction: dict[str, list[dict[str, str]]],
     contents: dict[str, str],
+    bodies: dict[str, str],
     summarizer: Summarizer | None = None,
 ) -> tuple[int, int, set[str]]:
     """Store one graphifyy extraction.
@@ -209,6 +210,10 @@ def import_extraction(
     and a graph of bare labels sends the agent back to opening files one by
     one. The head, not the whole file - it is what bounds both the memory of
     this pass and the prompt the model is given.
+
+    `bodies` maps the same paths to the larger slice kept in the node itself,
+    which is what a summarizing worker on another machine reads instead of the
+    tree it has no copy of.
     """
     nodes = extraction.get("nodes", [])
     edges = extraction.get("edges", [])
@@ -249,7 +254,12 @@ def import_extraction(
                 entities_by_file.get(source_file, []),
             )
             upsert_file_node(
-                cursor, project, source_file, summary, source=SOURCE_GRAPHIFYY
+                cursor,
+                project,
+                source_file,
+                summary,
+                source=SOURCE_GRAPHIFYY,
+                content=bodies.get(source_file, ""),
             )
             if summarizer is not None:
                 summarizer.refine(

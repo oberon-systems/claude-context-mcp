@@ -612,6 +612,56 @@ Node metadata records which of the three wrote the summary in `summary_source`:
 through `save_node_summary`. A manual summary is never overwritten, and a model
 summary survives a re-index rather than being replaced by the fast one.
 
+#### Summarizing on another machine
+
+The pass above runs on whatever CPU the stack was given. A machine with a GPU
+does the same work in about a second a file, so the model half can be moved to
+it - without giving that machine a checkout of your code, a database port or a
+share. It reads the text of each file from the graph, over HTTP.
+
+That means the text has to be in the graph, which it now is: an index run keeps
+the first `CONTENT_STORE_CHARS` characters (16000 by default, about 4k tokens)
+of every file in `graph_nodes.content`. Files named like secrets - `.env`,
+`*.pem`, `*.tfvars`, `id_rsa*` and the rest - still get a node and a
+head-of-file summary, but their text is never stored. `CONTENT_STORE_CHARS=0`
+turns the whole thing off.
+
+On the stack:
+
+```bash
+openssl rand -hex 24                 # put it in .env as WORKER_API_TOKEN
+make reindex PROJECT=/path/to/repo   # once, so the text is in the graph
+make api-up                          # publishes the queue on port 3003
+make jobs PROJECT_NAME=kurum         # queue every file that has no model summary
+make job ID=7                        # how far along it is
+```
+
+On the machine with the GPU, from a copy of this repository - see
+[`worker/README.md`](worker/README.md) for the CUDA wheel and the weights:
+
+```bash
+py -m ctxworker.download
+py -m ctxworker --api http://192.168.1.10:3003 --project kurum
+```
+
+The queue is leased, not handed out: a worker claims a batch for five minutes,
+and a batch whose worker dies returns to the queue for whoever asks next.
+Several workers may share one job. Answers are not trusted - each sentence goes
+through the same shaping and the same "says nothing the file name does not"
+gate the local pass applies, is capped in length, and can never overwrite a
+`manual` summary. What the model has already described is served from
+`summary_cache` and never leased again.
+
+The API is the one service here that is meant to be reached from another
+machine, and the only one with a secret of its own. It is plain HTTP bound to
+every interface, so it belongs on a trusted LAN or a VPN, behind a reverse
+proxy if it needs to go further. It refuses to start without
+`WORKER_API_TOKEN`, and refuses a token shorter than 16 characters.
+
+The local pass and a remote job show the model different amounts of text - 2000
+characters against 16000 - so they fill different rows of `summary_cache`. That
+is not a bug: a different prompt is a different answer.
+
 ### Persistent Project Planning
 
 The system includes dedicated support for tracking project execution roadmaps.

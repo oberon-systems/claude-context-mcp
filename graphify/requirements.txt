@@ -13,6 +13,10 @@ mcp<2
 # Summaries are written at index time by a local GGUF model. PyPI carries this
 # one as an sdist; the Dockerfile builds it in a stage of its own.
 llama-cpp-python==0.3.7
+# The worker API: the queue a machine with a GPU claims work from. Both ship
+# manylinux wheels, so the builder stage compiles nothing new for them.
+fastapi==0.121.1
+uvicorn==0.35.0
 pathspec==1.1.1
 psycopg2-binary==2.9.12
 # Ansible structure lives in the YAML values, not in the tree-sitter tree.

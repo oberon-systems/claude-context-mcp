@@ -1,0 +1,8 @@
+# The only dependency. Everything else this package needs is in the standard
+# library, so a fresh Windows machine installs one wheel and is done.
+#
+# On a machine with an NVIDIA GPU, install it from the CUDA index instead, or
+# the wheel that arrives is the CPU build and the card sits idle:
+#   pip install -r requirements.txt \
+#     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+llama-cpp-python==0.3.7

@@ -5,3 +5,5 @@
 # one that need not be installed to run the suite: tests/conftest.py stubs it,
 # so a source build is not the price of running two dozen assertions.
 pytest==8.3.4
+# fastapi's TestClient is httpx underneath.
+httpx==0.28.1
