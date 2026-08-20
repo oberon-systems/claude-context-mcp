@@ -1,0 +1,7 @@
+// just-the-docs auto-imports this file. The theme's default "This site uses
+// Just the Docs" credit has no config switch, only a CSS hook - so it's hidden
+// here instead of replaced with different footer text.
+.site-footer,
+#main-content > footer {
+  display: none;
+}

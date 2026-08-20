@@ -4,10 +4,6 @@ title: Onboarding
 nav_order: 2
 ---
 
-## Onboarding
-
-...
-
 ## Prerequisites
 
 - Docker with the Compose plugin.

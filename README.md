@@ -9,6 +9,8 @@ agents over MCP. One stack holds as many codebases as you index, and an agent
 working in one of them can read the graph of another. Every indexed codebase is
 mounted read-only, so nothing in this stack can modify your sources.
 
+Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
+
 ## Architecture
 
 ```text
@@ -267,186 +269,22 @@ status` answers; see the Make targets section.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. `make up` and `make index` refuse to run without
-it.
-
-| Variable            | Default   | Purpose                                                                                         |
-| ------------------- | --------- | ----------------------------------------------------------------------------------------------- |
-| `PROJECT_PATH`      | required  | Absolute host path of the codebase to index, mounted read-only at `/project`                    |
-| `PROJECT_NAME`      | derived   | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
-| `POSTGRES_PASSWORD` | required  | Database password; compose fails fast when unset                                                |
-| `POSTGRES_USER`     | `user`    | Database user                                                                                   |
-| `POSTGRES_DB`       | `context` | Database name                                                                                   |
-| `MCP_PORT`          | `3000`    | Host port the MCP server is published on                                                        |
-| `VIEWER_PORT`       | `3001`    | Host port the graph page is published on                                                        |
-| `WEB_PORT`          | `3002`    | Host port the dashboard is published on, bound to loopback                                      |
-| `TAG`               | `latest`  | Tag applied to the images built by `make build`; compose only ever runs `:latest`               |
-
-The stack is a singleton, and nothing about the codebase being indexed changes
-that. `docker-compose.yaml` pins the compose project name with a
-`name: claude-context-mcp` key, and the database always lives at
-`~/.local/share/context-mcp/db`. Neither is configurable, on purpose: one
-database holds the graph of every indexed codebase, so `make index
-PROJECT=/somewhere/else` reuses the one stack instead of starting a second.
-
-`PROJECT_PATH` and `PROJECT_NAME` are arguments to the indexing job and nothing
-more. They decide which tree is mounted read-only at `/project` and under which
-name its graph is stored, and they never reach the stack: not the compose
-project, not the containers, not the data directory.
-
-Running a second stack from this compose file is unsupported and destroys data.
-Two postgres containers over one data directory corrupt it beyond a normal
-restart, and nothing stops them - the `postmaster.pid` lock cannot see a
-postmaster in another container. There is no per-stack data directory to keep
-them apart, because there is only one path and it is not a setting.
-
-The MCP server also reads two optional variables:
-
-| Variable          | Default                  | Purpose                                                              |
-| ----------------- | ------------------------ | -------------------------------------------------------------------- |
-| `ALLOWED_HOSTS`   | loopback names on `PORT` | Comma-separated `Host` header allowlist, or `*` to disable the check |
-| `ALLOWED_ORIGINS` | empty                    | Comma-separated `Origin` header allowlist                            |
-
-These implement DNS rebinding protection. MCP SDK 0.6 has none of its own
-(GHSA-w48q-cv73-mx4w), and without it any web page you visit could reach the
-server through your browser. Legitimate MCP clients send no `Origin` header, so
-the empty default rejects browser traffic while leaving Claude CLI unaffected.
+Copy `.env.example` to `.env`; `make up` and `make index` refuse to run
+without it. Sets the project path/name, database credentials, published
+ports and the optional `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` DNS-rebinding
+allowlist. The stack is a singleton by design - one compose project name,
+one fixed data directory - so `make index PROJECT=/somewhere/else` reuses
+the running stack rather than starting a second one. Full variable
+reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/deployment.html).
 
 ### Choosing what gets indexed
 
-The indexed project decides for itself, through two optional files at its root.
-Both use gitignore syntax and are read from the mount on every `make index`, so
-changing what a project indexes needs neither an image rebuild nor a new release
-of this repository. `make install` generates the pair from what the tree holds
-and verifies the result by simulation before writing it, so what follows is
-what that generated file means and how to change it.
-
-| File         | Purpose                                             |
-| ------------ | --------------------------------------------------- |
-| `.ctxignore` | Paths pruned from the walk                          |
-| `.ctxkeep`   | Files that become nodes; everything else is skipped |
-
-```text
-# .ctxignore
-.git/
-.cache/
-build/
-*.qcow2
-
-# .ctxkeep
-*.py
-*.ts
-*.hcl
-*.md
-Makefile
-```
-
-`.ctxkeep` **replaces** the default file selection rather than adding to it,
-which is what lets a project index file types this repository has never heard
-of. `.ctxignore` is additive: its patterns are pruned on top of the built-in
-skip list (`.git`, `.venv`, `node_modules`, `dist`, `target` and friends), so a
-`.ctxignore` that forgets `.git/` still does not walk into git's internals.
-
-Without these files the built-in defaults apply: every extension a parser
-understands (`.py`, `.ts`, `.tsx`, `.js`, `.go`, `.rs`, `.rb`, `.sh`, `.md`,
-`.toml`, `.yaml`, `.json`, `.tf`, `.hcl`, `.pp`, `.erb`, `.epp`, plus
-`Dockerfile` and `Makefile` by name) and `.sql`,
-which becomes a file node without being parsed. Files above 1 MB are skipped
-whichever way they were selected, since they are generated bundles in practice.
-
-Entity and import edges are a separate matter. They are extracted only from the
-languages the parser understands, whatever `.ctxkeep` admits, so indexing
-documentation never mines prose for the word "import".
-
-### Ansible
-
-YAML that looks like Ansible is read as Ansible rather than as a bag of keys.
-Plays, tasks, handlers and role variables become nodes, and the references
-between them become edges:
-
-| Edge            | Source                                          |
-| --------------- | ----------------------------------------------- |
-| `includes`      | `include_tasks`, `import_tasks`                 |
-| `uses_role`     | `roles:`, `include_role`, `import_role`         |
-| `depends_on`    | `dependencies:` in `meta/main.yml`              |
-| `reads_vars`    | `include_vars`, `vars_files:`                   |
-| `uses_template` | `template: src:`                                |
-| `uses_file`     | `copy: src:`                                    |
-| `notifies`      | `notify:`, resolved to the handler that answers |
-
-Targets are resolved inside the owning role, so `template: src: sshd_config.j2`
-finds `roles/sshd/templates/sshd_config.j2`, and `{{ role_path }}` is expanded
-because it is the idiomatic way to include a sibling task file. Anything else
-still templated is skipped, since only Ansible could expand it. A `notify:`
-that no handler answers stays in the graph as an unresolved external node,
-which is usually a typo worth seeing. YAML that is not Ansible - CI configs,
-compose files, linter settings - falls back to top level keys as before.
-
-### Puppet
-
-Classes, defined types, node definitions and functions become nodes under their
-full name, so `class profile::web` is one node whatever file it lives in. Every
-resource declaration becomes a node too, named after its type and its title:
-
-| Manifest               | Node            |
-| ---------------------- | --------------- |
-| `package { 'nginx': }` | `package.nginx` |
-| `service { 'nginx': }` | `service.nginx` |
-
-That naming is what lets a reference resolve. `Package['nginx']` in a
-`require =>` finds the `package.nginx` declared above it, and `Class['a::b']`
-finds the class rather than a resource.
-
-| Edge            | Source                                             |
-| --------------- | -------------------------------------------------- |
-| `inherits`      | `inherits` on a class                              |
-| `includes`      | `include`                                          |
-| `requires`      | `require`, both the statement and the `require =>` |
-| `requires`      | the `->` and `~>` ordering chains                  |
-| `notifies`      | `notify =>`                                        |
-| `uses_template` | `template(...)` and `epp(...)`                     |
-
-`include ::stdlib` and `include stdlib` name the same class and land on the
-same node. A template reference is resolved through the module layout, so
-`template('profile/nginx.conf.erb')` in any manifest finds
-`modules/profile/templates/nginx.conf.erb`.
-
-Templates are read as well. The code inside `<% %>` is reassembled in source
-order and parsed by the language it is actually written in - Ruby for `.erb`,
-Puppet for `.epp` - and the variables it reads become nodes, so `<%= @port %>`
-puts `@port` in the graph next to the manifest that renders the file.
-
-Ruby itself (`.rb`) goes to the upstream extractor rather than to a parser
-here: classes, methods and the call graph inside a file. It reports no
-`require` edges, so Ruby files do not link to each other.
-
-### JSON
-
-Every top level key of a JSON file becomes a node, and nothing below it does.
-The depth is deliberate: a second level taken indiscriminately turns one data
-file into hundreds of nodes named `type` or `url`.
-
-The manifests that carry structure are read a level deeper, by file name. The
-keys of `scripts` in a `package.json` become `script` nodes, the keys of
-`mcpServers` in an `.mcp.json` become `mcp_server` nodes, and the dependency
-sections become edges:
-
-| Edge         | Source                                                     |
-| ------------ | ---------------------------------------------------------- |
-| `depends_on` | `dependencies` and friends, `require` in a `composer.json` |
-| `extends`    | `extends`, and the `path` of each `references` entry       |
-
-A dependency is recorded under the name of its ecosystem - `npm:express`,
-`composer:monolog/monolog` - so it cannot be confused with a key of the same
-name declared somewhere else in the tree. An `extends` target is a path and
-resolves to the file it names, when that file is relative and indexed; a bare
-specifier such as `@tsconfig/node20/tsconfig.json` names a package rather than
-a file and is left out.
-
-Lock files - `package-lock.json`, `npm-shrinkwrap.json`, `composer.lock`,
-`yarn.lock` - are skipped. They are generated, and they say nothing the
-manifest next to them does not. A `.ctxkeep` that names them explicitly still
-gets them.
+Two optional gitignore-style files at the indexed project's root,
+`.ctxignore` (paths to prune) and `.ctxkeep` (files that become nodes,
+replacing the default selection). `make install` generates both from what
+the tree holds. Per-format nuances - what Ansible, Puppet and JSON parsing
+extracts - are in
+[formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
 
 ## Make targets
 
@@ -551,279 +389,58 @@ rather than tearing down the client session.
 
 ### Automatic Summarization
 
-Indexing writes a summary for every file node in `graph_nodes` from its leading
-docstring, comment block or first heading. That is the fast producer and it is
-what a plain `make index` does, for both halves of the tree.
-
-A local GGUF model writes better ones, and it is slow: seconds per file, so a
-first index of a large tree would spend hours in it. It therefore runs as a
-pass of its own, after the graph exists:
+Indexing writes a fast summary for every file from its leading docstring or
+first heading. A local GGUF model writes better ones, as a separate pass:
 
 ```bash
 make llm-model-install               # once: ~1 GB of weights
 make summarize PROJECT=$(pwd)        # describe what has no model summary yet
-make summarize PROJECT=$(pwd) BG=1   # the same, detached, for a large tree
-make summarize PROJECT=$(pwd) LIMIT=20  # stop after 20, to time the rest
 ```
 
-`MODEL=` picks the weights, for both the download and the run:
-
-| `MODEL=`              | size    | ~s per file at 8 threads            |
-| --------------------- | ------- | ----------------------------------- |
-| `qwen-1.5b` (default) | 1.12 GB | ~8                                  |
-| `qwen-3b`             | 2.10 GB | ~20, wants `GRAPHIFY_MEM=6g`        |
-| `qwen-0.5b`           | 0.49 GB | ~4                                  |
-| `smollm2`             | 1.06 GB | ~13, and it declines far more files |
-
-The default is Qwen2.5-Coder-1.5B-Instruct because it is trained on code:
-measured against SmolLM2-1.7B on the same 15 files of this repository, it was
-faster and declined none of them, where SmolLM2 answered four with the file
-name. Qwen3 is not on the list on purpose - its GGUF release is Q8_0 only, and
-it is a thinking model, which is the opposite of a one-line summary.
-
-Several models can sit in `~/.local/share/context-mcp/models` at once; the make
-targets name the one they downloaded, and a hand-rolled `docker run` picks the
-only one there or is told through `LLM_MODEL_PATH`.
-
-The pass commits per file and only visits files whose summary still comes from
-the head of the file, so it can be stopped and started again without repeating
-itself; `FRESH=1` re-describes everything instead. `make index SUMMARIZE=1`
-does the same work inline for a tree small enough to wait for.
-
-Every answer is cached in `summary_cache`, keyed by the hash of the text the
-model was shown, so a re-index pays for the files that changed and looks up the
-rest. The cache belongs to the project and goes with it on `make unindex`.
-
-The container is capped while it runs: `GRAPHIFY_CPUS` and `GRAPHIFY_MEM` in
-`.env` (2 cpus and 4g by default), with `LLM_THREADS` at or below the cpu
-count, and the weights are released as soon as the pass ends. The cpu count is
-also the throughput: with the default model this repository measured ~30 s per
-file at the default 2 cpus and ~8 s at 8. Budget accordingly before pointing it
-at a large tree - it is per file, and it is why the pass detaches, and why
-`LIMIT=` exists.
-
-Expect it to decline a file now and then: a small model reading the head of a
-changelog or a lock file can answer with the file name, and an answer that says
-no more than the node id is rejected rather than stored. Those keep the
-head-of-file summary and are counted in the closing line.
-
-Node metadata records which of the three wrote the summary in `summary_source`:
-`auto` for the head of the file, `llm` for the model, `manual` for one written
-through `save_node_summary`. A manual summary is never overwritten, and a model
-summary survives a re-index rather than being replaced by the fast one.
-
-#### Summarizing on another machine
-
-The pass above runs on whatever CPU the stack was given. A machine with a GPU
-does the same work in about a second a file, so the model half can be moved to
-it - without giving that machine a checkout of your code, a database port or a
-share. It reads the text of each file from the graph, over HTTP.
-
-That means the text has to be in the graph, which it now is: an index run keeps
-the first `CONTENT_STORE_CHARS` characters (16000 by default, about 4k tokens)
-of every file in `graph_nodes.content`. Files named like secrets - `.env`,
-`*.pem`, `*.tfvars`, `id_rsa*` and the rest - still get a node and a
-head-of-file summary, but their text is never stored. `CONTENT_STORE_CHARS=0`
-turns the whole thing off.
-
-On the stack:
-
-```bash
-openssl rand -hex 24                 # put it in .env as WORKER_API_TOKEN
-make reindex PROJECT=/path/to/repo   # once, so the text is in the graph
-make api-up                          # publishes the queue on port 3003
-make jobs PROJECT_NAME=kurum         # queue every file that has no model summary
-make job ID=7                        # how far along it is
-```
-
-On the machine with the GPU, from a copy of this repository - see
-[`worker/README.md`](worker/README.md) for the CUDA wheel and the weights:
-
-```bash
-py -m ctxworker.download
-py -m ctxworker --api http://192.168.1.10:3003 --project kurum
-```
-
-The queue is leased, not handed out: a worker claims a batch for five minutes,
-and a batch whose worker dies returns to the queue for whoever asks next.
-Several workers may share one job. Answers are not trusted - each sentence goes
-through the same shaping and the same "says nothing the file name does not"
-gate the local pass applies, is capped in length, and can never overwrite a
-`manual` summary. What the model has already described is served from
-`summary_cache` and never leased again.
-
-The API is the one service here that is meant to be reached from another
-machine, and the only one with a secret of its own. It is plain HTTP bound to
-every interface, so it belongs on a trusted LAN or a VPN, behind a reverse
-proxy if it needs to go further. It refuses to start without
-`WORKER_API_TOKEN`, and refuses a token shorter than 16 characters.
-
-The local pass and a remote job show the model different amounts of text - 2000
-characters against 16000 - so they fill different rows of `summary_cache`. That
-is not a bug: a different prompt is a different answer.
+That pass can also run on another machine with a GPU instead of the stack's
+CPU, over HTTP, with no checkout of the code and no database access -
+including from Windows. Full walkthrough, model catalogue and the remote
+worker setup:
+[summarization](https://oberon-systems.github.io/claude-context-mcp/summarization.html).
 
 ### Persistent Project Planning
 
-The system includes dedicated support for tracking project execution roadmaps.
-Plans are managed directly by an AI client through `save_plan`, `get_plans` and
-`drop_plan`.
-
-Unlike everything else here, a plan is not derived from a tree: nothing rebuilds
-it, so it is not owned by a project. The `plans` table holds them for the whole
-database, keyed on a `plan_id` that is unique across it, with `project` as a
-free-text tag. That has three consequences worth knowing:
-
-- A plan survives `make unindex` and `drop_project`, and can name a repository
-  this database has never indexed.
-- `get_plans` defaults to the project the session connected to and always adds
-  the global plans on top. `project: "*"` lists every project's plans.
-- `save_plan` with `project: "*"` stores a plan that belongs to no project and
-  is listed under all of them - the right home for a procedure that is run on
-  demand rather than finished once.
-
-`type` is the other axis, and it is not a status. `status` says where a plan
-stands - `active`, `completed`, `archived` - while `type` says what the record
-is: `plan` for work executed once, `template` for a form to copy, `procedure`
-for a routine run on demand. They were one column until migration 0003, which is
-why a template used to be a status and could therefore never be completed.
-
-Two consequences: `get_plans` defaults to `type: "plan"`, so a procedure never
-turns up where an agent reads approved pending work, and `type: "*"` is how to
-see every kind. And re-saving a plan without naming a `type` resets it to
-`plan`, exactly as it already resets `status` to `active` - `save_plan` writes a
-whole row, it does not patch one.
+Plans are managed by an AI client through `save_plan`, `get_plans` and
+`drop_plan`, and live in one `plans` table for the whole database rather
+than being owned by a project - `project` is a free-text tag, not a
+foreign key, so a plan survives `make unindex` and `drop_project`. Full
+lifecycle (`status` vs `type`, the `"*"` project):
+[usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
 
 ## Web interface
 
-`make up` publishes a dashboard on <http://127.0.0.1:3002>, bound to loopback
-because it is the only service here that writes to the database on behalf of a
-browser and it carries no authentication of its own. Three views:
-
-- **Projects** - what is indexed, where it came from, how many nodes, edges,
-  files and plans each holds, and how old the index is. A project last indexed
-  more than a week ago says so in amber; one that was never indexed says that
-  instead of showing a date.
-- **A project** - four tabs. _overview_ counts what the graph holds and lists
-  the node types as chips that open a filtered node list. _graph_ is the
-  viewer's page, proxied through this service so the frame shares the page's
-  origin; above 5,000 nodes it states the size and waits for a click, because
-  the viewer draws the whole graph in one request. _nodes_ searches names and
-  ids and opens one node with its summary, its metadata, its neighbours and,
-  on request, its stored source. _files_ lists the file nodes, with how many
-  entities each carries and whether a hash was recorded for it.
-- **Plans** - every plan in the database, including the global ones and the
-  ones tagged with a codebase nothing has indexed, filtered by project, status,
-  type or a search over titles and bodies. A plan opens as rendered markdown
-  and edits in place; the status can be changed from the list.
-
-What it can change: plans, and dropping a project. A drop is reported before it
-happens - what one `make index` would rebuild, what nothing rebuilds, and that
-the plans tagged with the name survive - and then asks for the project name to
-be typed. Re-indexing is not offered: `make index` remains the way in.
+`make up` publishes a dashboard on <http://127.0.0.1:3002> (loopback only):
+indexed projects and their staleness, a per-project node/graph/file browser,
+and every plan in the database, editable in place. Details:
+[usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
 
 ## Backup and restore
 
-`make backup` writes the database to
-`~/.local/share/context-mcp/backups`, next to the data directory itself:
-
 ```bash
-make backup                                  # the whole database
-make backup PROJECT_NAME=api                 # one codebase
-make backup PROJECT=/home/you/work/api       # the same, resolved by root path
-make backup KEEP=20                           # keep more than the seven it keeps by default
-make backup KEEP=                            # keep everything, prune nothing
+make backup                              # the whole database
+make backup PROJECT_NAME=api             # one codebase
+make restore FILE=context-20260819-115420.dump
 ```
 
-The two are different files for a reason. The whole database is a `pg_dump`
-custom archive, `context-<timestamp>.dump`. A single project cannot be one:
-`pg_dump` selects by table and never by row, and every table here is scoped by
-a `project` column. So one codebase comes out as
-`<name>-<timestamp>.sql.gz` - the `COPY` blocks of its rows in foreign-key
-order, wrapped in a single transaction, which is the shape `pg_dump
---format=plain` emits and which `psql` replays. Neither file is written under
-its final name until it has been read back, so an interrupted dump cannot be
-mistaken for a backup.
-
-Backups rotate: `KEEP` defaults to 7, so each kind keeps its seven newest files
-and the older ones go. Each kind rotates on its own, so seven database archives
-never crowd out a project's only backup, and `KEEP=` empty keeps everything for
-that run. `FILE=<path>` writes somewhere else instead and is never pruned:
-rotation only ever touches the timestamped names this scheme produces.
-
-Restoring names the file and nothing else:
-
-```bash
-make restore FILE=context-20260819-115420.dump   # replaces the whole database
-make restore FILE=api-20260819-115137.sql.gz     # replaces that one project
-```
-
-A bare name is looked up in the backup directory, and `make restore` with no
-`FILE=` lists what is there rather than guessing at the newest. Both directions
-print what is about to be replaced and ask first; `FORCE=1` skips the prompt.
-A project restore is atomic - the file carries its own `BEGIN`, the `DELETE`s
-that take the old copy away, and `COMMIT` - and a database restore runs in
-one transaction with `--exit-on-error`, since `pg_restore` otherwise treats
-errors as non-fatal and would report success over a half-restored database.
-Either is refused outright while an index job is running.
-
-Worth doing before `make unindex` and before `make clean`: nodes, edges,
-hashes and embeddings come back with one `make index`, but plans and manually
-written summaries come back from nowhere else. A single-project file written
-before plans became global names the table that no longer exists and will not
-restore - take the backup again rather than editing the file.
+Whole-database backups are a `pg_dump` archive; single-project backups are a
+plain-SQL replay, since `pg_dump` can't select by row. Both rotate (`KEEP`,
+7 by default) and both print what they're about to replace before doing it.
+Full walkthrough: [deployment](https://oberon-systems.github.io/claude-context-mcp/deployment.html).
 
 ## Database schema
 
-The schema is owned by [goose](https://github.com/pressly/goose), which keeps
-`migrations/` and the `schema_migrations` table in step. The `migrate` service
-runs to completion before anything else reaches the database, so `make up`
-applies whatever is pending on its own - to the database that is already there,
-without touching its contents. Nothing that queries the database starts if a
-migration fails.
-
-`make db <target>` drives goose directly: `version` for what is applied and what
-is pending, `migrate` to apply it now, `new NAME=<slug>` to write the next
-numbered file. A migration is plain SQL between `-- +goose Up` and
-`-- +goose Down`, and goose runs each one in a transaction.
-
-Two things a migration cannot do for you. `scripts/backup.sh` and
-`scripts/restore.sh` name every column of every table explicitly, so a migration
-that adds or renames one has to update them in the same commit. And a full
-database restored from a backup taken before a migration comes back without its
-`schema_migrations` rows - the next `make up` re-applies from the beginning,
-which is safe because the migrations are idempotent, and records the version
-again.
-
-To remove a single codebase rather than the whole database, use `make unindex` -
-everything derived cascades from the row in `projects`, so one `DELETE` there
-takes that project's nodes, edges, hashes and embeddings, and nothing of any
-other project. Plans are not derived and have no foreign key, so they stay. `make clean` is the other end: it empties the data directory and starts
-the database over, asking for confirmation first since it destroys the index
-(`make clean FORCE=1` skips the prompt). Both are worth a `make backup` first.
-
-The data directory is emptied from inside the postgres service rather than from
-the host: its files belong to the container's postgres uid, so a host-side `rm`
-fails on permissions.
-
-The database is a bind mount rather than a volume, so `docker compose down -v`
-does not remove it. That is also why a regenerated `POSTGRES_PASSWORD` cannot be
-applied on its own: the entrypoint skips initialisation while the directory
-holds a database, and every connection is then refused with
-`password authentication failed`. Run `make clean` to rebuild the database
-around the new password; `migrate` puts the schema back into the empty
-directory on the next `make up`.
-
-- `graph_nodes` - one row per file, per code entity (`file_path::name`) and per
-  unresolved external import or symbol
-- `graph_edges` - typed relations between nodes, unique per
-  `(source, target, relation)`
-- `code_embeddings` - `vector(1536)` chunks with an HNSW cosine index, not
-  populated yet (see `ROADMAP.md`)
-- `plans` - one row per plan, keyed on an id unique across the database, with
-  `project` as a free-text tag, plus `status` and `type`
-
-A single-project backup taken before migration 0003 carries no `type` column;
-restoring it is fine, and the rows come back as `plan`.
+Schema migrations are goose-managed (`migrations/`); `make up` applies
+whatever is pending before anything else touches the database. Core tables:
+`graph_nodes`, `graph_edges`, `code_embeddings` (unused for now) and
+`plans` - the last one has no foreign key to a project, so it survives
+`make unindex` and `make clean`. Full internals, including how
+`make db <target>` drives goose and what a restore needs:
+[nuances](https://oberon-systems.github.io/claude-context-mcp/nuances.html).
 
 ## Development
 

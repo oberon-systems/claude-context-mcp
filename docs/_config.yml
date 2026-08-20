@@ -1,5 +1,3 @@
-theme: minima
+theme: just-the-docs
 title: Claude Context MCP
 description: Documentation for the Dockerized GraphRAG and vector context service.
-plugins:
-  - jekyll-feed

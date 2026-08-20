@@ -11,6 +11,11 @@ __pycache__/
 node_modules/
 dist/
 
+# Jekyll (docs/), built locally to verify the Pages theme
+docs/_site/
+docs/.bundle/
+docs/.jekyll-cache/
+
 # IDEs
 .idea/
 .vscode/
