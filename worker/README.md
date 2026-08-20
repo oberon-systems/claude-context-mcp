@@ -22,7 +22,10 @@ about one.
 
 ### Windows, NVIDIA
 
+From the repository root:
+
 ```powershell
+cd worker
 py -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
@@ -30,19 +33,30 @@ pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llam
 
 The CUDA index matters. Installing without it gets the CPU build, the card
 sits idle, and nothing says so - check the llama.cpp banner on startup and
-confirm the layer count next to `assigned to device CUDA0` is not zero. Pick
-the index matching your driver's CUDA version (`nvidia-smi` prints it):
-`cu121`, `cu122`, `cu123`, `cu124`.
+confirm the layer count next to `assigned to device CUDA0` is not zero.
+
+Always use `cu124` on Windows, regardless of the exact CUDA version
+`nvidia-smi` reports: it is the only one of `abetlen`'s CUDA wheel indexes
+that currently publishes Windows wheels for a recent `llama-cpp-python`
+release - `cu121`, `cu122` and `cu123` only carry Windows wheels for much
+older releases, and installing against one of them falls back to compiling
+from source (see Troubleshooting below). CUDA is driver-backward-compatible,
+so a `cu124` wheel runs fine on a driver that only advertises an older CUDA
+version.
 
 ### Linux
 
 ```bash
+cd worker
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
 ```
 
-Without a GPU, drop the `--extra-index-url` and pass `--gpu-layers 0`.
+Without a GPU, drop the `--extra-index-url` and pass `--gpu-layers 0`. PyPI's
+own `llama-cpp-python` ships no wheel, so a C/C++ toolchain has to be present
+to build it - `sudo apt install build-essential` on Debian/Ubuntu, or the
+equivalent for your distro.
 
 ## Get the weights
 
@@ -102,6 +116,19 @@ that was in flight. This is why a job is a lease queue and not a list.
 
 ## Troubleshooting
 
+- **`pip install` downloads a `.tar.gz` instead of a `.whl`, then fails with
+  a CMake/`nmake`/compiler error** - no prebuilt wheel matched your platform
+  for the pinned version, so pip fell back to compiling the source
+  distribution. On Windows that needs a full MSVC toolchain (Visual Studio
+  Build Tools, "Desktop development with C++" workload) and a matching CUDA
+  Toolkit, neither of which this setup requires otherwise. The fix is to
+  keep the pin in `requirements.txt` on a release that actually publishes a
+  `cu124`/`win_amd64` wheel - it does by default; if you changed the pin,
+  change it back or pick another version confirmed present at
+  <https://abetlen.github.io/llama-cpp-python/whl/cu124/llama-cpp-python/>.
+- **`Could not open requirements file`** - the install commands above must
+  be run from the `worker/` directory, not the repository root; `cd worker`
+  first.
 - **`--ctx N cannot hold M characters`** - the job was created to show the
   model more text than the context window fits. Raise `--ctx`, or create the
   job with a smaller `input_chars`.

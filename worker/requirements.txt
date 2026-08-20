@@ -5,4 +5,8 @@
 # the wheel that arrives is the CPU build and the card sits idle:
 #   pip install -r requirements.txt \
 #     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
-llama-cpp-python==0.3.7
+#
+# The version matters: it must be one that index actually publishes a wheel
+# for, or pip silently falls back to compiling the sdist, which needs a full
+# MSVC + CUDA Toolkit on Windows. 0.3.35 has win_amd64 and Linux wheels there.
+llama-cpp-python==0.3.35
