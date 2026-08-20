@@ -95,6 +95,14 @@ CUDA is driver-backward-compatible, so `cu124` works regardless of which
 exact CUDA version `nvidia-smi` reports, as long as the driver is
 reasonably current.
 
+A CUDA 12.x Toolkit has to be installed as well. The wheel carries
+`llama.dll` and `ggml-cuda.dll` but not the CUDA runtime they link against
+(`cudart64_12.dll`, `cublas64_12.dll`, `cublasLt64_12.dll`), and the loader
+looks for that only under `%CUDA_PATH%`. Without it the worker exits at
+startup with `Failed to load shared library ... llama.dll`, naming the DLL
+rather than what is actually missing - it now prints the remedy, and
+`worker/README.md` has the long form.
+
 **Linux:**
 
 ```bash

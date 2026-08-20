@@ -153,6 +153,8 @@ def main() -> None:
     client = Client(args.api, args.token)
     LOG.info("API at %s is %s", args.api, client.health()["status"])
 
+    runner = Runner(resolve_weights(args), n_ctx=args.ctx, gpu_layers=args.gpu_layers)
+
     job = (
         client.job(args.job_id)
         if args.job_id
@@ -168,7 +170,6 @@ def main() -> None:
         input_chars,
     )
 
-    runner = Runner(resolve_weights(args), n_ctx=args.ctx, gpu_layers=args.gpu_layers)
     if not runner.fits(input_chars, 64):
         raise SystemExit(
             f"--ctx {args.ctx} cannot hold {input_chars} characters; "
