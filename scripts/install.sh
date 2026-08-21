@@ -143,6 +143,8 @@ alias context-reindex='make -C $repo_root reindex PROJECT=\$(pwd)'
 alias context-status='make -C $repo_root status'
 alias context-install='make -C $repo_root install AGENT_ROOT=\$(pwd)'
 alias context-install-skill='make -C $repo_root skill-install AGENT_ROOT=\$(pwd)'
+alias context-reinstall-skill='make -C $repo_root skill-reinstall AGENT_ROOT=\$(pwd)'
+alias context-status-skill='make -C $repo_root skill-status AGENT_ROOT=\$(pwd)'
 $end_marker
 BLOCK
 }

@@ -98,14 +98,14 @@ make install AGENT_ROOT=/home/you/work/api
 
 Six things, none of which replaces a file that already exists:
 
-| Step                           | What it leaves behind                                                                   |
-| ------------------------------ | --------------------------------------------------------------------------------------- |
-| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                     |
-| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                               |
-| `.gemini/settings.json`        | the same address for the Gemini CLI                                                     |
-| `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                     |
-| `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md`                     |
-| shell aliases                  | `context-index`, `context-reindex`, `context-status`, `context-install`, in `~/.bashrc` |
+| Step                           | What it leaves behind                                                                                          |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                                            |
+| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                                                      |
+| `.gemini/settings.json`        | the same address for the Gemini CLI                                                                            |
+| `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                            |
+| `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md`                                            |
+| shell aliases                  | `context-index`, `context-reindex`, `context-status`, `context-install` and the two skill ones, in `~/.bashrc` |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 
@@ -342,12 +342,17 @@ make web dev     serve the dashboard client from vite against the running stack
 make clean       remove containers, the database directory and the built images
 
 make skill-install    register every skill for Claude and Gemini
+make skill-reinstall  reinstall them, dropping any skill that went away
 make skill-uninstall  remove them from both
 make skill-status     show which ones are registered
 ```
 
-These three are what `make install` calls for the skills alone; run them
-directly to reinstall them without touching anything else.
+These four are what `make install` calls for the skills alone; run them
+directly to reinstall them without touching anything else. `skill-install`
+only ever adds or overwrites, so a skill deleted from `skills/` keeps its copy
+until `skill-reinstall` prunes it - the install records what it wrote in
+`.claude/skills/.context-mcp-skills`, and that list is what the prune reads, so
+a skill the codebase installed from elsewhere is left alone.
 
 Every directory under `skills/` holding a `SKILL.md` is one skill, and all of
 them are installed: `context` (plans, graph exploration, memory and the

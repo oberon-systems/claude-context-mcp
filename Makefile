@@ -40,8 +40,8 @@ SHELL := /bin/bash
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
 	logs ps status index reindex summarize unindex backup restore psql clean \
-	skill-install skill-uninstall skill-status llm-model-install \
-	api-up api-down api-logs jobs job $(SUBS)
+	skill-install skill-reinstall skill-uninstall skill-status \
+	llm-model-install api-up api-down api-logs jobs job $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -49,8 +49,8 @@ endif
 
 .PHONY: help init install shell lint check build pull up down restart logs ps \
 	status index reindex summarize unindex backup restore psql clean graphify \
-	mcp db web skill-install skill-uninstall skill-status llm-model-install \
-	api-up api-down api-logs jobs job \
+	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
+	llm-model-install api-up api-down api-logs jobs job \
 	require-venv require-env require-not-root require-model require-api
 
 help:  ## Show the current version and the available targets
@@ -442,12 +442,22 @@ AGENT_ROOT ?= $(CURDIR)
 SKILLS := $(sort $(notdir $(patsubst %/SKILL.md,%,$(wildcard skills/*/SKILL.md))))
 SKILL_BASE := $(AGENT_ROOT)/.claude/skills
 
+# A skill deleted from skills/ still has a copy under AGENT_ROOT, and nothing
+# in the current list names it any more. So the install writes down what it
+# installed, and the uninstall removes that list as well as the current one -
+# which is what lets skill-reinstall drop a skill that went away without
+# touching a skill this codebase installed from somewhere else.
+SKILL_MANIFEST = $(SKILL_BASE)/.context-mcp-skills
+INSTALLED = $(shell cat '$(SKILL_MANIFEST)' 2> /dev/null)
+
 skill-install: require-not-root  ## Register every skill for Claude and Gemini
 	@for name in $(SKILLS); do \
 		mkdir -p "$(SKILL_BASE)/$$name"; \
 		cp "skills/$$name/SKILL.md" "$(SKILL_BASE)/$$name/SKILL.md"; \
 		echo "claude: $(SKILL_BASE)/$$name/SKILL.md"; \
 	done
+	@mkdir -p "$(SKILL_BASE)"
+	@printf '%s\n' $(SKILLS) > "$(SKILL_MANIFEST)"
 	@command -v gemini > /dev/null \
 		&& { for name in $(SKILLS); do \
 			(cd $(AGENT_ROOT) && gemini skills link --consent \
@@ -456,11 +466,21 @@ skill-install: require-not-root  ## Register every skill for Claude and Gemini
 		done; } \
 		|| echo "gemini: not installed, skipped"
 
+# A plain skill-install copies what skills/ holds now, but leaves behind a
+# skill that has since been deleted from it - the copy is never removed. That
+# is what reinstall is for: uninstall first, then install.
+skill-reinstall: require-not-root  ## Reinstall every skill, dropping any that went away
+	@$(MAKE) --no-print-directory skill-uninstall AGENT_ROOT='$(AGENT_ROOT)'
+	@$(MAKE) --no-print-directory skill-install AGENT_ROOT='$(AGENT_ROOT)'
+
 skill-uninstall: require-not-root  ## Remove every skill from both agents
-	@for name in $(SKILLS); do rm -rf "$(SKILL_BASE)/$$name"; done
+	@for name in $(sort $(SKILLS) $(INSTALLED)); do \
+		rm -rf "$(SKILL_BASE)/$$name"; \
+	done
+	@rm -f "$(SKILL_MANIFEST)"
 	@echo "claude: removed"
 	@command -v gemini > /dev/null \
-		&& { for name in $(SKILLS); do \
+		&& { for name in $(sort $(SKILLS) $(INSTALLED)); do \
 			(cd $(AGENT_ROOT) && gemini skills uninstall "$$name") \
 				> /dev/null 2>&1; \
 		done; echo "gemini: removed"; } \
