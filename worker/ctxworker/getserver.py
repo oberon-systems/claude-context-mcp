@@ -135,11 +135,36 @@ def unpack(asset: dict, dest: Path) -> None:
     partial.unlink()
 
 
+def install(dest: Path, tag: str = "", variant: str = "") -> Path:
+    """Put a llama.cpp build in dest, and return the server in it."""
+    data = pick_release(tag, variant)
+    assets = data.get("assets", [])
+    names = [asset["name"] for asset in assets]
+    cuda = driver_cuda()
+    chosen_variant = variant or choose_variant(names, cuda)
+    print(
+        f"release {data.get('tag_name', '?')}, driver CUDA "
+        f"{'.'.join(map(str, cuda)) if cuda else 'not reported'}, "
+        f"taking {chosen_variant}"
+    )
+    dest.mkdir(parents=True, exist_ok=True)
+    for asset in pick_assets(assets, chosen_variant):
+        unpack(asset, dest)
+    server = dest / SERVER_EXE
+    if not server.is_file():
+        raise SystemExit(f"unpacked, but there is no {SERVER_EXE} in {dest}")
+    return server
+
+
 def main() -> None:
     """Fetch the release, unpack it, and say how to start it."""
     parser = argparse.ArgumentParser(
         prog="ctxworker.getserver",
-        description="Download llama-server and unpack it into worker/llama-server.",
+        description=(
+            "Download a llama.cpp Windows build into worker/llama-server. "
+            "On Linux use the ghcr.io/ggml-org/llama.cpp docker image instead - "
+            "the releases carry no Linux CUDA archive."
+        ),
     )
     parser.add_argument("--tag", default="", help="a release, default the latest")
     parser.add_argument(
@@ -151,30 +176,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    data = pick_release(args.tag, args.variant)
-    assets = data.get("assets", [])
-    names = [asset["name"] for asset in assets]
-    cuda = driver_cuda()
-    variant = args.variant or choose_variant(names, cuda)
-    print(
-        f"release {data.get('tag_name', '?')}, driver CUDA "
-        f"{'.'.join(map(str, cuda)) if cuda else 'not reported'}, taking {variant}"
-    )
-
-    chosen = pick_assets(assets, variant)
     dest = Path(args.dest) if args.dest else default_dest()
     if args.dry_run:
-        for asset in chosen:
+        data = pick_release(args.tag, args.variant)
+        assets = data.get("assets", [])
+        names = [asset["name"] for asset in assets]
+        variant = args.variant or choose_variant(names, driver_cuda())
+        for asset in pick_assets(assets, variant):
             print(f"would take {asset['name']} -> {dest}")
         return
 
-    dest.mkdir(parents=True, exist_ok=True)
-    for asset in chosen:
-        unpack(asset, dest)
-
-    server = dest / SERVER_EXE
-    if not server.is_file():
-        raise SystemExit(f"unpacked, but there is no {SERVER_EXE} in {dest}")
+    server = install(dest, args.tag, args.variant)
     print(f"llama-server: ready at {server}")
     print(
         "Start it with:\n"

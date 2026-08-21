@@ -6,7 +6,7 @@ MODEL ?= qwen-1.5b
 API ?= http://127.0.0.1:3003
 
 .DEFAULT_GOAL := help
-.PHONY: help deps model server run lint clean
+.PHONY: help deps model server serve run lint clean
 
 help:  ## Show this help
 	@echo "Remote summarization worker"
@@ -22,6 +22,9 @@ model:  ## Download the weights (MODEL=qwen-3b, FORCE=1)
 
 server:  ## Download llama-server into llama-server/ (VARIANT=cpu)
 	$(PYTHON) -m ctxworker.getserver $(if $(VARIANT),--variant '$(VARIANT)')
+
+serve:  ## Start llama-server on the weights (MODEL=, PORT= via --port)
+	$(PYTHON) -m ctxworker.runserver --install
 
 run:  ## Summarize a project: make run PROJECT=kurum API=http://host:3003
 	@test -n '$(PROJECT)' || { echo "PROJECT= is required" >&2; exit 1; }
