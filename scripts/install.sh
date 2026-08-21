@@ -94,7 +94,8 @@ echo "Agents"
 "$python_bin" scripts/mcp_register.py "$target" "$project" "$port"
 note "agent configuration" "$project on port $port"
 
-# 3. Every skill under skills/ renders its own placeholders from AGENT_ROOT.
+# 3. Every skill under skills/ is copied under AGENT_ROOT for Claude and
+#    linked from there for Gemini, so both agents read the same file.
 echo
 echo "Skills"
 # The gemini consent notice goes to stderr; folded in so the whole step is

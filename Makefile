@@ -99,7 +99,7 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 	@echo "Initialization complete. Edit .env, then run 'make build && make up'."
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
-# `context` server registered for both agents, the skill rendered, an
+# `context` server registered for both agents, the skills installed, an
 # instruction file, the .ctxkeep/.ctxignore pair generated from what the tree
 # actually holds, the shell aliases, and finally the graph itself.
 #
@@ -112,6 +112,12 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # INDEX=0 stops before building the graph, for a large tree that is better
 # indexed later. ALIASES=0 leaves the shell rc file alone; SHELL_RC= names a
 # different one.
+# MAKE_PREFIX is how the onboarded codebase reaches these targets, substituted
+# into the instruction file: a plain `make` from inside this repository, and
+# `make -C` here from anywhere else, since the stack lives here and nothing of
+# it is in the other repository. A codebase reaching this through a proxy
+# target of its own passes that instead.
+MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
 INDEX ?= 1
 ALIASES ?=
 SHELL_RC ?=
@@ -423,39 +429,25 @@ clean: require-env  ## Remove the containers, the database and the built images
 		IMAGE='$(WEB_IMAGE)' TAG='$(TAG)' clean
 
 # Every directory under skills/ holding a SKILL.md is one skill, and both
-# agents read the same format. What a skill cannot know from here is where it
-# is being installed, which decides three things:
+# agents read the same format. The one thing a skill cannot know from here is
+# where it is being installed: Claude Code reads .claude/skills/ of the project
+# root, and this repository is not that root when a neighbouring codebase is
+# the one being onboarded. That is AGENT_ROOT, and it is the only variable
+# these targets take.
 #
-#   AGENT_ROOT   where the agents look. Claude Code reads .claude/skills/ of
-#                the project root, and this repository is not that root when
-#                the skill is installed into another codebase.
-#   MAKE_PREFIX  how that codebase reaches these targets. From inside this
-#                repository a plain `make`; from anywhere else `make -C` here,
-#                since the stack lives here and nothing of it is in the other
-#                repository. A codebase reaching this through a proxy target
-#                of its own passes that instead.
-#   SKILL_ROOT   which tree the skill's own project is. Indexing is an
-#                argument now, so the rebuild command has to name the tree it
-#                belongs to, or it would re-index whatever .env points at.
-#
-# Which is why a skill is rendered rather than linked: the placeholders in
-# the source carry all three, and the installed copy names commands that
-# actually run where it is installed. Editing a source needs a reinstall.
-# skills/ is the source of truth; .claude/skills/ is rendered output.
+# The installed copy is a plain copy. Gemini is linked to that same copy, so
+# both agents read one file and skills/ stays the source of truth - editing a
+# source still needs a reinstall for the copy to catch up.
 AGENT_ROOT ?= $(CURDIR)
-MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
-SKILL_ROOT ?= $(abspath $(AGENT_ROOT))
 SKILLS := $(sort $(notdir $(patsubst %/SKILL.md,%,$(wildcard skills/*/SKILL.md))))
 SKILL_BASE := $(AGENT_ROOT)/.claude/skills
 
 skill-install: require-not-root  ## Register every skill for Claude and Gemini
 	@for name in $(SKILLS); do \
 		mkdir -p "$(SKILL_BASE)/$$name"; \
-		sed -e 's|@MAKE@|$(MAKE_PREFIX)|g' -e 's|@ROOT@|$(SKILL_ROOT)|g' \
-			"skills/$$name/SKILL.md" > "$(SKILL_BASE)/$$name/SKILL.md"; \
+		cp "skills/$$name/SKILL.md" "$(SKILL_BASE)/$$name/SKILL.md"; \
 		echo "claude: $(SKILL_BASE)/$$name/SKILL.md"; \
 	done
-	@echo "        rebuilds with: $(MAKE_PREFIX) index PROJECT=$(SKILL_ROOT)"
 	@command -v gemini > /dev/null \
 		&& { for name in $(SKILLS); do \
 			(cd $(AGENT_ROOT) && gemini skills link --consent \

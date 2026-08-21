@@ -48,8 +48,9 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
 - `/mcp-server/` - the TypeScript MCP server.
 - `/web/` - the dashboard: an Express JSON API over the same schema and a React
   client, in one image.
-- `/skills/graphify/` - the agent skill installed by `make skill-install`;
-  `/.claude/skills/` - this repository's own skills, `commit` and `delegate`.
+- `/skills/` - the skills installed by `make skill-install` for Claude and
+  Gemini alike: `context`, `commit`, `delegate`, `write-docs`.
+  `/.claude/skills/` holds the installed copies.
 - `/templates/` - the `CLAUDE.local.md` an onboarded codebase is given.
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;
   `backup.sh`, `restore.sh`, `unindex.sh` drive the database targets.

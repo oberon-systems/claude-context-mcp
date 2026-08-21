@@ -79,3 +79,13 @@ summary, which is a claim rather than a result.
 
 Then fix on top and commit with the `commit` skill. Local commit only; pushing
 is the user's call.
+
+## Recap
+
+Say what was handed over, inside the recap the `context` skill defines -
+counts, not adjectives.
+
+- **Delegations** - one line each: which model ran, what it was asked for,
+  what came back.
+- **Verdict** - accepted, fixed on top, or reverted, and on which evidence.
+  The delegate's own summary is a claim, so cite the diff or the graph.
