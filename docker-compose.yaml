@@ -110,8 +110,6 @@ services:
     image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
     restart: unless-stopped
     command: ["python", "-m", "ctxgraph.viewer"]
-    ports:
-      - "${VIEWER_PORT:-3001}:3001"
     environment:
       DATABASE_URL: *database-url
       VIEWER_PORT: 3001
@@ -121,18 +119,16 @@ services:
         condition: service_completed_successfully
 
   # The queue a summarizing worker on another machine claims work from. Same
-  # image as the indexer, run as another module, the way the viewer is. Bound
-  # to every interface on purpose - the GPU that answers it is not on this
-  # host - which is why it is the one service here that carries a token of its
-  # own, and why it stays behind a profile: nobody who does not use a remote
-  # worker has to configure one.
+  # image as the indexer, run as another module, the way the viewer is. Reached
+  # through the ingress at /worker, from off this host - the GPU that answers
+  # it is elsewhere - which is why it is the one service here that carries a
+  # token of its own, and why it stays behind a profile: nobody who does not
+  # use a remote worker has to configure one.
   worker-api:
     image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
     restart: unless-stopped
     command: ["python", "-m", "ctxgraph.workerapi"]
     profiles: [remote]
-    ports:
-      - "${WORKER_API_PORT:-3003}:3003"
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
@@ -169,15 +165,14 @@ services:
   web:
     image: ghcr.io/oberon-systems/claude-context-mcp/web:latest
     restart: unless-stopped
-    ports:
-      # Loopback only: this is the one service that writes to the database on
-      # behalf of a browser, and it has no authentication of its own.
-      - "127.0.0.1:${WEB_PORT:-3002}:3002"
     networks: [base]
     environment:
       DATABASE_URL: *database-url
       PORT: 3002
       VIEWER_URL: http://viewer:3001
+      # Behind the ingress the Host header carries the gateway's port, not
+      # this service's, so the built-in default would refuse every request.
+      WEB_ALLOWED_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000},web:3002
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -196,16 +191,20 @@ services:
       retries: 5
       start_period: 10s
 
-  # MCP server exposed to Claude CLI over SSE.
+  # MCP server exposed to Claude CLI over Streamable HTTP.
   mcp-server:
     image: ghcr.io/oberon-systems/claude-context-mcp/mcp-server:latest
     restart: unless-stopped
-    ports:
-      - "${MCP_PORT:-3000}:3000"
     networks: [base]
     environment:
       DATABASE_URL: *database-url
       PORT: 3000
+      # Behind the ingress the Host header carries the gateway's port, not
+      # this service's, so the built-in default would refuse every request.
+      ALLOWED_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000},mcp-server:3000
+      # Relative on purpose: the graph page is served by the dashboard, on the
+      # gateway, and the viewer has no address of its own any more.
+      VIEWER_URL: /graph
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -221,6 +220,40 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # The single entry point. Nothing else here publishes a port: nginx routes
+  # by path to the MCP server, the worker API and the dashboard. Binding every
+  # interface is what a remote summarization worker needs, and it also puts
+  # the dashboard - which writes to the database on behalf of a browser and
+  # has no authentication of its own - within reach of the local network.
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-3000}:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [base]
+    # worker-api is deliberately absent: naming it here would pull the remote
+    # profile into every plain `up`. Its route answers 502 until it runs.
+    depends_on:
+      mcp-server:
+        condition: service_started
+      web:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--output-document=-",
+          "http://127.0.0.1/nginx/health",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
 
 volumes:
   graph-out:

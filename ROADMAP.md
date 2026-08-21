@@ -25,8 +25,11 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 
 Simplifying how users interact with the stack and how agents manage project context.
 
-- [ ] **reinstall target**: add target for re-install already onboarded tools (force)
-- [ ] **single entry point**: use nginx as ingress for all web-endpoints as a part of the stack
+- [x] **reinstall target**: add target for re-install already onboarded tools (force)
+- [ ] **local documentation**: docs using for github pages, we should also provide it locally with our stack
+- [x] **single entry point**: use nginx as ingress for all web-endpoints as a part of the stack
+- [ ] **system tables index, reindex**: `_mempory`, `_suggestions` and other `_` should be indexed periodically
+- [ ] **migrate plans**: should be a system table as \_memory and others
 - [x] **Cross-Project Plans:** One `plans` table for the whole database, with the project as a tag and `project: "*"` for a plan that belongs to none.
 - [x] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'docs') to enable targeted cross-repository searches.
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
@@ -48,6 +51,7 @@ Adding vector context and agent memory.
 
 ## Completed Items
 
+- Single entry point: nginx is the only service that publishes a host port, and it picks the backend from the path - `/mcp`, `/sse` and `/health` to the MCP server, `/worker` to the summarization queue, everything else to the dashboard. `GATEWAY_PORT` and `GATEWAY_BIND` set where it listens, and `GATEWAY_HOSTS` gives the MCP server and the dashboard API the `Host` allowlist they now need, since behind the gateway that header carries the gateway's port rather than their own. The default port is 3000, so every `/mcp/<project>` address already written into an onboarded repository keeps working. The dashboard is no longer loopback-only: it rides the same listener, which is bound to every interface because a remote summarization worker needs it to be
 - Gap tracking: what the graph could not answer is recorded rather than printed. `save_suggestion`, `get_suggestions` and `drop_suggestion` write into `_suggestions`, a built-in project alongside `_memory`, and the id is a stable slug derived from the gap - so reporting the same gap again keeps its first sighting, moves its last, counts a hit and reopens it if it had been resolved, which is what turns a complaint repeated across sessions into a backlog ranked by how much it actually costs. Each carries a kind, a status and the lever closing it would move (`tokens`, `coverage`, `runtime`), and the dashboard grew a Suggestions tab that triages them without being able to author one
 - Project types and agent memory: `projects.type` categorises a project as `codebase`, `docs`, `config` or `memory` (`make index TYPE=`, stored once so a plain re-index keeps it), `search_code_nodes` gained `project: "*"` and `project_type` to search every project or every project of one kind with the limit shared between them, and `save_memory`/`get_memory`/`drop_memory` write conventions and decisions into `_memory` - a built-in project of type `memory` holding records rather than files, tagged with what each is about the way a plan is
 - Model summaries: `make summarize` describes every file node of both halves of the tree with a local GGUF model (Qwen2.5-Coder-1.5B-Instruct Q4_K_M by default, MODEL= for the others) reading the head of the file - a resumable pass of its own rather than part of indexing, since it costs seconds per file - cached by content hash in `summary_cache`, marked `summary_source: llm` so a re-index keeps it, and capped by the cpu and memory limits on the indexer container. Entity nodes still carry no summary of their own

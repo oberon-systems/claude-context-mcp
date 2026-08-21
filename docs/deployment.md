@@ -25,17 +25,64 @@ without it.
 | `POSTGRES_PASSWORD` | required  | Database password; compose fails fast when unset                                                |
 | `POSTGRES_USER`     | `user`    | Database user                                                                                   |
 | `POSTGRES_DB`       | `context` | Database name                                                                                   |
-| `MCP_PORT`          | `3000`    | Host port the MCP server is published on                                                        |
-| `VIEWER_PORT`       | `3001`    | Host port the graph page is published on                                                        |
-| `WEB_PORT`          | `3002`    | Host port the dashboard is published on, bound to loopback                                      |
+| `GATEWAY_PORT`      | `3000`    | The one published host port; nginx routes it to every service                                   |
+| `GATEWAY_BIND`      | `0.0.0.0` | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
+| `GATEWAY_HOSTS`     | derived   | `Host` header values the MCP server and the dashboard API accept, comma separated               |
 | `TAG`               | `latest`  | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
 decide what gets mounted and under which name, and never reach the compose
 project or the containers themselves.
 
+## The entry point
+
+nginx is the only service that publishes a host port. It picks the backend
+from the request path:
+
+| Path                                 | Served by  | What it is                                      |
+| ------------------------------------ | ---------- | ----------------------------------------------- |
+| `/mcp`, `/mcp/<project>`             | mcp-server | Streamable HTTP, the transport to use           |
+| `/sse`, `/sse/<project>`, `/message` | mcp-server | the older SSE pair                              |
+| `/health`                            | mcp-server | what `make status` probes                       |
+| `/worker/...`                        | worker-api | the remote summarization queue, prefix stripped |
+| everything else                      | web        | the dashboard, its API and the graph page       |
+
+The config is `nginx/default.conf`, bind-mounted read-only. Two details in it
+are load-bearing rather than stylistic. Every `proxy_pass` goes through a
+variable so that names resolve per request: `worker-api` sits behind the
+`remote` profile, and a static upstream name that does not resolve makes nginx
+refuse to start instead of answering 502 for that one path. Response buffering
+is off on the MCP routes, because both transports hold a response open and a
+buffered stream reaches the client only when the session ends.
+
+The viewer is not routed directly. The dashboard already proxies `/graph` and
+`/vis-network.min.js` same-origin, and the viewer emits absolute root paths, so
+it cannot be mounted under a prefix.
+
+`GATEWAY_BIND` defaults to every interface, which is what a summarization
+worker on another machine needs. It also puts the dashboard - the one service
+that writes to the database on behalf of a browser, and it has no
+authentication of its own - within reach of the local network. Set
+`GATEWAY_BIND=127.0.0.1` if you run no remote worker.
+
+## Host header allowlists
+
+Behind the entry point the `Host` header carries the gateway's port, not the
+port the service itself listens on, so both services that check it are given
+their allowlist by compose from `GATEWAY_HOSTS`. Change `GATEWAY_PORT`, or
+reach the stack under any other name, and `GATEWAY_HOSTS` has to say so - a
+value that does not name the address you use answers 403 on `/mcp` and `/api`
+while `/health`, which is not guarded, still looks healthy.
+
+nginx passes `Host` through unchanged on purpose. The dashboard derives the
+`Origin` it expects for a write from the `Host` it sees, so rewriting the
+header would make every cross-site request look same-origin, and that check is
+what guards an unauthenticated dashboard.
+
 Two optional variables, read by the MCP server, implement DNS rebinding
-protection (MCP SDK 0.6 has none of its own - GHSA-w48q-cv73-mx4w):
+protection (MCP SDK 0.6 has none of its own - GHSA-w48q-cv73-mx4w). Compose
+sets `ALLOWED_HOSTS` from `GATEWAY_HOSTS`; these are the raw variables behind
+it:
 
 | Variable          | Default                  | Purpose                                                              |
 | ----------------- | ------------------------ | -------------------------------------------------------------------- |

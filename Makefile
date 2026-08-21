@@ -168,9 +168,9 @@ pull:  ## Pull the published images, discarding a local build
 	$(COMPOSE) --profile index pull
 
 # The viewer is named here rather than left to a bare `up` so that /graph,
-# which the MCP server redirects to, answers on a stack this target started.
-up: require-env  ## Start postgres, the MCP server and the viewer in the background
-	$(COMPOSE) up -d postgres mcp-server viewer web
+# which the dashboard proxies, answers on a stack this target started.
+up: require-env  ## Start the database, the services and the entry point
+	$(COMPOSE) up -d postgres mcp-server viewer web nginx
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
 # graphify container left over from `make index` keeps the network alive and
@@ -183,9 +183,9 @@ restart: down up  ## Recreate the running services
 
 # The token is read from .env and handed to curl on stdin rather than as an
 # argument: an argument is visible in `ps` to every user of this machine.
-WORKER_API_PORT ?= $(shell sed -n 's/^WORKER_API_PORT=//p' .env 2>/dev/null)
-WORKER_API_PORT := $(or $(WORKER_API_PORT),3003)
-API_URL := http://127.0.0.1:$(WORKER_API_PORT)
+GATEWAY_PORT ?= $(shell sed -n 's/^GATEWAY_PORT=//p' .env 2>/dev/null)
+GATEWAY_PORT := $(or $(GATEWAY_PORT),3000)
+API_URL := http://127.0.0.1:$(GATEWAY_PORT)/worker
 CURL_AUTH = printf 'header = "Authorization: Bearer %s"\n' \
 	"$$(sed -n 's/^WORKER_API_TOKEN=//p' .env)" | curl -sS --config -
 
@@ -231,9 +231,9 @@ ps:  ## Show the state of every service
 # look. Every step is best-effort: a stopped stack reports what is missing
 # rather than failing the target.
 #
-# MCP_PORT is read out of .env rather than from `$(COMPOSE) port`, which only
-# answers while the container runs and would leave the address unprintable in
-# exactly the case worth reporting.
+# GATEWAY_PORT is read out of .env rather than from `$(COMPOSE) port`, which
+# only answers while the container runs and would leave the address
+# unprintable in exactly the case worth reporting.
 #
 # The service list goes through xargs rather than `tr`: compose prints a bare
 # newline when nothing runs, and a translated newline is a space, which is not
@@ -242,14 +242,12 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 	@running=$$($(COMPOSE) ps --services --filter status=running 2> /dev/null \
 		| xargs); \
 	echo "containers: $${running:-none running}"; \
-	port=$$(sed -n 's/^MCP_PORT=//p' .env | tail -1); \
+	port=$$(sed -n 's/^GATEWAY_PORT=//p' .env | tail -1); \
 	port=$${port:-3000}; \
 	health=$$(curl -sS localhost:$$port/health 2> /dev/null); \
 	echo "health:     $${health:-unreachable on localhost:$$port}"; \
-	web=$$(sed -n 's/^WEB_PORT=//p' .env | tail -1); \
-	web=$${web:-3002}; \
-	dash=$$(curl -sS localhost:$$web/api/health 2> /dev/null); \
-	echo "dashboard:  $${dash:-unreachable on localhost:$$web}"; \
+	dash=$$(curl -sS localhost:$$port/api/health 2> /dev/null); \
+	echo "dashboard:  $${dash:-unreachable on localhost:$$port/api}"; \
 	graph=$$($(COMPOSE) exec -T postgres psql -U "$${POSTGRES_USER:-user}" \
 		-d "$${POSTGRES_DB:-context}" -tAc "select string_agg( \
 			p.name || ' (' || c.nodes || ')', ', ' order by p.name) \

@@ -49,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--api",
-        default=os.getenv("WORKER_API_URL", "http://127.0.0.1:3003"),
+        default=os.getenv("WORKER_API_URL", "http://127.0.0.1:3000/worker"),
         help="base URL of the worker API",
     )
     parser.add_argument("--token", default=os.getenv("WORKER_API_TOKEN", ""))

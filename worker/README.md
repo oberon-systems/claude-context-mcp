@@ -47,7 +47,7 @@ double-clicking:
 ```bat
 get-llama-server.bat    :: download the build for this driver
 start-llama-server.bat  :: start it, downloading anything missing first
-start-worker.bat --api http://192.168.1.10:3003 --token <token> --project kurum
+start-worker.bat --api http://192.168.1.10:3000/worker --token <token> --project kurum
 ```
 
 On a clean machine only the middle one is needed - it installs the binaries
@@ -126,7 +126,7 @@ where the wheel had none to pick from. The second is the card doing the work
 The worker joins it with one flag, and everything else stays as it was:
 
 ```bat
-py -m ctxworker --api http://192.168.1.10:3003 --token <token> ^
+py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> ^
   --project kurum --llama-server http://127.0.0.1:8080
 ```
 
@@ -149,7 +149,7 @@ pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
 py -c "import glob,os,shutil,sysconfig;p=sysconfig.get_paths()['purelib'];[shutil.copy(f,os.path.join(p,'llama_cpp','lib')) for f in glob.glob(os.path.join(p,'nvidia','*','bin','*.dll'))]"
 py -c "import llama_cpp; print('llama_cpp ok')"
 py -m ctxworker.download
-py -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum
+py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> --project kurum
 ```
 
 If the seventh line printed `llama_cpp ok` and the last one started
@@ -213,7 +213,7 @@ more. `qwen-1.5b` is the default because it is what the stack downloads.
 
 ```text
 set WORKER_API_TOKEN=<the token from the stack's .env>
-py -m ctxworker --api http://192.168.1.10:3003 --project kurum
+py -m ctxworker --api http://192.168.1.10:3000/worker --project kurum
 ```
 
 That opens a job over every file of `kurum` that still has no model summary,
@@ -221,22 +221,22 @@ then claims, describes and reports until the job is drained.
 
 Useful flags, all of which also read an environment variable:
 
-| Flag                 | Variable                  | Default                 | What it is                           |
-| -------------------- | ------------------------- | ----------------------- | ------------------------------------ |
-| `--api`              | `WORKER_API_URL`          | `http://127.0.0.1:3003` | where the stack is                   |
-| `--token`            | `WORKER_API_TOKEN`        | -                       | required                             |
-| `--project`          | `WORKER_PROJECT`          | -                       | what to describe                     |
-| `--job-id`           | -                         | -                       | join a job that is already open      |
-| `--model`            | `WORKER_MODEL`            | `qwen-1.5b`             | which weights, by catalogue name     |
-| `--model-path`       | `WORKER_MODEL_PATH`       | -                       | a GGUF file directly                 |
-| `--llama-server`     | `WORKER_LLAMA_SERVER`     | -                       | run the model on a server, not here  |
-| `--llama-server-key` | `WORKER_LLAMA_SERVER_KEY` | -                       | key, if it was started with one      |
-| `--batch`            | `WORKER_BATCH`            | 4                       | files per claim                      |
-| `--gpu-layers`       | `WORKER_GPU_LAYERS`       | -1 (all)                | 0 to stay on the CPU                 |
-| `--ctx`              | `WORKER_CTX`              | 8192                    | context window                       |
-| `--worker-id`        | `WORKER_ID`               | host-pid                | what shows up in the job's file list |
-| `--once`             | -                         | -                       | one batch, then stop                 |
-| `--verbose`          | -                         | -                       | show llama.cpp's own startup output  |
+| Flag                 | Variable                  | Default                        | What it is                           |
+| -------------------- | ------------------------- | ------------------------------ | ------------------------------------ |
+| `--api`              | `WORKER_API_URL`          | `http://127.0.0.1:3000/worker` | where the stack is                   |
+| `--token`            | `WORKER_API_TOKEN`        | -                              | required                             |
+| `--project`          | `WORKER_PROJECT`          | -                              | what to describe                     |
+| `--job-id`           | -                         | -                              | join a job that is already open      |
+| `--model`            | `WORKER_MODEL`            | `qwen-1.5b`                    | which weights, by catalogue name     |
+| `--model-path`       | `WORKER_MODEL_PATH`       | -                              | a GGUF file directly                 |
+| `--llama-server`     | `WORKER_LLAMA_SERVER`     | -                              | run the model on a server, not here  |
+| `--llama-server-key` | `WORKER_LLAMA_SERVER_KEY` | -                              | key, if it was started with one      |
+| `--batch`            | `WORKER_BATCH`            | 4                              | files per claim                      |
+| `--gpu-layers`       | `WORKER_GPU_LAYERS`       | -1 (all)                       | 0 to stay on the CPU                 |
+| `--ctx`              | `WORKER_CTX`              | 8192                           | context window                       |
+| `--worker-id`        | `WORKER_ID`               | host-pid                       | what shows up in the job's file list |
+| `--once`             | -                         | -                              | one batch, then stop                 |
+| `--verbose`          | -                         | -                              | show llama.cpp's own startup output  |
 
 Several workers may run against one job; each claim is exclusive.
 
@@ -245,11 +245,11 @@ Several workers may run against one job; each claim is exclusive.
 With `--llama-server` this process holds no model and loads no library, so
 the three roles can sit wherever it suits:
 
-| Role      | What runs there             | What it needs                    |
-| --------- | --------------------------- | -------------------------------- |
-| the stack | `docker compose`, port 3003 | the database and this repository |
-| the loop  | `py -m ctxworker`           | Python 3.10+, nothing installed  |
-| the model | `llama-server`              | the GPU and the `.gguf`          |
+| Role      | What runs there                                | What it needs                    |
+| --------- | ---------------------------------------------- | -------------------------------- |
+| the stack | `docker compose`, `/worker` on the entry point | the database and this repository |
+| the loop  | `py -m ctxworker`                              | Python 3.10+, nothing installed  |
+| the model | `llama-server`                                 | the GPU and the `.gguf`          |
 
 The loop and the model on one machine is the common case, and then
 `--host 127.0.0.1` keeps the server private and no key is needed. To drive a
@@ -262,7 +262,7 @@ llama-server.exe -m <model.gguf> -c 8192 -ngl 99 ^
 netsh advfirewall firewall add rule name="llama-server" ^
   dir=in action=allow protocol=TCP localport=8080
 
-py -m ctxworker --api http://192.168.1.10:3003 --token <token> ^
+py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> ^
   --project kurum --llama-server http://192.168.1.23:8080 ^
   --llama-server-key <secret>
 ```

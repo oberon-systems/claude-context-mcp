@@ -78,7 +78,7 @@ model on the card, and a worker feeds it. Both can live on this same
 machine, over loopback:
 
 ```bash
-make api-up                             # the job queue, on port 3003
+make api-up                             # the job queue, served at /worker
 
 docker run --rm --gpus all -p 8080:8080 \
     -v ~/.local/share/context-mcp/models:/models \
@@ -87,7 +87,7 @@ docker run --rm --gpus all -p 8080:8080 \
     -c 8192 -ngl 99 --host 0.0.0.0 --port 8080 --parallel 1
 
 cd worker && python3 -m ctxworker \
-    --api http://127.0.0.1:3003 --token "$WORKER_API_TOKEN" \
+    --api http://127.0.0.1:3000/worker --token "$WORKER_API_TOKEN" \
     --project kurum --llama-server http://127.0.0.1:8080
 ```
 
@@ -108,7 +108,7 @@ On the stack, once:
 ```bash
 openssl rand -hex 24                 # into .env as WORKER_API_TOKEN
 make reindex PROJECT=/path/to/repo   # so the file text is in the graph
-make api-up                          # publishes the queue on port 3003
+make api-up                          # serves the queue at /worker
 make jobs PROJECT_NAME=kurum         # queue every file with no model summary
 make job ID=7                        # how far along it is
 ```
@@ -122,9 +122,10 @@ head-of-file summary, but their text is never stored, and
 this existed has no text at all, and its job reports every file as
 `skipped` - `make reindex` is the fix.
 
-The queue is plain HTTP bound to every interface, so it belongs on a trusted
-LAN or a VPN, behind a reverse proxy if it has to travel further. It refuses
-a token shorter than 16 characters.
+The queue is served at `/worker` on the stack's entry point, which is plain
+HTTP on every interface, so it belongs on a trusted LAN or a VPN. Terminating
+TLS is the entry point's job if it has to travel further. It refuses a token
+shorter than 16 characters.
 
 ### a. Linux
 
@@ -141,7 +142,7 @@ docker run --rm --gpus all -p 8080:8080 \
 
 cd worker
 python3 -m ctxworker.download          # the weights, if this machine has none
-python3 -m ctxworker --api http://192.168.1.10:3003 --token <token> \
+python3 -m ctxworker --api http://192.168.1.10:3000/worker --token <token> \
     --project kurum --llama-server http://127.0.0.1:8080
 ```
 
@@ -157,7 +158,7 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt \
     --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
 python -m ctxworker.download
-python -m ctxworker --api http://192.168.1.10:3003 --token <token> \
+python -m ctxworker --api http://192.168.1.10:3000/worker --token <token> \
     --project kurum
 ```
 
@@ -175,7 +176,7 @@ double-clicked or run from `cmd`:
 cd worker
 get-llama-server.bat
 start-llama-server.bat
-start-worker.bat --api http://192.168.1.10:3003 --token <token> --project kurum
+start-worker.bat --api http://192.168.1.10:3000/worker --token <token> --project kurum
 ```
 
 `get-llama-server.bat` reads the current llama.cpp release, asks
@@ -204,7 +205,7 @@ pip install nvidia-cuda-runtime-cu12 nvidia-cublas-cu12
 py -c "import glob,os,shutil,sysconfig;p=sysconfig.get_paths()['purelib'];[shutil.copy(f,os.path.join(p,'llama_cpp','lib')) for f in glob.glob(os.path.join(p,'nvidia','*','bin','*.dll'))]"
 py -c "import llama_cpp; print('llama_cpp ok')"
 py -m ctxworker.download
-py -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum
+py -m ctxworker --api http://192.168.1.10:3000/worker --token <token> --project kurum
 ```
 
 The `nvidia-` install and the copy after it are not optional: the wheel
@@ -250,7 +251,7 @@ start-llama-server.bat --host 0.0.0.0 --api-key <secret>
 netsh advfirewall firewall add rule name="llama-server" ^
   dir=in action=allow protocol=TCP localport=8080
 
-start-worker.bat --api http://192.168.1.10:3003 --token <token> ^
+start-worker.bat --api http://192.168.1.10:3000/worker --token <token> ^
   --project kurum --llama-server http://192.168.1.23:8080 ^
   --llama-server-key <secret>
 ```

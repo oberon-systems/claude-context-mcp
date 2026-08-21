@@ -36,7 +36,7 @@ env_value() {
     sed -n "s/^$1=//p" .env 2> /dev/null | tail -1
 }
 
-port="$(env_value MCP_PORT)"
+port="$(env_value GATEWAY_PORT)"
 port="${port:-3000}"
 
 summary=()

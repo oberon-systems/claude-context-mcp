@@ -176,9 +176,10 @@ one.
 
 ## Web interface
 
-`make up` publishes a dashboard on <http://127.0.0.1:3002>, bound to
-loopback since it's the one service here that writes to the database on a
-browser's behalf, with no authentication of its own.
+`make up` serves a dashboard at <http://localhost:3000>, on the stack's one
+entry point. It's the one service here that writes to the database on a
+browser's behalf and it has no authentication of its own, so anything that
+can reach the entry point can edit what it shows.
 
 - **Projects** - what's indexed, where it came from, node/edge/file/plan
   counts, and how stale the index is.

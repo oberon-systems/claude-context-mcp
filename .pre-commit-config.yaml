@@ -1,6 +1,7 @@
 # Hooks cover every extension present in the repo: .py, .ts, .tsx, .mjs, .json,
-# .yaml, .sql, .toml, .md, .css, .html, .sh, .bat and Dockerfile. Adding a new
-# file type to the project means adding its hook here (see CLAUDE.md section 5).
+# .yaml, .sql, .toml, .md, .css, .html, .sh, .bat, .conf and Dockerfile. Adding
+# a new file type to the project means adding its hook here (see CLAUDE.md
+# section 5).
 
 default_install_hook_types: [pre-commit, commit-msg]
 
@@ -89,6 +90,13 @@ repos:
         entry: scripts/check-batch-crlf.sh
         files: \.bat$
         types: [file]
+      - id: nginx-conf
+        name: nginx config parses
+        description: Run nginx -t over the ingress config in a throwaway container
+        language: script
+        entry: scripts/check-nginx-conf.sh
+        files: ^nginx/.*\.conf$
+        pass_filenames: false
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.44.0

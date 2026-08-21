@@ -28,12 +28,14 @@ Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
                                 ^    ^    ^  read
                                 |    |    |
                      +-----------+  +--------+  +-----+
-   Claude, Gemini <->| mcp-server|  | viewer |  | web |<-> browser
+                     | mcp-server|  | viewer |  | web |
                      +-----------+  +--------+  +-----+
-                          :3000       :3001       :3002
-                                          ^          |
-                                          +----------+
-                                       the graph page, proxied
+                           ^            ^          ^
+                           |            +----------+
+                           |                       |  the graph page, proxied
+                     +---------------------------------+
+   Claude, Gemini <->|          nginx  :3000           |<-> browser
+                     +---------------------------------+
 ```
 
 - **postgres** stores the graphs (`graph_nodes`, `graph_edges`), the vector
@@ -51,16 +53,19 @@ Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
   go
   through the Tree-sitter parsers in `ctxgraph`. Every node records which one
   found it in `metadata.source`.
-- **mcp-server** exposes the graph over Streamable HTTP at `/mcp`, and redirects
-  `/graph` to the viewer.
+- **mcp-server** exposes the graph over Streamable HTTP at `/mcp`.
 - **viewer** renders the graph as an interactive page, from the database, on
   every request. The drawing library is vendored into the image rather than
   loaded from a CDN, so the page works with no route to the internet.
-- **web** is the dashboard, on loopback only: the indexed projects with their
-  counts and how old each index is, a browsable node index with summaries and
-  neighbours, and every plan in the database, filtered by project, status and
-  type and editable in place. The graph itself is the viewer's page, proxied
-  rather than linked, so the frame and the API share one origin.
+- **web** is the dashboard: the indexed projects with their counts and how old
+  each index is, a browsable node index with summaries and neighbours, and
+  every plan in the database, filtered by project, status and type and
+  editable in place. The graph itself is the viewer's page, proxied rather
+  than linked, so the frame and the API share one origin.
+- **nginx** is the single entry point. It is the only service that publishes a
+  host port, and it decides the backend from the path: `/mcp` and `/sse` to the
+  MCP server, `/worker` to the summarization API, everything else to the
+  dashboard. See [the route table](#the-entry-point).
 
 A second MCP server is configured alongside: the upstream stdio server, started
 through `docker compose run`, serving the same graph from a `graph.json` written
@@ -68,6 +73,32 @@ at index time. It brings its own tools (`query_graph`, `god_nodes`,
 `graph_stats`, `get_community`) and lags until the next `make index`. That file
 also holds whichever project was indexed last and has no notion of projects at
 all, while `mcp-server` reads the database directly and does.
+
+## The entry point
+
+Every address the stack serves is reached through one host port. nginx
+publishes it and picks the backend from the path; no other service is
+published at all.
+
+| Path                                 | Served by  | What it is                                      |
+| ------------------------------------ | ---------- | ----------------------------------------------- |
+| `/mcp`, `/mcp/<project>`             | mcp-server | Streamable HTTP, the transport to use           |
+| `/sse`, `/sse/<project>`, `/message` | mcp-server | the older SSE pair                              |
+| `/health`                            | mcp-server | what `make status` probes                       |
+| `/worker/...`                        | worker-api | the remote summarization queue, prefix stripped |
+| everything else                      | web        | the dashboard, its API and the graph page       |
+
+`GATEWAY_PORT` (default `3000`) and `GATEWAY_BIND` (default `0.0.0.0`) in
+`.env` decide where it listens. Binding every interface is what a
+summarization worker on another machine needs, and it also puts the
+dashboard - which writes to the database on behalf of a browser and has no
+authentication of its own - within reach of the local network. Set
+`GATEWAY_BIND=127.0.0.1` if you run no remote worker.
+
+Reaching the stack under any other name or port means saying so:
+`GATEWAY_HOSTS` is the `Host` header allowlist both the MCP server and the
+dashboard API enforce, and a value that does not name the address you use
+answers 403 while `/health` still looks healthy.
 
 ## Prerequisites
 
@@ -83,7 +114,7 @@ all, while `mcp-server` reads the database directly and does.
 make init                 # virtualenv, pre-commit hooks, .env from the template
 $EDITOR .env              # set PROJECT_PATH and POSTGRES_PASSWORD
 make build                # build both service images
-make up                   # start postgres, the MCP server and the viewer
+make up                   # start the database, the services and the entry point
 make install              # onboard this codebase and index it
 curl -fsS localhost:3000/health
 ```
@@ -292,9 +323,9 @@ status` answers; see the Make targets section.
 ## Configuration
 
 Copy `.env.example` to `.env`; `make up` and `make index` refuse to run
-without it. Sets the project path/name, database credentials, published
-ports and the optional `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` DNS-rebinding
-allowlist. The stack is a singleton by design - one compose project name,
+without it. Sets the project path/name, database credentials, the entry
+point's port and bind address, and the optional
+`ALLOWED_HOSTS`/`ALLOWED_ORIGINS` DNS-rebinding allowlist. The stack is a singleton by design - one compose project name,
 one fixed data directory - so `make index PROJECT=/somewhere/else` reuses
 the running stack rather than starting a second one. Full variable
 reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/deployment.html).
@@ -319,7 +350,7 @@ make install     onboard AGENT_ROOT=<path> onto the stack, then index it
 make lint        run every pre-commit hook over every file
 make build       build every service image
 make pull        pull the published images, discarding a local build
-make up          start postgres, mcp-server, the viewer and the dashboard
+make up          start the database, the services and the entry point
 make down        stop the stack, keeping the database volume
 make index       index PROJECT=<path>, or PROJECT_PATH from .env
                  TYPE=docs|config categorises it; unset keeps what is stored
@@ -481,10 +512,11 @@ most often hit first, which is the ranking the whole thing exists for.
 
 ## Web interface
 
-`make up` publishes a dashboard on <http://127.0.0.1:3002> (loopback only):
-indexed projects and their staleness, a per-project node/graph/file browser,
-every plan in the database, editable in place, and the recorded gaps, ranked by
-how often they were hit. Details:
+`make up` serves a dashboard at <http://localhost:3000>: indexed projects and
+their staleness, a per-project node/graph/file browser, every plan in the
+database, editable in place, and the recorded gaps, ranked by how often they
+were hit. It has no authentication of its own, so anything that can reach the
+entry point can edit what it shows. Details:
 [usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
 
 ## Backup and restore
