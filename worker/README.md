@@ -41,12 +41,23 @@ an illegal instruction, with nothing to switch off. The llama.cpp release
 binaries ship one `ggml-cpu` library per instruction set and choose at load
 time, so this route runs anywhere.
 
-Getting it is one command from `worker\`, or a double-click on the same
-file:
+Three batch files do the whole of it, from `worker\` or by
+double-clicking:
 
 ```bat
-get-llama-server.bat
+get-llama-server.bat    :: download the build for this driver
+start-llama-server.bat  :: start it, downloading anything missing first
+start-worker.bat --api http://192.168.1.10:3003 --token <token> --project kurum
 ```
+
+On a clean machine only the middle one is needed - it installs the binaries
+and the weights before starting. All three pass extra arguments through, so
+`start-llama-server.bat --model qwen-3b --port 8090` does what it looks like.
+`py -m ctxworker.getserver` and `py -m ctxworker.runserver --install` are the
+same two without the double-click, and work on Linux for everything except
+installing the server, which has no Linux CUDA archive to install.
+
+What `get-llama-server.bat` does:
 
 It reads the current release from GitHub, asks `nvidia-smi` which CUDA the
 driver serves, takes the newest build that driver can run together with the
@@ -73,7 +84,7 @@ because CUDA is driver-backward-compatible. There is a `win-cpu-x64` zip for a
 machine with no NVIDIA card. Unpack BOTH into ONE directory, or the runtime
 DLLs will not be beside the executable.
 
-Then start it:
+Then start it - which is what `start-llama-server.bat` runs for you:
 
 ```bat
 cd worker\llama-server

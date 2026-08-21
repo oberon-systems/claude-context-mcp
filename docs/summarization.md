@@ -4,23 +4,50 @@ title: Summarization
 nav_order: 5
 ---
 
-## Automatic summarization
+## What a summary is, and why the model writes it
 
-Indexing writes a summary for every file node from its leading docstring,
-comment block or first heading - that's the fast producer, and it's what a
-plain `make index` does.
+Every file node in the graph carries one sentence saying what the file is
+for. That sentence is what `get_node_summary` returns and what
+`search_code_nodes` lists, so it is the difference between an agent reading
+one line and an agent opening the file.
 
-A local GGUF model writes better ones, but it's slow, so it runs as its own
-pass after the graph exists:
+Three producers write it, and `metadata.summary_source` records which:
+
+| `summary_source` | Written by                               | Quality                  |
+| ---------------- | ---------------------------------------- | ------------------------ |
+| `auto`           | indexing, from the head of the file      | a docstring, or a guess  |
+| `llm`            | a local GGUF model, in a pass of its own | a real description       |
+| `manual`         | `save_node_summary`                      | yours, never overwritten |
+
+`auto` is free and immediate: `make index` takes the leading docstring,
+comment block or first heading. It is also the reason the model pass exists.
+A Terraform file with no header comment becomes "block: locals,
+dynamic.alias, +2 more", which reads like a summary and answers nothing; a
+205-line file under a thin `# Records` comment becomes "# Records". Both are
+non-NULL, so nothing flags them - they simply make the graph less useful
+than it looks.
+
+The model pass replaces those with a sentence written from up to 16000
+characters of the file. It costs seconds per file, which is why it is a
+separate pass, and why most of this page is about where to run it.
+
+## 1. On the stack itself, no worker
+
+The simplest thing there is: nothing to install beyond the weights, nothing
+to keep running.
+
+### a. CPU
 
 ```bash
-make llm-model-install               # once: ~1 GB of weights
-make summarize PROJECT=$(pwd)        # describe what has no model summary yet
-make summarize PROJECT=$(pwd) BG=1   # the same, detached, for a large tree
+make llm-model-install                  # once: ~1 GB of weights
+make summarize PROJECT=$(pwd)           # describe what has no model summary
+make summarize PROJECT=$(pwd) BG=1      # the same, detached, for a large tree
 make summarize PROJECT=$(pwd) LIMIT=20  # stop after 20, to time the rest
 ```
 
-`MODEL=` picks the weights, for both download and run:
+The model runs inside the `graphify` container, on whatever CPU the host
+has, at roughly 8 seconds a file at 8 threads. `MODEL=` picks the weights,
+for both the download and the run:
 
 | `MODEL=`              | size    | ~s per file at 8 threads            |
 | --------------------- | ------- | ----------------------------------- |
@@ -36,74 +63,137 @@ file, so it can be stopped and restarted without repeating itself
 re-index only pays for the files that changed.
 
 Expect an occasional decline: a small model reading the head of a changelog
-or lock file can answer with just the file name, and an answer that says no
-more than the node id is rejected rather than stored - those keep the
-head-of-file summary.
+or a lock file can answer with just the file name, and an answer that says
+no more than the node id is rejected rather than stored - those keep their
+head-of-file summary. A `manual` summary is never touched by any of this.
 
-`metadata.summary_source` records which of the three wrote it: `auto` (head
-of file), `llm` (the model), `manual` (via `save_node_summary`). A manual
-summary is never overwritten.
+### b. GPU, on that same machine
 
-## Summarizing on another machine
+The container cannot use the card. Its `llama-cpp-python` is built with
+`-DGGML_CUDA=OFF -DGGML_NATIVE=OFF` on purpose (`graphify/Dockerfile`), so
+the image runs on any host CPU and on none of its GPUs.
 
-The pass above runs on whatever CPU the stack was given - a machine with a
-GPU does the same work about 30x faster, so the model half can move there
-without giving that machine a checkout of the code, a database port, or a
-share. It reads each file's text from the graph, over HTTP.
-
-That means the text has to be in the graph, which it now is: indexing keeps
-the first `CONTENT_STORE_CHARS` characters (16000 by default) of every file
-in `graph_nodes.content`. Files that look like secrets (`.env`, `*.pem`,
-`*.tfvars`, `id_rsa*`, ...) still get a node and a head-of-file summary, but
-their text is never stored. `CONTENT_STORE_CHARS=0` turns storage off
-entirely.
-
-### On the stack (server side)
+Using the GPU therefore means one more process: `llama-server` holds the
+model on the card, and a worker feeds it. Both can live on this same
+machine, over loopback:
 
 ```bash
-openssl rand -hex 24                 # put it in .env as WORKER_API_TOKEN
-make reindex PROJECT=/path/to/repo   # once, so the text is in the graph
-make api-up                          # publishes the queue on port 3003
-make jobs PROJECT_NAME=kurum         # queue every file with no model summary
-make job ID=7                        # check how far along it is
+make api-up                             # the job queue, on port 3003
+
+docker run --rm --gpus all -p 8080:8080 \
+    -v ~/.local/share/context-mcp/models:/models \
+    ghcr.io/ggml-org/llama.cpp:server-cuda \
+    -m /models/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \
+    -c 8192 -ngl 99 --host 0.0.0.0 --port 8080 --parallel 1
+
+cd worker && python3 -m ctxworker \
+    --api http://127.0.0.1:3003 --token "$WORKER_API_TOKEN" \
+    --project kurum --llama-server http://127.0.0.1:8080
 ```
 
-The API is plain HTTP bound to every interface, so it belongs on a trusted
-LAN or a VPN (behind a reverse proxy if it needs to go further). It refuses
-to start without `WORKER_API_TOKEN`, and refuses a token shorter than 16
-characters.
+The weights are the ones `make llm-model-install` already downloaded. The
+worker in this mode loads no model of its own and needs nothing installed:
+`ctxworker` is standard library apart from the model, so it runs from a bare
+checkout. `WORKER_API_TOKEN` comes from the stack's `.env`
+(`openssl rand -hex 24`), and `make api-up` refuses to start without it.
 
-### On the machine with the GPU (worker)
+## 2. The worker on another machine
 
-The worker is a standalone Python package (`worker/`) - no Docker, no
-checkout of the code it describes, no database access. Copy just that
-directory over, or clone the whole repository and `cd worker`.
+The same three pieces, spread out. The machine running the model needs no
+checkout of the code it describes and no database access: the file text
+reaches it over HTTP.
 
-There are two ways to run the model, and the worker treats them the same.
-Either it loads the weights itself through `llama-cpp-python`, or it talks
-over HTTP to a `llama-server` that holds them.
+On the stack, once:
 
-**Through a llama.cpp server** - the route that works on any CPU, and the
-only one if the machine running the loop is not the machine with the GPU:
+```bash
+openssl rand -hex 24                 # into .env as WORKER_API_TOKEN
+make reindex PROJECT=/path/to/repo   # so the file text is in the graph
+make api-up                          # publishes the queue on port 3003
+make jobs PROJECT_NAME=kurum         # queue every file with no model summary
+make job ID=7                        # how far along it is
+```
+
+That text has to be in the graph for any of this to work, and it is:
+indexing stores the first `CONTENT_STORE_CHARS` characters (16000 by
+default) of every file in `graph_nodes.content`. Files that look like
+secrets (`.env`, `*.pem`, `*.tfvars`, `id_rsa*`) still get a node and a
+head-of-file summary, but their text is never stored, and
+`CONTENT_STORE_CHARS=0` turns storage off entirely. A project indexed before
+this existed has no text at all, and its job reports every file as
+`skipped` - `make reindex` is the fix.
+
+The queue is plain HTTP bound to every interface, so it belongs on a trusted
+LAN or a VPN, behind a reverse proxy if it has to travel further. It refuses
+a token shorter than 16 characters.
+
+### a. Linux
+
+**With `llama-server`, from the project's own image.** The llama.cpp
+releases publish no Linux CUDA archive, so the image is the short path here,
+and it is the same one as above:
+
+```bash
+docker run --rm --gpus all -p 8080:8080 \
+    -v ~/.local/share/context-mcp/models:/models \
+    ghcr.io/ggml-org/llama.cpp:server-cuda \
+    -m /models/qwen2.5-coder-1.5b-instruct-q4_k_m.gguf \
+    -c 8192 -ngl 99 --host 0.0.0.0 --port 8080 --parallel 1
+
+cd worker
+python3 -m ctxworker.download          # the weights, if this machine has none
+python3 -m ctxworker --api http://192.168.1.10:3003 --token <token> \
+    --project kurum --llama-server http://127.0.0.1:8080
+```
+
+Without a GPU, `ghcr.io/ggml-org/llama.cpp:server` is the same image built
+for the CPU, and `llama-b<tag>-bin-ubuntu-x64.tar.gz` from the releases is
+the same server without Docker.
+
+**With `llama-cpp-python` in the worker's own process**, no server:
+
+```bash
+cd worker
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+python -m ctxworker.download
+python -m ctxworker --api http://192.168.1.10:3003 --token <token> \
+    --project kurum
+```
+
+Drop the index and pass `--gpu-layers 0` on a machine with no card - but
+PyPI's own `llama-cpp-python` ships no wheel, so a C/C++ toolchain
+(`apt install build-essential`) has to be present to build it. `pip`
+downloading a `.tar.gz` instead of a `.whl` is that happening.
+
+### b. Windows
+
+**With `llama-server`.** Three batch files, each of which can be
+double-clicked or run from `cmd`:
 
 ```bat
 cd worker
 get-llama-server.bat
-llama-server\llama-server.exe -m %LOCALAPPDATA%\context-mcp\models\qwen2.5-coder-1.5b-instruct-q4_k_m.gguf -c 8192 -ngl 99 --host 127.0.0.1 --port 8080 --parallel 1
-py -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum --llama-server http://127.0.0.1:8080
+start-llama-server.bat
+start-worker.bat --api http://192.168.1.10:3003 --token <token> --project kurum
 ```
 
-`get-llama-server.bat` takes the llama.cpp release matching the driver and
-unpacks it into `worker\llama-server\`. In the server's log,
-`loaded CPU backend from ...ggml-cpu-<variant>.dll` is the line that matters:
-the release binaries carry one such library per instruction set and choose at
-load time, where a wheel is compiled for exactly one and dies with
-`0xc000001d` on a CPU that lacks it. With this backend the worker needs no
-weights and no `llama-cpp-python` at all, so it can run anywhere - see "Three
-machines, or one" in the worker README for driving a server across the LAN,
-where `--api-key` stops being optional.
+`get-llama-server.bat` reads the current llama.cpp release, asks
+`nvidia-smi` which CUDA the driver serves, and unpacks the matching build
+together with its CUDA runtime into `worker\llama-server\`.
+`start-llama-server.bat` starts it on the default weights and downloads
+both the binaries and the weights first if they are missing - so on a clean
+machine it is the only one of the three actually needed.
+`start-worker.bat` runs the loop against `http://127.0.0.1:8080` unless
+`WORKER_LLAMA_SERVER` says otherwise. All three pass extra arguments
+straight through: `start-llama-server.bat --model qwen-3b --port 8090`.
 
-**In the worker's own process, Windows:**
+In the server's log, `loaded CPU backend from ...ggml-cpu-<variant>.dll` is
+the line that matters, and `offloaded 29/29 layers to GPU` says the card
+holds the model. The server also serves a web UI on its port: ask it
+anything there, and the model half is proven before the worker starts.
+
+**With `llama-cpp-python` in the worker's own process:**
 
 ```bat
 cd worker
@@ -117,48 +207,58 @@ py -m ctxworker.download
 py -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum
 ```
 
-That is the whole setup: `llama_cpp ok` and then a worker reporting files.
-The `nvidia-` install and the copy after it are not optional - the wheel carries
-`llama.dll` and `ggml-cuda.dll` but not the CUDA runtime they link against,
-and `llama_cpp\lib\` is where its loader looks. Installing a CUDA 12.x
-Toolkit instead supplies the same DLLs.
+The `nvidia-` install and the copy after it are not optional: the wheel
+carries `llama.dll` and `ggml-cuda.dll` but not the CUDA runtime they link
+against, and `llama_cpp\lib\` is where the loader looks. Use the `cu124`
+index - it is the only one of `abetlen`'s CUDA indexes currently publishing
+Windows wheels for a recent release, and CUDA is driver-backward-compatible,
+so it runs on a newer driver too.
 
-Use the `cu124` index. It's the only one of `abetlen`'s CUDA indexes that
-currently publishes Windows wheels for a recent `llama-cpp-python` release -
-`cu121`/`cu122`/`cu123` only have Windows wheels for much older releases.
-CUDA is driver-backward-compatible, so `cu124` works regardless of which
-exact CUDA version `nvidia-smi` reports, as long as the driver is
-reasonably current.
+This route can also fail in a way no flag fixes. A wheel is compiled for one
+instruction set, and ggml settles which kernels exist at compile time, so a
+wheel built with AVX-512 claims AVX-512 on every machine and dies with
+`OSError: [WinError -1073741795] Windows Error 0xc000001d` - an illegal
+instruction - on a CPU that has none. Every Ryzen before Zen 4 is such a
+CPU. `llama-server` is what avoids it: the release binaries carry one
+`ggml-cpu` library per instruction set and choose at load time. This stack's
+own image sidesteps the same trap from the other side, by building with
+`GGML_NATIVE=OFF`.
 
-**In the worker's own process, Linux:**
+## 3. Which one to use
 
-```bash
-cd worker
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
-python -c "import llama_cpp; print('llama_cpp ok')"
-python -m ctxworker.download
-python -m ctxworker --api http://192.168.1.10:3003 --token <token> --project kurum
+**Use `llama-server`.** It is the shorter setup on both platforms, it is the
+only one that cannot be defeated by the CPU the wheel happened to be built
+for, and it keeps the model out of the worker's process: the loop then needs
+no compiler, no CUDA runtime and no wheel, and moves to another machine by
+changing one URL. On Windows it is three batch files; on Linux it is a
+`docker run`.
+
+Take `llama-cpp-python` in-process only where a working wheel is already
+installed, or where one more process is genuinely unwelcome.
+
+And when none of this is set up, `make summarize` on the stack is always
+there: slower per file, but nothing to install and nothing to keep running.
+
+## Across the LAN
+
+`--host 127.0.0.1` means only that machine can reach the server. To drive
+one from another machine, three things change:
+
+```bat
+start-llama-server.bat --host 0.0.0.0 --api-key <secret>
+
+netsh advfirewall firewall add rule name="llama-server" ^
+  dir=in action=allow protocol=TCP localport=8080
+
+start-worker.bat --api http://192.168.1.10:3003 --token <token> ^
+  --project kurum --llama-server http://192.168.1.23:8080 ^
+  --llama-server-key <secret>
 ```
 
-Without a GPU, drop `--extra-index-url` and pass `--gpu-layers 0` when
-running the worker - but PyPI's own `llama-cpp-python` ships no wheel, so a
-C/C++ toolchain (`apt install build-essential`, or equivalent) has to be
-present to build it.
-
-**If `pip install` downloads a `.tar.gz` instead of a `.whl`**, no prebuilt
-wheel matched your platform for the pinned version, and pip is compiling
-from source. On Windows that needs a full MSVC toolchain (Visual Studio
-Build Tools, "Desktop development with C++") and a matching CUDA Toolkit -
-avoidable by keeping the version pin on a release that actually publishes a
-wheel for `cu124`/win_amd64 (see `worker/requirements.txt`).
-
-`WORKER_API_TOKEN` in the stack's `.env` is the token those last lines
-want, and the project is one of the names `make status` lists.
-
-Full flag reference, model catalogue and troubleshooting live in
-[`worker/README.md`](https://github.com/oberon-systems/claude-context-mcp/blob/main/worker/README.md).
+`--api-key` is not optional once the port is open: `llama-server` has no
+authentication of its own, and anything that reaches it can run the model
+and read what is being described. Plain HTTP, exactly like the stack's own
+queue - a trusted LAN or a VPN, and nowhere else.
 
 ## How it works
 
@@ -166,11 +266,14 @@ The queue is leased, not handed out: a worker claims a batch for five
 minutes, and a batch whose worker dies returns to the queue for whoever asks
 next. Several workers can share one job.
 
-Answers aren't trusted blindly - each one goes through the same "says
+Answers are not trusted blindly. Each one goes through the same "says
 nothing the file name doesn't" gate as the local pass, is length-capped, and
 can never overwrite a `manual` summary. Already-summarized files are served
 from `summary_cache` and never leased again.
 
 The local pass and a remote job show the model different amounts of text
-(2000 characters vs 16000), so they fill different cache rows - that's
-expected, not a bug.
+(2000 characters vs 16000), so they fill different cache rows - expected,
+not a bug.
+
+Full flag reference, the model catalogue and troubleshooting live in
+[`worker/README.md`](https://github.com/oberon-systems/claude-context-mcp/blob/main/worker/README.md).
