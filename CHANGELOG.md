@@ -1,3 +1,20 @@
+## v0.13.0 (2026-08-21)
+
+### Features
+
+- **web**: single entry point
+- **make**: add skill-reinstall, and the two skill aliases it needs
+- **skills**: install the context and write-docs skills, drop graphify
+- **worker**: start the model server from a batch file, not a typed command line
+- **worker**: run the model on a llama.cpp server, not only in this process
+- **worker**: fetch llama-server for whatever driver the machine turns out to have
+
+### Documentation
+
+- **summarization.md**: say what it does, then the three ways to run it, then which to pick
+- **worker**: a runbook for the model server, and what 0xc000001d means
+- **worker**: make the GPU setup one copy-paste block that ends in a running worker
+
 ## v0.12.0 (2026-08-20)
 
 ### Features
