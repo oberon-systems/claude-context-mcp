@@ -2,7 +2,7 @@
 
 This roadmap tracks the development of the Dockerized GraphRAG & Vector Context MCP Service.
 
-## Phase 1: Stability & Correctness (Highest Priority)
+## Stability & Correctness (Highest Priority)
 
 These items are essential for the graph to be authoritative. Agents cannot trust the graph if these are not addressed.
 
@@ -10,10 +10,11 @@ These items are essential for the graph to be authoritative. Agents cannot trust
 - [ ] **Manual Summary Durability:** Ensure manual entity summaries survive producer wipes and line-number changes.
 - [ ] **Visualization Stability:** Implement server-side reduction/lazy loading to fix 503 errors on large graphs.
 
-## Phase 2: Core Graph Completeness (Infrastructure & Parsers)
+## Core Graph Completeness (Infrastructure & Parsers)
 
 Expanding the breadth of what the graph covers and how accurately it resolves relations.
 
+- [ ] **Documentation: database**: update document
 - [ ] **Docker Compose Parsing:** Architectural nodes/edges for service dependencies.
 - [ ] **Terraform/Terragrunt Relations:** Resolve `source`, `include`, and `templatefile` references.
 - [ ] **Additional Parsers:** RPM specs, Python manifests (`requirements.txt`, `setup.cfg`), and systemd units.
@@ -21,7 +22,7 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 - [ ] **Language Extractor Improvements:** Enhance Python/Ruby cross-file resolution.
 - [ ] **Incremental Extraction (Code):** Speed up re-indexing for large codebases.
 
-## Phase 3: Developer Experience & Workflows
+## Developer Experience & Workflows
 
 Simplifying how users interact with the stack and how agents manage project context.
 
@@ -39,13 +40,23 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **Shared Records (\_common):** Handle cross-project conventions, the way plans are already handled. The `_` prefix is reserved for these: `make index` refuses a project name starting with one.
 - [ ] **Cross-Project Lookups:** Link relations between codebases.
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
+- [ ] **worker**: should be able all projects with --project-all key
+- [ ] **web**: should show how many files without summory (llm generated) in each project
 
-## Phase 4: Semantic & Advanced Intelligence
+## Semantic & Advanced Intelligence
 
 Adding vector context and agent memory.
 
 - [ ] **Lexical Search:** Add GIN/trigram index for literal content search (`grep` over the graph).
 - [ ] **Semantic Search:** Implement vector embedding generation and HNSW search.
+
+## Integrations
+
+- [ ] **remote repositories**: able to store and index remote (3rd part) repositories (.e.g from github, by tag, branch, version)
+- [ ] **grafana integration**: somehow?
+- [ ] **facts collector**: collect servers facts from foreman/ansible whatever
+- [ ] **API**: provide API with same tools as MCP for remote calls (auth?)
+- [ ] **auth on web**: use nginx auth and some auth service (SSO, Oauth and so).
 
 ---
 

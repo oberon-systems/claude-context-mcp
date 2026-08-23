@@ -18,3 +18,15 @@ Gemini, loaded on demand: `context` (everything above), `commit` (driving
 commitizen), `delegate` (handing work to the Gemini CLI and reviewing what it
 wrote), `write-docs` (the house style for documentation, and the linter that
 gates it). Reach for one by name.
+
+## 3. Commentaries
+
+DO NOT write commentaries in common.
+You can write comments ONLY for non-obvious ones places / parts of code and
+even in this cases ALLOWED TO WRITE NOT MORE THEN 2 STRINGS!
+
+## 4. Tests and verification
+
+ALWAYS ask for run tests, up test stands and run code verifications (linters,
+pre-commit hooks) event if there is GLOBAL auto-allowance set for the
+current session.

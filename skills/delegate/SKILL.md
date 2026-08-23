@@ -8,6 +8,9 @@ description: Hand ordinary implementation work to the Gemini CLI headless, then 
 Ordinary implementation work may be handed to the Gemini CLI on
 `gemini-3.1-flash-lite` and reviewed afterwards. The loop is fixed.
 
+For exploration, running builds or test you can also use gemini or
+Sonet 5 sub-agent.
+
 ## Running it
 
 1. **Clean tree first.** `git status --short` must be empty, on `main`. What
