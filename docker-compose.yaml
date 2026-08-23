@@ -227,7 +227,7 @@ services:
   # the dashboard - which writes to the database on behalf of a browser and
   # has no authentication of its own - within reach of the local network.
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.30.4-alpine
     restart: unless-stopped
     ports:
       - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-3000}:80"
