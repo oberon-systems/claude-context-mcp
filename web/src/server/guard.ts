@@ -5,6 +5,8 @@ import type { NextFunction, Request, Response } from "express";
 // one on every non-GET, so here the header is checked rather than rejected.
 const WRITES = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
+// Compose sets WEB_ALLOWED_HOSTS from GATEWAY_HOSTS in .env, so that is the
+// variable to name when the check refuses a request behind the gateway.
 function allowedHosts(port: number): Set<string> {
   const configured = process.env.WEB_ALLOWED_HOSTS;
   if (configured !== undefined && configured.trim() !== "") {
@@ -32,8 +34,10 @@ export function makeGuard(port: number) {
     if (!anyHost && !hosts.has(host)) {
       res.status(403).json({
         error:
-          `Host "${host}" is not allowed. Set WEB_ALLOWED_HOSTS to the ` +
-          "address the dashboard is reached at, or to * to disable this check.",
+          `Host "${host}" is not allowed. Add it to GATEWAY_HOSTS in the ` +
+          "stack's .env, then recreate the containers with `make down && " +
+          "make up`; * there answers to any host. Running this service " +
+          "outside compose, the variable read here is WEB_ALLOWED_HOSTS.",
       });
       return;
     }
