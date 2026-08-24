@@ -2,8 +2,8 @@
 
 Ansible keeps its structure in the values a document holds, so the tree-sitter
 queries in languages.py can only see a bag of keys. The documents are loaded
-instead, and anything that does not look like Ansible falls back to the plain
-YAML parser this one extends.
+instead, and anything that does not look like Ansible is handed to the
+compose parser or, failing that, to the plain YAML parser this one extends.
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-import yaml
-
 from ctxgraph.parsers.base import unique_pairs
+from ctxgraph.parsers.compose import compose_parser, looks_like_compose
 from ctxgraph.parsers.languages import YAMLParser
+from ctxgraph.parsers.yamldocs import load_yaml_documents
 
 # Ansible: the directories a role is made of, used to find the role a file
 # belongs to and to resolve what its tasks refer to.
@@ -47,23 +47,6 @@ ANSIBLE_FILE_MODULES: dict[str, tuple[str, tuple[str, ...]]] = {
     "copy": ("uses_file", ("src",)),
 }
 ANSIBLE_ROLE_MODULES = frozenset({"import_role", "include_role"})
-
-
-class AnsibleYamlLoader(yaml.SafeLoader):
-    """SafeLoader that tolerates the custom tags Ansible files carry."""
-
-
-# `!vault`, `!unsafe` and friends are not worth resolving, but they must not
-# abort the load of the file that holds them.
-AnsibleYamlLoader.add_multi_constructor("", lambda loader, suffix, node: None)
-
-
-def load_yaml_documents(content: str) -> list[Any] | None:
-    """Return the documents of a YAML file, or None when it does not parse."""
-    try:
-        return list(yaml.load_all(content, Loader=AnsibleYamlLoader))
-    except (yaml.YAMLError, RecursionError):
-        return None
 
 
 def role_root(rel_path: str) -> str:
@@ -196,6 +179,8 @@ class AnsibleParser(YAMLParser):
         if documents is None:
             return super().get_entities(content, rel_path)
         kind = ansible_kind(rel_path, documents)
+        if kind == "other" and looks_like_compose(documents):
+            return compose_parser().get_entities(content, rel_path)
         if kind in ("other", "meta"):
             return super().get_entities(content, rel_path)
 
@@ -220,6 +205,8 @@ class AnsibleParser(YAMLParser):
         if documents is None:
             return []
         kind = ansible_kind(rel_path, documents)
+        if kind == "other" and looks_like_compose(documents):
+            return compose_parser().get_relations(content, rel_path)
         if kind in ("other", "vars"):
             return []
 

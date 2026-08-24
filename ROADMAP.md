@@ -15,7 +15,7 @@ These items are essential for the graph to be authoritative. Agents cannot trust
 Expanding the breadth of what the graph covers and how accurately it resolves relations.
 
 - [ ] **Documentation: database**: update document
-- [ ] **Docker Compose Parsing:** Architectural nodes/edges for service dependencies.
+- [x] **`Docker Compose Parsing`:** Architectural nodes/edges for service dependencies.
 - [ ] **Terraform/Terragrunt Relations:** Resolve `source`, `include`, and `templatefile` references.
 - [ ] **Additional Parsers:** RPM specs, Python manifests (`requirements.txt`, `setup.cfg`), and systemd units.
 - [ ] **Shebang Support:** Enable parsing for extension-less scripts.
@@ -42,6 +42,8 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
 - [x] **Every Project At Once:** `--auto` on both summarizing passes, which is also what naming no project does.
 - [ ] **web**: should show how many files without summory (llm generated) in each project
+- [ ] **web**: allow to change repository type in web interface
+- [ ] **web**: drow graph for a specific file
 
 ## Semantic & Advanced Intelligence
 
@@ -61,6 +63,20 @@ Adding vector context and agent memory.
 ---
 
 ## Completed Items
+
+- Docker Compose parsing: a compose file is an architecture rather than a bag
+  of top level keys. Services, volumes, networks, configs and secrets become
+  nodes named by their kind (`service.postgres`, `volume.graph-out`), and what
+  a service names becomes an edge leaving that service rather than the file -
+  `depends_on` and `links` to the services it waits for, `uses_image` to an
+  external `image:` node, `builds` to the Dockerfile behind its build context,
+  `uses_volume`, `uses_network`, `uses_config`, `uses_secret`, `mounts` to the
+  bind-mounted file and `reads_vars` to its `env_file`. The canonical names
+  are matched by the registry and anything else holding a top level `services:`
+  mapping is recognised by its shape, so a `stack.yml` reads the same. What
+  would only produce a node pointing at nothing is dropped instead: a value
+  still holding `${...}`, a bind mount that is absolute or names a directory,
+  a git URL build context
 
 - Single entry point: nginx is the only service that publishes a host port, and it picks the backend from the path - `/mcp`, `/sse` and `/health` to the MCP server, `/worker` to the summarization queue, everything else to the dashboard. `GATEWAY_PORT` and `GATEWAY_BIND` set where it listens, and `GATEWAY_HOSTS` gives the MCP server and the dashboard API the `Host` allowlist they now need, since behind the gateway that header carries the gateway's port rather than their own. The default port is 3000, so every `/mcp/<project>` address already written into an onboarded repository keeps working. The dashboard is no longer loopback-only: it rides the same listener, which is bound to every interface because a remote summarization worker needs it to be
 - Gap tracking: what the graph could not answer is recorded rather than printed. `save_suggestion`, `get_suggestions` and `drop_suggestion` write into `_suggestions`, a built-in project alongside `_memory`, and the id is a stable slug derived from the gap - so reporting the same gap again keeps its first sighting, moves its last, counts a hit and reopens it if it had been resolved, which is what turns a complaint repeated across sessions into a backlog ranked by how much it actually costs. Each carries a kind, a status and the lever closing it would move (`tokens`, `coverage`, `runtime`), and the dashboard grew a Suggestions tab that triages them without being able to author one

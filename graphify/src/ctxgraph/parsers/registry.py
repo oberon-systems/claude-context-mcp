@@ -12,6 +12,7 @@ from ctxgraph.config import (
 )
 from ctxgraph.parsers.ansible import AnsibleParser
 from ctxgraph.parsers.base import CodeParser
+from ctxgraph.parsers.compose import ComposeParser, is_compose_name
 from ctxgraph.parsers.languages import (
     BashParser,
     DockerfileParser,
@@ -85,6 +86,10 @@ def parser_class(file_path: str) -> type[CodeParser] | None:
     # Dockerfile.dev, Dockerfile.ci and friends.
     if file_name.startswith("dockerfile."):
         return DockerfileParser
+    # compose.yaml, docker-compose.prod.yml and friends. A compose file under
+    # any other name reaches AnsibleParser, which hands it back by its shape.
+    if is_compose_name(file_name):
+        return ComposeParser
     _, extension = posixpath.splitext(file_name)
     return EXTENSION_PARSERS.get(extension)
 

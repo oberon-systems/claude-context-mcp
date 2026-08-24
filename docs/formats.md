@@ -11,8 +11,8 @@ parsers to extract structural information.
 
 - **Languages** (via `graphifyy`): Python, TypeScript, JavaScript, Go, Rust,
   Ruby.
-- **Infrastructure** (via this repo's own parsers): Ansible, Puppet,
-  Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML, JSON.
+- **Infrastructure** (via this repo's own parsers): Ansible, Docker Compose,
+  Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML, JSON.
 
 ## Controlling what gets indexed
 
@@ -71,8 +71,58 @@ role variables become nodes, and the references between them become edges.
 Targets resolve inside the owning role, so `template: src: sshd_config.j2`
 finds `roles/sshd/templates/sshd_config.j2`. A `notify:` that no handler
 answers stays in the graph as an unresolved external node - usually a typo
-worth seeing. YAML that isn't Ansible (CI configs, compose files) falls back
-to plain top-level keys.
+worth seeing. YAML that is neither Ansible nor compose (CI configs, plain
+data) falls back to plain top-level keys.
+
+## Docker Compose
+
+`compose.yaml`, `docker-compose.yaml` and the suffixed variants
+(`docker-compose.prod.yml`, `compose.override.yaml`) are read as an
+architecture. Any other YAML holding a top-level `services:` mapping of
+service definitions is recognised by its shape, so a `stack.yml` is read the
+same way.
+
+Each declaration becomes a node named by its kind, the way an HCL block is -
+a service and a volume may share a name, and the kind is what keeps them
+apart:
+
+| Compose                    | Node                       |
+| -------------------------- | -------------------------- |
+| `name: claude-context-mcp` | `stack.claude-context-mcp` |
+| `services.postgres`        | `service.postgres`         |
+| `volumes.graph-out`        | `volume.graph-out`         |
+| `networks.base`            | `network.base`             |
+| `configs.site`             | `config.site`              |
+| `secrets.token`            | `secret.token`             |
+
+`x-` extension fields declare nothing and get no node.
+
+Every edge below leaves the **service** rather than the file, so
+`get_code_graph_neighbors` on one service answers what it runs, waits for and
+reads:
+
+| Edge           | Source                                                 |
+| -------------- | ------------------------------------------------------ |
+| `depends_on`   | `depends_on:`, in list and `condition:` form; `links:` |
+| `uses_image`   | `image:`, as `image:<ref>`                             |
+| `builds`       | `build:`, resolved to the Dockerfile it names          |
+| `uses_volume`  | a named volume in `volumes:`                           |
+| `mounts`       | a bind mount in `volumes:`                             |
+| `uses_network` | `networks:`                                            |
+| `uses_config`  | `configs:`                                             |
+| `uses_secret`  | `secrets:`                                             |
+| `reads_vars`   | `env_file:`                                            |
+| `extends`      | `extends: service:` within the same file               |
+
+Top-level `include:`, `extends: file:` and the `file:` of a config or a secret
+leave the compose file itself, as `includes` and `uses_file`.
+
+Three things are deliberately dropped rather than turned into a node pointing
+at nothing: any value still holding `${...}` (only compose can expand it), a
+bind mount whose host side is absolute or names a directory rather than a
+file, and a `build:` context that is a git URL. An image, by contrast, always
+gets its external node - `image:` prefixed so `postgres` can never bind to an
+unrelated symbol of that name.
 
 ## Puppet
 

@@ -9,6 +9,7 @@
 *.yaml
 *.yml
 *.toml
+*.conf
 
 Makefile
 Dockerfile

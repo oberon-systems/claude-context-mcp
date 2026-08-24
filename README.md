@@ -49,10 +49,9 @@ Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
   It never writes to the host. Two producers share the pass: code goes through
   the upstream [graphifyy](https://github.com/Graphify-Labs/graphify) extractor,
   used as a library, and the infrastructure formats it does not read - Ansible,
-  Puppet, Terraform, Dockerfiles, Makefiles, YAML, JSON, Markdown, shell, SQL -
-  go
-  through the Tree-sitter parsers in `ctxgraph`. Every node records which one
-  found it in `metadata.source`.
+  Docker Compose, Puppet, Terraform, Dockerfiles, Makefiles, YAML, JSON,
+  Markdown, shell, SQL - go through the Tree-sitter parsers in `ctxgraph`.
+  Every node records which one found it in `metadata.source`.
 - **mcp-server** exposes the graph over Streamable HTTP at `/mcp`.
 - **viewer** renders the graph as an interactive page, from the database, on
   every request. The drawing library is vendored into the image rather than
@@ -335,8 +334,8 @@ reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/depl
 Two optional gitignore-style files at the indexed project's root,
 `.ctxignore` (paths to prune) and `.ctxkeep` (files that become nodes,
 replacing the default selection). `make install` generates both from what
-the tree holds. Per-format nuances - what Ansible, Puppet and JSON parsing
-extracts - are in
+the tree holds. Per-format nuances - what Ansible, Docker Compose, Puppet
+and JSON parsing extracts - are in
 [formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
 
 ## Make targets
