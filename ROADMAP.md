@@ -40,7 +40,7 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **Shared Records (\_common):** Handle cross-project conventions, the way plans are already handled. The `_` prefix is reserved for these: `make index` refuses a project name starting with one.
 - [ ] **Cross-Project Lookups:** Link relations between codebases.
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
-- [ ] **worker**: should be able all projects with --project-all key
+- [x] **Every Project At Once:** `--auto` on both summarizing passes, which is also what naming no project does.
 - [ ] **web**: should show how many files without summory (llm generated) in each project
 
 ## Semantic & Advanced Intelligence

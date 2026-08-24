@@ -1,9 +1,10 @@
 """Run summarizing work on this machine, for a stack that is on another.
 
 Claims a batch, runs the model on each file, sends back one sentence per
-file, and asks for more until the job is drained. Nothing about the graph is
-known here: the API decides what to describe and what a summary may look
-like, and this process only owns the GPU.
+file, and asks for more until the job is drained. Named no project, it works
+through every one the stack has indexed and then exits. Nothing about the
+graph is known here: the API decides what to describe and what a summary may
+look like, and this process only owns the GPU.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ IDLE_SLEEP = 10.0
 # Left for the answer when asking whether a job's text fits the window.
 RESERVED_TOKENS = 64
 WORKER_ID_LIMIT = 64
+TRUTHY = {"1", "true", "yes", "on"}
 
 _stopping = threading.Event()
 
@@ -54,6 +56,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--token", default=os.getenv("WORKER_API_TOKEN", ""))
     parser.add_argument("--project", default=os.getenv("WORKER_PROJECT", ""))
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        default=os.getenv("WORKER_AUTO", "").strip().lower() in TRUTHY,
+        help="describe every project, which is what a bare run does anyway",
+    )
     parser.add_argument("--job-id", type=int, default=0, help="join an open job")
     parser.add_argument("--refresh", action="store_true", help="re-describe every file")
     parser.add_argument("--model", default=os.getenv("WORKER_MODEL", DEFAULT_MODEL))
@@ -168,31 +176,28 @@ def run_batch(
     return answered
 
 
-def main() -> None:
-    """Claim and describe until the job is drained, or until interrupted."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
-    args = parse_args()
-    if not args.token:
-        raise SystemExit("--token or WORKER_API_TOKEN is required")
-    if not args.project and not args.job_id:
-        raise SystemExit("--project or --job-id is required")
+def select_projects(client: Client) -> list[str]:
+    """Name every project worth visiting, in the order the API lists them.
 
-    signal.signal(signal.SIGINT, stop)
-    signal.signal(signal.SIGTERM, stop)
+    A project the model has described entirely is left out; one with a job
+    already open is kept, because a second worker joining it is what the lease
+    queue is for.
+    """
+    return [
+        project["name"]
+        for project in client.projects()
+        if project["without_llm_summary"] or project["running_job"]
+    ]
 
-    worker_id = (args.worker_id or f"{platform.node()}-{os.getpid()}")[:WORKER_ID_LIMIT]
-    client = Client(args.api, args.token)
-    LOG.info("API at %s is %s", args.api, client.health()["status"])
 
-    runner = build_runner(args)
-
-    job = (
-        client.job(args.job_id)
-        if args.job_id
-        else client.create_job(args.project, args.refresh)
-    )
+def run_job(
+    client: Client,
+    runner: Runner | ServerRunner,
+    worker_id: str,
+    args: argparse.Namespace,
+    job: dict[str, Any],
+) -> int:
+    """Claim and describe until one job is drained. Returns the files answered."""
     job_id = int(job["id"])
     input_chars = int(job["input_chars"])
     LOG.info(
@@ -203,6 +208,8 @@ def main() -> None:
         input_chars,
     )
 
+    # A property of this worker rather than of this project, so it would fail
+    # the same way on every other one: stop the run rather than the job.
     if not runner.fits(input_chars, RESERVED_TOKENS):
         raise SystemExit(
             f"a context window of {runner.n_ctx} cannot hold {input_chars} "
@@ -234,7 +241,6 @@ def main() -> None:
             if args.once:
                 break
     finally:
-        runner.close()
         progress = client.job(job_id)["progress"]
         LOG.info(
             "Described %d file(s). Job %d: %d done, %d pending, %d failed",
@@ -244,6 +250,78 @@ def main() -> None:
             progress["pending"],
             progress["failed"],
         )
+    return described
+
+
+def run_projects(
+    client: Client,
+    runner: Runner | ServerRunner,
+    worker_id: str,
+    args: argparse.Namespace,
+    projects: list[str],
+) -> tuple[int, int]:
+    """Open a job over each project in turn. Returns the files and projects done.
+
+    The job is opened when its turn comes and not before: a run that dies
+    halfway would otherwise leave a job running over every project it never
+    reached.
+    """
+    described = 0
+    visited = 0
+    for project in projects:
+        if _stopping.is_set():
+            break
+        try:
+            job = client.create_job(project, args.refresh)
+        except ApiError as error:
+            # One project that has gone away since the list was read is not a
+            # reason to leave the rest undescribed.
+            LOG.warning("%s: skipped (%s)", project, error)
+            continue
+        visited += 1
+        described += run_job(client, runner, worker_id, args, job)
+        if args.once:
+            break
+    return described, visited
+
+
+def main() -> None:
+    """Describe one job, one project, or every project that still needs it."""
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
+    args = parse_args()
+    if not args.token:
+        raise SystemExit("--token or WORKER_API_TOKEN is required")
+
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+
+    worker_id = (args.worker_id or f"{platform.node()}-{os.getpid()}")[:WORKER_ID_LIMIT]
+    client = Client(args.api, args.token)
+    LOG.info("API at %s is %s", args.api, client.health()["status"])
+
+    runner = build_runner(args)
+    try:
+        if args.job_id:
+            run_job(client, runner, worker_id, args, client.job(args.job_id))
+            return
+        # --auto overrides a project, so a machine carrying WORKER_PROJECT in
+        # its environment can still be told to take the whole stack.
+        named = bool(args.project) and not args.auto
+        projects = [args.project] if named else select_projects(client)
+        if not projects:
+            LOG.info("Every project is described. Nothing to do.")
+            return
+        if not named:
+            LOG.info(
+                "%d project(s) to describe: %s", len(projects), ", ".join(projects)
+            )
+        described, visited = run_projects(client, runner, worker_id, args, projects)
+        if visited > 1:
+            LOG.info("Described %d file(s) across %d project(s)", described, visited)
+    finally:
+        runner.close()
 
 
 if __name__ == "__main__":

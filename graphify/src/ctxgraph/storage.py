@@ -420,6 +420,29 @@ def list_files_without_llm_summary(
     return [row[0] for row in cursor.fetchall()]
 
 
+def list_pending_summaries(
+    cursor: Cursor, project: str, refresh: bool = False
+) -> list[tuple[str, str]]:
+    """List the same file nodes with the text stored for each of them.
+
+    The pass over every project cannot read from disk - one tree is mounted
+    and the rest are elsewhere - so it reads the column the worker API already
+    serves. A file with no stored text comes back with an empty one rather
+    than being left out, so the caller can say how many need re-indexing.
+    """
+    cursor.execute(
+        """
+        SELECT file_path, COALESCE(content, '') FROM graph_nodes
+         WHERE project = %s AND type = 'file' AND file_path IS NOT NULL
+           AND COALESCE(metadata ->> 'summary_source', 'auto')
+               = ANY(CASE WHEN %s THEN ARRAY['auto', 'llm'] ELSE ARRAY['auto'] END)
+         ORDER BY file_path;
+        """,
+        (project, refresh),
+    )
+    return [(row[0], row[1]) for row in cursor.fetchall()]
+
+
 def get_cached_summary(cursor: Cursor, project: str, content_hash: str) -> str | None:
     """Retrieve the summary the model wrote for this exact text, if any."""
     cursor.execute(

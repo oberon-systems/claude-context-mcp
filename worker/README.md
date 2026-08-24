@@ -219,13 +219,28 @@ py -m ctxworker --api http://192.168.1.10:3000/worker --project kurum
 That opens a job over every file of `kurum` that still has no model summary,
 then claims, describes and reports until the job is drained.
 
+Name no project and it takes them all:
+
+```text
+py -m ctxworker --api http://192.168.1.10:3000/worker
+```
+
+It asks the stack what it has indexed, drops the projects the model has
+already described, and works through the rest one job at a time, opening each
+as its turn comes. One pass, then it exits - a schedule is the machine's own
+business. A project someone unindexes mid-pass is logged and stepped over, and
+one that already has a job open is joined rather than refused. `--auto` says
+the same thing out loud, and overrides a `WORKER_PROJECT` the machine carries
+in its environment.
+
 Useful flags, all of which also read an environment variable:
 
 | Flag                 | Variable                  | Default                        | What it is                           |
 | -------------------- | ------------------------- | ------------------------------ | ------------------------------------ |
 | `--api`              | `WORKER_API_URL`          | `http://127.0.0.1:3000/worker` | where the stack is                   |
 | `--token`            | `WORKER_API_TOKEN`        | -                              | required                             |
-| `--project`          | `WORKER_PROJECT`          | -                              | what to describe                     |
+| `--project`          | `WORKER_PROJECT`          | -                              | one project; unset means all of them |
+| `--auto`             | `WORKER_AUTO`             | -                              | every project, over a named one      |
 | `--job-id`           | -                         | -                              | join a job that is already open      |
 | `--model`            | `WORKER_MODEL`            | `qwen-1.5b`                    | which weights, by catalogue name     |
 | `--model-path`       | `WORKER_MODEL_PATH`       | -                              | a GGUF file directly                 |

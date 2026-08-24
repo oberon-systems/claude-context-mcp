@@ -144,3 +144,7 @@ class Client:
     def job(self, job_id: int) -> dict[str, Any]:
         """Read a job and its progress."""
         return self.call(f"/jobs/{job_id}")
+
+    def projects(self) -> list[dict[str, Any]]:
+        """List what the stack has indexed, and what each still needs."""
+        return self.call("/projects")["projects"]

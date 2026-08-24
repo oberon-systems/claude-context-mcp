@@ -288,6 +288,10 @@ FRESH ?=
 # default because it costs seconds per file: `make summarize` is the same work
 # without holding up the graph.
 SUMMARIZE ?=
+# AUTO=1 makes `summarize` walk every indexed project even when one is named.
+# Naming none already means that, so this is for overriding a PROJECT= that is
+# in the shell's environment.
+AUTO ?=
 BG ?=
 # Stop after this many files. A first pass over a large tree is measured in
 # hours, and this is how it is timed before one is spent.
@@ -312,14 +316,21 @@ index: require-env  ## Index PROJECT (TYPE= categorises it)
 # own. It commits per file, so an interrupted run keeps what it wrote and the
 # next one starts from what is left. FRESH=1 re-describes everything instead,
 # cache included; BG=1 detaches, for the hours a large tree takes.
-summarize: require-env require-model  ## Summarize PROJECT with the model (BG=1 detaches)
+#
+# Named no project, it describes every project in the database. Only one tree
+# is ever mounted, so that pass reads the text the index stored on each node
+# rather than the files, and LIMIT= then caps each project rather than the run
+# - a budget spent entirely on the first project is not a pass over all of
+# them. AUTO=1 asks for it even when a project is named.
+summarize: require-env require-model  ## Summarize PROJECT, or every project (BG=1 detaches)
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(if $(FRESH),FORCE_REEXTRACT=1) \
 		$(if $(LIMIT),SUMMARY_LIMIT='$(LIMIT)') \
 		LLM_MODEL_PATH='$(MODEL_PATH)' \
 		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
-		graphify python -m ctxgraph.summarize
+		graphify python -m ctxgraph.summarize \
+		$(if $(or $(INDEXED),$(PROJECT_NAME)),$(if $(AUTO),--auto),--auto)
 
 # The named form of `index FRESH=1`: distrust both caches - the extractor's
 # per-file one and the file_hashes table - and parse every selected file again.

@@ -358,6 +358,8 @@ make index       index PROJECT=<path>, or PROJECT_PATH from .env
 make reindex     index PROJECT=<path> again, trusting neither cache
 make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
+                 with no PROJECT= it describes every indexed project, and
+                 LIMIT=<n> then caps each of them rather than the run
 make llm-model-install
                  download the summarizer weights (FORCE=1 re-downloads)
 make backup      write the database, or PROJECT=/PROJECT_NAME= alone, to a file
@@ -458,7 +460,14 @@ first heading. A local GGUF model writes better ones, as a separate pass:
 ```bash
 make llm-model-install               # once: ~1 GB of weights
 make summarize PROJECT=$(pwd)        # describe what has no model summary yet
+make summarize                       # the same, over every indexed project
 ```
+
+Named no project, the pass walks the `projects` table and reads the text the
+index stored on each node rather than the files: only one tree is mounted at a
+time, and the rest are on paths the container cannot see. A file indexed
+before that text was stored is counted and named in the log, and re-indexing
+its project is what makes it describable.
 
 That pass can also run on another machine with a GPU instead of the stack's
 CPU, over HTTP, with no checkout of the code and no database access -

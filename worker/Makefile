@@ -26,9 +26,8 @@ server:  ## Download llama-server into llama-server/ (VARIANT=cpu)
 serve:  ## Start llama-server on the weights (MODEL=, PORT= via --port)
 	$(PYTHON) -m ctxworker.runserver --install
 
-run:  ## Summarize a project: make run PROJECT=kurum API=http://host:3003
-	@test -n '$(PROJECT)' || { echo "PROJECT= is required" >&2; exit 1; }
-	$(PYTHON) -m ctxworker --api '$(API)' --project '$(PROJECT)' \
+run:  ## Summarize every project, or PROJECT=kurum alone (API=http://host:3003)
+	$(PYTHON) -m ctxworker --api '$(API)' $(if $(PROJECT),--project '$(PROJECT)') \
 		--model '$(MODEL)' $(if $(BATCH),--batch '$(BATCH)') \
 		$(if $(LLAMA_SERVER),--llama-server '$(LLAMA_SERVER)')
 
