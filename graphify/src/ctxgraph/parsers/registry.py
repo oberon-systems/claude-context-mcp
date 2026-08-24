@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import posixpath
 from functools import cache
+from pathlib import Path
 
 from ctxgraph.config import (
     EXTRA_SOURCE_EXTENSIONS,
@@ -66,6 +68,22 @@ FILENAME_PARSERS: dict[str, type[CodeParser]] = {
     "makefile": MakeParser,
 }
 DEFAULT_SOURCE_EXTENSIONS = tuple(sorted(EXTENSION_PARSERS)) + EXTRA_SOURCE_EXTENSIONS
+
+
+@cache
+def parsers_revision() -> str:
+    """Fingerprint the parser sources of this package.
+
+    The indexer skips a file whose content is unchanged, so a parser that
+    starts naming its nodes differently would leave the old nodes in place
+    while emitting edges against the new ones. Mixing this into the stored
+    hash makes a parser change invalidate the tree by itself.
+    """
+    digest = hashlib.sha256()
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        digest.update(path.name.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
 
 
 @cache

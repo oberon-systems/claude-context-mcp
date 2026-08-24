@@ -38,7 +38,7 @@ from ctxgraph.interop import (
     prune_extractor_caches,
     recluster,
 )
-from ctxgraph.parsers import get_parser
+from ctxgraph.parsers import get_parser, parsers_revision
 from ctxgraph.resolution import placeholder_id, resolve_file_target, resolve_symbol
 from ctxgraph.storage import (
     clear_file_artifacts,
@@ -75,8 +75,15 @@ GAP_REPORT_LIMIT = 20
 
 
 def compute_hash(content: str) -> str:
-    """Compute MD5 hash of the file content."""
-    return hashlib.md5(content.encode("utf-8")).hexdigest()
+    """Hash what a file parses to: its content and the parsers reading it.
+
+    Content alone is not enough. A file whose hash matches skips `index_file`
+    and keeps the nodes it already has, while `link_file` re-parses it with
+    whatever parser is current - so a parser that renames its nodes would
+    leave the old ones behind and emit edges against ids nobody wrote.
+    """
+    fingerprint = f"{parsers_revision()}\0{content}"
+    return hashlib.md5(fingerprint.encode("utf-8")).hexdigest()
 
 
 def index_file(
@@ -121,9 +128,15 @@ def link_file(
     further down the tree still resolves.
     """
     source_id = truncate(rel_path, MAX_NODE_ID_LENGTH)
+    # The nodes this file actually has. An entity read back from the database
+    # carries its own id, which is not always what its stored name rebuilds:
+    # the name column is truncated shorter than the id is.
+    known_ids = {
+        entity.get("id") or entity_node_id(rel_path, entity["name"])
+        for entity in entities
+    }
     edges = 0
-    for entity in entities:
-        target_id = entity_node_id(rel_path, entity["name"])
+    for target_id in known_ids:
         insert_edge(cursor, project, source_id, target_id, "contains")
         edges += 1
 
@@ -136,6 +149,7 @@ def link_file(
     # makes a call or a handler name resolve to the right definition below.
     relations.sort(key=lambda relation: relation["scope"] != "file")
     imported: set[str] = set()
+    orphaned: list[str] = []
     for relation in relations:
         target = relation["target"]
         relation_type = relation["type"]
@@ -143,6 +157,13 @@ def link_file(
             edge_source_id = entity_node_id(rel_path, relation["source"])
         else:
             edge_source_id = source_id
+        # A relation leaving an entity the parser did not also declare has no
+        # node to hang on. The edge is dropped rather than attempted: the
+        # foreign key would abort the transaction and take the whole file's
+        # edges with it.
+        if edge_source_id != source_id and edge_source_id not in known_ids:
+            orphaned.append(relation["source"])
+            continue
 
         if relation["scope"] == "file":
             target_id = resolve_file_target(
@@ -162,6 +183,13 @@ def link_file(
             continue
         insert_edge(cursor, project, edge_source_id, target_id, relation_type)
         edges += 1
+    if orphaned:
+        LOG.warning(
+            "%s: dropped %d edge(s) leaving an undeclared entity (%s)",
+            rel_path,
+            len(orphaned),
+            ", ".join(sorted(set(orphaned))[:GAP_REPORT_LIMIT]),
+        )
     return edges
 
 

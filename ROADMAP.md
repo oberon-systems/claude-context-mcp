@@ -99,6 +99,7 @@ Adding vector context and agent memory.
 - Unified onboarding: one `make install` registers the `context` server for both agents, renders the skill, writes a CLAUDE.local.md, generates and verifies the `.ctxkeep`/`.ctxignore` pair from what the tree holds, adds the shell aliases and indexes the result - never replacing a file that exists
 - Schema management: numbered goose migrations over a `schema_migrations` table, applied to the existing database by the `migrate` service before anything else reads it
 - A re-index invalidates the extractor cache (keyed by project and path, dropped with the project, forced by `make index FRESH=1`, and a run that reports its own shortfall)
+- A re-index invalidates on a parser change too: the stored file hash covers the content and the revision of the parsers reading it, so a parser that renames the nodes it declares re-parses the trees it owns on the next plain `make index` rather than leaving the old nodes behind and emitting edges against ids nobody wrote. `link_file` also drops an edge leaving an entity the current parser did not declare, instead of letting the foreign key abort the transaction and cost the file every edge it had
 - Move the database out of the working tree
 - Use public registry for built images
 - Drop a project from the graph

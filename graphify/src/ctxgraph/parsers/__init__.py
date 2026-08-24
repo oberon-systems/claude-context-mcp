@@ -12,6 +12,7 @@ from ctxgraph.parsers.registry import (
     is_default_source,
     language_family,
     parser_class,
+    parsers_revision,
 )
 
 __all__ = [
@@ -23,6 +24,7 @@ __all__ = [
     "language_family",
     "node_text",
     "parser_class",
+    "parsers_revision",
     "strip_literal",
     "unique_pairs",
 ]

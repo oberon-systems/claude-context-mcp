@@ -148,6 +148,33 @@ def test_extension_fields_declare_nothing(parser: ComposeParser) -> None:
     assert not any(name.endswith("x-shared") for name in names)
 
 
+X_SERVICE = """
+services:
+  x-defaults:
+    image: alpine:3
+    restart: always
+  web:
+    image: nginx:1.27
+    depends_on: [x-defaults]
+"""
+
+
+def test_extension_key_under_services_leaves_no_edge(parser: ComposeParser) -> None:
+    """An `x-` block under `services:` is neither a node nor an edge source.
+
+    Both halves have to agree: an edge leaving a node `get_entities` refused
+    to declare has nothing to hang on, and the database refuses it.
+    """
+    declared = {entity["name"] for entity in parser.get_entities(X_SERVICE, PATH)}
+    assert declared == {"service.web"}
+    sources = {
+        relation["source"]
+        for relation in parser.get_relations(X_SERVICE, PATH)
+        if relation.get("source")
+    }
+    assert sources <= declared
+
+
 def test_dependencies_leave_the_service(parser: ComposeParser) -> None:
     """depends_on and links both point one service at another."""
     found = edges(parser.get_relations(COMPOSE, PATH))

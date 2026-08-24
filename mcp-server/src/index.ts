@@ -613,7 +613,8 @@ const listToolsHandler = async (
       },
       {
         name: "get_file_hash",
-        description: "Get the stored MD5 hash for a file",
+        description:
+          "Get the stored parse hash of a file, taken from its content and the parser revision",
         inputSchema: {
           type: "object",
           properties: {
@@ -643,7 +644,7 @@ const listToolsHandler = async (
       },
       {
         name: "set_file_hash",
-        description: "Manually set the MD5 hash for a file",
+        description: "Manually set the stored parse hash of a file",
         inputSchema: {
           type: "object",
           properties: {
@@ -654,7 +655,7 @@ const listToolsHandler = async (
             },
             hash: {
               type: "string",
-              description: "The MD5 hash to store",
+              description: "The parse hash to store",
             },
           },
           required: ["rel_path", "hash"],

@@ -179,8 +179,11 @@ make index PROJECT=/home/you/work/infra
 A re-index is authoritative: it reports how many files it selected and how many
 of them a node was written for, and names the ones it had to leave out. Both
 producers skip a file whose content has not changed since the last run, so a
-re-index is cheap; `make reindex PROJECT=...` distrusts both caches and
-re-parses everything, for when a graph looks incomplete rather than merely old.
+re-index is cheap. What a file is compared against is its content and the
+revision of the parsers reading it, so upgrading this project re-parses the
+trees its parsers now read differently, without being asked to.
+`make reindex PROJECT=...` distrusts both caches and re-parses everything,
+for when a graph looks incomplete rather than merely old.
 It is the named form of `make index PROJECT=... FRESH=1`, and the
 `context-reindex` alias is the same thing for the tree you stand in.
 
@@ -445,7 +448,7 @@ make mcp help
 | `get_suggestions`          | optional `suggestion_id`, `about`, `status`, `kind`, `query`, `limit`                              | Open gaps of one scope plus the global ones, most often hit first                                   |
 | `drop_suggestion`          | `suggestion_id`, optional `about`                                                                  | Deletes one suggestion written by mistake; a closed gap is retired instead                          |
 | `list_indexed_files`       | optional `project`                                                                                 | The files tracked in `file_hashes`, which is the parser half of the tree                            |
-| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored hash of one file, or nothing when it was never indexed                                   |
+| `get_file_hash`            | `file_path`, optional `project`                                                                    | The stored parse hash of one file, or nothing when never indexed                                    |
 | `set_file_hash`            | `file_path`, `hash`, optional `project`                                                            | Writes a file's hash, marking it indexed                                                            |
 | `clear_file_hash`          | `file_path`, optional `project`                                                                    | Forgets a file's hash, so the next run re-parses it                                                 |
 

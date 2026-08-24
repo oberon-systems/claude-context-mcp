@@ -128,14 +128,20 @@ def as_list(value: Any) -> list[Any]:  # noqa: ANN401
     return value if isinstance(value, list) else [value]
 
 
-def declared_names(section: Any) -> Iterator[str]:  # noqa: ANN401
-    """Yield the names a top level section declares."""
+def declared_items(section: Any) -> Iterator[tuple[Any, str]]:  # noqa: ANN401
+    """Yield the (key, name) pairs a top level section declares."""
     if not isinstance(section, dict):
         return
     for key in section:
         name = str(key).strip()
         if name and not name.startswith(EXTENSION_PREFIX):
-            yield name
+            yield key, name
+
+
+def declared_names(section: Any) -> Iterator[str]:  # noqa: ANN401
+    """Yield the names a top level section declares."""
+    for _, name in declared_items(section):
+        yield name
 
 
 def referenced_names(value: Any) -> Iterator[str]:  # noqa: ANN401
@@ -304,9 +310,12 @@ class ComposeParser(YAMLParser):
                 self._relation("", path, "uses_file", "file")
                 for path in file_targets(document.get(section))
             )
-        for name, service in document["services"].items():
-            source = qualified("service", str(name).strip())
-            relations.extend(self._service_relations(source, service))
+        services = document["services"]
+        # The same filter `get_entities` declares nodes through: a relation
+        # leaving an `x-` extension key would have no node to leave.
+        for key, name in declared_items(services):
+            source = qualified("service", name)
+            relations.extend(self._service_relations(source, services[key]))
         return self._deduplicate(relations)
 
     @staticmethod
