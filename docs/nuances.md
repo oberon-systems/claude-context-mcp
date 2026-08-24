@@ -32,13 +32,16 @@ Core tables:
   `(source, target, relation)`
 - `code_embeddings` - `vector(1536)` chunks with an HNSW cosine index, not
   populated yet
-- `plans` - one row per plan, keyed on an id unique across the database
+  Plans, memories and suggestions have no table of their own: they are
+  `graph_nodes` rows under the built-in projects `_plans`, `_memory` and
+  `_suggestions`, created by a migration rather than by an index run. That is
+  why they are searchable like any other node, and why a suggestion's status
+  and hit count - or a plan's status and the project it is about - live in the
+  node's `metadata` rather than in columns.
 
-Memories and suggestions have no table of their own: they are `graph_nodes`
-rows under the built-in projects `_memory` and `_suggestions`, created by a
-migration rather than by an index run. That is why they are searchable like
-any other node, and why a suggestion's status and hit count live in the
-node's `metadata` rather than in columns.
+A plan id is stored as the node id unchanged. It names a topic and is written
+by hand, so it is already unique across the database and needs none of the
+`<about>/<id>` scoping a memory id gets.
 
 `make unindex` cascades from the `projects` row, so one `DELETE` there takes
 that project's nodes, edges, hashes and embeddings, and nothing of any other

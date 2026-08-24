@@ -15,7 +15,7 @@ These items are essential for the graph to be authoritative. Agents cannot trust
 Expanding the breadth of what the graph covers and how accurately it resolves relations.
 
 - [ ] **Documentation: database**: update document
-- [x] **`Docker Compose Parsing`:** Architectural nodes/edges for service dependencies.
+- [x] **Docker Compose Parsing:** Architectural nodes/edges for service dependencies.
 - [ ] **Terraform/Terragrunt Relations:** Resolve `source`, `include`, and `templatefile` references.
 - [ ] **Additional Parsers:** RPM specs, Python manifests (`requirements.txt`, `setup.cfg`), and systemd units.
 - [ ] **Shebang Support:** Enable parsing for extension-less scripts.
@@ -30,7 +30,7 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **local documentation**: docs using for github pages, we should also provide it locally with our stack
 - [x] **single entry point**: use nginx as ingress for all web-endpoints as a part of the stack
 - [ ] **system tables index, reindex**: `_mempory`, `_suggestions` and other `_` should be indexed periodically
-- [ ] **migrate plans**: should be a system table as \_memory and others
+- [x] **migrate plans**: should be a system table as \_memory and others
 - [x] **Cross-Project Plans:** One `plans` table for the whole database, with the project as a tag and `project: "*"` for a plan that belongs to none.
 - [x] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'docs') to enable targeted cross-repository searches.
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
@@ -44,6 +44,7 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **web**: should show how many files without summory (llm generated) in each project
 - [ ] **web**: allow to change repository type in web interface
 - [ ] **web**: drow graph for a specific file
+- [ ] **web**: reindex button for force reindex
 
 ## Semantic & Advanced Intelligence
 
@@ -63,6 +64,18 @@ Adding vector context and agent memory.
 ---
 
 ## Completed Items
+
+- Plans as a built-in project: `_plans` joins `_memory` and `_suggestions`, so
+  every record an agent writes is now a `graph_nodes` row and none of them
+  has a table of its own. The plan id is carried over unchanged - it names a
+  topic and is written by hand, so it is already unique across the database
+  and needs none of the `<about>/<id>` scoping a memory id gets - and the
+  project a plan is about moves from a nullable column to
+  `metadata ->> 'about'`, which is what a memory has always used. The plan's
+  kind becomes the node type, so 'plan' and 'template' filter the way any
+  other node type does. Plans are searchable through `search_code_nodes` for
+  the first time, a project drop no longer needs a delete of its own, and
+  backup and restore stop naming plan columns one by one
 
 - Docker Compose parsing: a compose file is an architecture rather than a bag
   of top level keys. Services, volumes, networks, configs and secrets become

@@ -116,8 +116,9 @@ current_projects() {
           FROM projects p, LATERAL (
                SELECT (SELECT count(*) FROM graph_nodes g
                         WHERE g.project = p.name) AS nodes,
-                      (SELECT count(*) FROM plans l
-                        WHERE l.project = p.name) AS plans) c"
+                      (SELECT count(*) FROM graph_nodes g
+                        WHERE g.project = '_plans'
+                          AND g.metadata ->> 'about' = p.name) AS plans) c"
 }
 
 echo "file: $file ($(du -h "$file" | cut -f1), $(date -r "$file" '+%Y-%m-%d %H:%M'))"
@@ -172,7 +173,9 @@ else
     if [ -n "$exists" ]; then
         row="$(psql_query -v name="$name" <<< "
             SELECT (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name),
-                   (SELECT count(*) FROM plans l WHERE l.project = p.name),
+                   (SELECT count(*) FROM graph_nodes g
+                      WHERE g.project = '_plans'
+                        AND g.metadata ->> 'about' = p.name),
                    (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name
                       AND g.metadata ->> 'summary_source' = 'manual')
               FROM projects p WHERE p.name = :'name'")"
@@ -184,8 +187,9 @@ else
     fi
     confirm "Restore \"$name\"?"
     # The file carries its own BEGIN, the DELETEs that take the old copy away
-    # - one cascading from `projects`, one for the plans, which do not cascade
-    # - and COMMIT, so this is atomic without anything added here.
+    # - one cascading from `projects`, one for the plan nodes under '_plans',
+    # which do not cascade - and COMMIT, so this is atomic without anything
+    # added here.
     "${reader[@]}" "$file" \
         | "${compose[@]}" exec -T postgres psql -U "$pg_user" -d "$pg_db" \
             -qAtX -v ON_ERROR_STOP=1 -f - > /dev/null

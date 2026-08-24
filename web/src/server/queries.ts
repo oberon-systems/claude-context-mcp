@@ -2,7 +2,7 @@
 //
 // The graph, plan and suggestion queries are deliberate copies of the MCP
 // tools in mcp-server/src/index.ts: the two services share a schema, not a
-// process. A column added to `plans` touches this file, that one, and
+// process. A field added to a plan touches this file, that one, and
 // scripts/backup.sh.
 
 export const PROJECTS = `
@@ -14,8 +14,9 @@ export const PROJECTS = `
            WHERE e.project = p.name) AS edges,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name AND g.type = 'file') AS files,
-         (SELECT count(*) FROM plans AS l
-           WHERE l.project = p.name) AS plans
+         (SELECT count(*) FROM graph_nodes AS l
+           WHERE l.project = '_plans'
+             AND l.metadata ->> 'about' = p.name) AS plans
     FROM projects AS p
    ORDER BY p.name`;
 
@@ -28,8 +29,9 @@ export const PROJECT = `
            WHERE e.project = p.name) AS edges,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name AND g.type = 'file') AS files,
-         (SELECT count(*) FROM plans AS l
-           WHERE l.project = p.name) AS plans
+         (SELECT count(*) FROM graph_nodes AS l
+           WHERE l.project = '_plans'
+             AND l.metadata ->> 'about' = p.name) AS plans
     FROM projects AS p
    WHERE p.name = $1`;
 
@@ -71,8 +73,9 @@ export const DROP_REPORT = `
            WHERE f.project = p.name) AS hashes,
          (SELECT count(*) FROM code_embeddings AS c
            WHERE c.project = p.name) AS embeddings,
-         (SELECT count(*) FROM plans AS l
-           WHERE l.project = p.name) AS plans,
+         (SELECT count(*) FROM graph_nodes AS l
+           WHERE l.project = '_plans'
+             AND l.metadata ->> 'about' = p.name) AS plans,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.type = 'suggestion'
              AND (g.project = p.name
@@ -150,64 +153,120 @@ export const FILES = `
 // $1 is the project tag or null for every project, $2 the literal string
 // '_global' switch, $3 status, $4 type, $5 the search pattern.
 export const PLANS = `
-  SELECT id, project, title, status, type, metadata,
-         created_at, updated_at, length(content) AS content_length,
+  SELECT id,
+         metadata ->> 'about' AS project,
+         name AS title,
+         metadata ->> 'status' AS status,
+         type,
+         metadata - 'about' - 'status' - 'summary_source'
+           - 'updated_at' AS metadata,
+         created_at,
+         metadata ->> 'updated_at' AS updated_at,
+         length(content) AS content_length,
          count(*) OVER () AS total
-    FROM plans
-   WHERE ($1::text IS NULL OR project = $1)
-     AND ($2::boolean IS NOT TRUE OR project IS NULL)
-     AND ($3::text IS NULL OR status = $3)
+    FROM graph_nodes
+   WHERE project = '_plans'
+     AND ($1::text IS NULL OR metadata ->> 'about' = $1)
+     AND ($2::boolean IS NOT TRUE OR metadata ->> 'about' IS NULL)
+     AND ($3::text IS NULL OR metadata ->> 'status' = $3)
      AND ($4::text IS NULL OR type = $4)
-     AND ($5::text IS NULL OR title ILIKE $5 OR content ILIKE $5)
-   ORDER BY (project IS NULL), updated_at DESC
+     AND ($5::text IS NULL OR name ILIKE $5 OR content ILIKE $5)
+   ORDER BY (metadata ->> 'about' IS NULL),
+            metadata ->> 'updated_at' DESC
    LIMIT $6 OFFSET $7`;
 
 export const PLAN_FACETS = `
   SELECT
-    (SELECT array_agg(DISTINCT project) FROM plans
-      WHERE project IS NOT NULL) AS projects,
-    (SELECT array_agg(DISTINCT status) FROM plans) AS statuses,
-    (SELECT array_agg(DISTINCT type) FROM plans) AS types,
-    (SELECT count(*) FROM plans WHERE project IS NULL) AS global_plans`;
+    (SELECT array_agg(DISTINCT metadata ->> 'about') FROM graph_nodes
+      WHERE project = '_plans'
+        AND metadata ->> 'about' IS NOT NULL) AS projects,
+    (SELECT array_agg(DISTINCT metadata ->> 'status') FROM graph_nodes
+      WHERE project = '_plans') AS statuses,
+    (SELECT array_agg(DISTINCT type) FROM graph_nodes
+      WHERE project = '_plans') AS types,
+    (SELECT count(*) FROM graph_nodes
+      WHERE project = '_plans'
+        AND metadata ->> 'about' IS NULL) AS global_plans`;
 
 export const PLAN = `
-  SELECT id, project, title, content, status, type, metadata,
-         created_at, updated_at
-    FROM plans
-   WHERE id = $1`;
+  SELECT id,
+         metadata ->> 'about' AS project,
+         name AS title,
+         content,
+         metadata ->> 'status' AS status,
+         type,
+         metadata - 'about' - 'status' - 'summary_source'
+           - 'updated_at' AS metadata,
+         created_at,
+         metadata ->> 'updated_at' AS updated_at
+    FROM graph_nodes
+   WHERE project = '_plans' AND id = $1`;
+
+// Run before SAVE_PLAN, for the same reason save_plan re-creates it: the
+// project is droppable by name, and its absence would turn every later save
+// into a foreign key error.
+export const ENSURE_PLANS_PROJECT = `
+  INSERT INTO projects (name, root_path, type)
+  VALUES ('_plans', 'plans://agent', 'plans')
+  ON CONFLICT (name) DO NOTHING`;
 
 // The same upsert save_plan runs in mcp-server/src/index.ts. Keep the two in
 // step: a plan written here has to read back identically from the agent.
 export const SAVE_PLAN = `
-  INSERT INTO plans (id, project, title, content, status, type, updated_at)
-  VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-  ON CONFLICT (id) DO UPDATE SET
-    project = EXCLUDED.project,
-    title = EXCLUDED.title,
-    content = EXCLUDED.content,
-    status = EXCLUDED.status,
+  INSERT INTO graph_nodes (project, id, name, type, content, metadata)
+  VALUES ('_plans', $1, $3, $6, $4,
+          JSONB_BUILD_OBJECT(
+            'about', $2::text,
+            'status', $5::text,
+            'summary_source', 'manual',
+            'updated_at', to_char(
+              now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+            )
+          ))
+  ON CONFLICT (project, id) DO UPDATE SET
+    name = EXCLUDED.name,
     type = EXCLUDED.type,
-    updated_at = CURRENT_TIMESTAMP
+    content = EXCLUDED.content,
+    metadata = graph_nodes.metadata || EXCLUDED.metadata
   RETURNING (xmax = 0) AS created`;
 
 // COALESCE rather than a rebuilt statement: the list view changes one field
 // at a time and has no reason to ship a whole plan back to do it.
 export const PATCH_PLAN = `
-  UPDATE plans
-     SET title = COALESCE($2, title),
+  UPDATE graph_nodes
+     SET name = COALESCE($2, name),
          content = COALESCE($3, content),
-         status = COALESCE($4, status),
          type = COALESCE($5, type),
-         project = CASE WHEN $6::boolean THEN $7 ELSE project END,
-         updated_at = CURRENT_TIMESTAMP
-   WHERE id = $1
-  RETURNING id, project, title, content, status, type, metadata,
-            created_at, updated_at`;
+         metadata = metadata || JSONB_BUILD_OBJECT(
+             'status', COALESCE($4, metadata ->> 'status'),
+             'updated_at', to_char(
+               now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+             )
+           )
+           || CASE WHEN $6::boolean
+                THEN JSONB_BUILD_OBJECT('about', $7::text)
+                ELSE '{}'::JSONB
+              END
+   WHERE project = '_plans' AND id = $1
+  RETURNING id,
+            metadata ->> 'about' AS project,
+            name AS title,
+            content,
+            metadata ->> 'status' AS status,
+            type,
+            metadata - 'about' - 'status' - 'summary_source'
+              - 'updated_at' AS metadata,
+            created_at,
+            metadata ->> 'updated_at' AS updated_at`;
 
 export const DROP_PLAN = `
-  DELETE FROM plans
-   WHERE id = $1
-  RETURNING id, project, title, status, type`;
+  DELETE FROM graph_nodes
+   WHERE project = '_plans' AND id = $1
+  RETURNING id,
+            metadata ->> 'about' AS project,
+            name AS title,
+            metadata ->> 'status' AS status,
+            type`;
 
 // Suggestions are graph nodes under a built-in project rather than a table of
 // their own, so every statement below carries the project and the node type.

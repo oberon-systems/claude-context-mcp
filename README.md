@@ -38,8 +38,9 @@ Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
                      +---------------------------------+
 ```
 
-- **postgres** stores the graphs (`graph_nodes`, `graph_edges`), the vector
-  embeddings table (`code_embeddings`) and the plans (`plans`). Everything
+- **postgres** stores the graphs (`graph_nodes`, `graph_edges`) and the vector
+  embeddings table (`code_embeddings`). Plans, memories and suggestions are
+  nodes of built-in projects rather than tables of their own. Everything
   derived from a tree is scoped to a row of `projects`, and `graph_nodes` is
   keyed on `(project, id)`, since `README.md` is a node id in every codebase
   there is. Plans are the exception: they are written by an agent and rebuilt
@@ -477,9 +478,10 @@ worker setup:
 ### Persistent Project Planning
 
 Plans are managed by an AI client through `save_plan`, `get_plans` and
-`drop_plan`, and live in one `plans` table for the whole database rather
-than being owned by a project - `project` is a free-text tag, not a
-foreign key, so a plan survives `make unindex` and `drop_project`. Full
+`drop_plan`, and live as nodes of the built-in `_plans` project rather
+than being owned by the project they are about - that is a free-text tag in
+metadata, not a foreign key, so a plan survives `make unindex` and
+`drop_project`. Full
 lifecycle (`status` vs `type`, the `"*"` project):
 [usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
 
@@ -545,9 +547,11 @@ Full walkthrough: [deployment](https://oberon-systems.github.io/claude-context-m
 Schema migrations are goose-managed (`migrations/`); `make up` applies
 whatever is pending before anything else touches the database. Core tables:
 `projects` - one row per project, carrying the `type` a search narrows on -
-plus `graph_nodes`, `graph_edges`, `code_embeddings` (unused for now) and
-`plans`; the last one has no foreign key to a project, so it survives
-`make unindex` and `make clean`. Full internals, including how
+plus `graph_nodes`, `graph_edges` and `code_embeddings` (unused for now).
+Plans, memories and suggestions are `graph_nodes` rows under the built-in
+projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
+into, so they survive `make unindex` and `make clean`. Full internals,
+including how
 `make db <target>` drives goose and what a restore needs:
 [nuances](https://oberon-systems.github.io/claude-context-mcp/nuances.html).
 

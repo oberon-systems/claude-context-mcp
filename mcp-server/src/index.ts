@@ -44,6 +44,13 @@ const MEMORY_PROJECT = "_memory";
 // rather than a fact about a codebase, and so it has a lifecycle and a count.
 const SUGGESTIONS_PROJECT = "_suggestions";
 
+// The built-in project holding plans. A plan id names a topic and is written
+// by hand, so it is already unique across the database and is stored as the
+// node id unchanged - none of the `<about>/<id>` scoping a memory needs. The
+// project a plan is about is a tag in `metadata ->> 'about'`, exactly as a
+// memory's is, and NULL there means the plan belongs to none.
+const PLANS_PROJECT = "_plans";
+
 // A record's node id is `<about>/<id>`, which is what keeps two repositories
 // from colliding on `commit-style`. A record about no repository in
 // particular needs a segment of its own, and "*" is not one.
@@ -861,8 +868,9 @@ const DROP_REPORT = `
            WHERE f.project = p.name) AS hashes,
          (SELECT count(*) FROM code_embeddings AS c
            WHERE c.project = p.name) AS embeddings,
-         (SELECT count(*) FROM plans AS l
-           WHERE l.project = p.name) AS plans,
+         (SELECT count(*) FROM graph_nodes AS l
+           WHERE l.project = '_plans'
+             AND l.metadata ->> 'about' = p.name) AS plans,
          (SELECT count(*) FROM graph_nodes AS g
            WHERE g.project = p.name
              AND g.type <> 'memory'
@@ -990,8 +998,9 @@ function makeCallToolHandler(
           await client.query("BEGIN");
           const res = await client.query<DropReport>(DROP_REPORT, [target]);
           // graph_nodes and file_hashes cascade from projects, graph_edges
-          // and code_embeddings from graph_nodes. Plans have no foreign key
-          // and survive the drop, which is what the report says.
+          // and code_embeddings from graph_nodes. Plans live under '_plans'
+          // and only name this project in metadata, so they survive the drop,
+          // which is what the report says.
           await client.query(`DELETE FROM projects WHERE name = $1`, [target]);
           await client.query("COMMIT");
           return {
@@ -1008,9 +1017,10 @@ function makeCallToolHandler(
       }
 
       // The three plan tools are handled ahead of the project lookup below.
-      // A plan is not part of any graph: it may name a codebase this database
-      // has never indexed, and it stays readable after that codebase is
-      // dropped, so requiring the project to exist would refuse both.
+      // A plan belongs to '_plans' rather than to the graph it is about: it
+      // may name a codebase this database has never indexed, and it stays
+      // readable after that codebase is dropped, so requiring the project to
+      // exist would refuse both.
       if (name === "save_plan") {
         const planId = requireString(args, "plan_id");
         const title = requireString(args, "title");
@@ -1041,20 +1051,53 @@ function makeCallToolHandler(
           );
         }
 
-        await dbPool.query(
-          `INSERT INTO plans (
-           id, project, title, content, status, type, updated_at
-         )
-         VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
-         ON CONFLICT (id) DO UPDATE SET
-           project = EXCLUDED.project,
-           title = EXCLUDED.title,
-           content = EXCLUDED.content,
-           status = EXCLUDED.status,
-           type = EXCLUDED.type,
-           updated_at = CURRENT_TIMESTAMP`,
-          [planId, scope.project, title, content, status, planType],
-        );
+        const client = await dbPool.connect();
+        try {
+          await client.query("BEGIN");
+          // Re-created rather than assumed: dropping the project would
+          // otherwise turn every later save into a foreign key error.
+          await client.query(
+            `INSERT INTO projects (name, root_path, type)
+             VALUES ($1, 'plans://agent', 'plans')
+             ON CONFLICT (name) DO NOTHING`,
+            [PLANS_PROJECT],
+          );
+          await client.query(
+            `INSERT INTO graph_nodes (
+               project, id, name, type, content, metadata
+             )
+             VALUES ($1, $2, $3, $4, $5,
+                     JSONB_BUILD_OBJECT(
+                       'about', $6::text,
+                       'status', $7::text,
+                       'summary_source', 'manual',
+                       'updated_at', to_char(
+                         now() AT TIME ZONE 'UTC',
+                         'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                       )
+                     ))
+             ON CONFLICT (project, id) DO UPDATE SET
+               name = EXCLUDED.name,
+               type = EXCLUDED.type,
+               content = EXCLUDED.content,
+               metadata = graph_nodes.metadata || EXCLUDED.metadata`,
+            [
+              PLANS_PROJECT,
+              planId,
+              title,
+              planType,
+              content,
+              scope.project,
+              status,
+            ],
+          );
+          await client.query("COMMIT");
+        } catch (error) {
+          await client.query("ROLLBACK").catch(() => undefined);
+          throw error;
+        } finally {
+          client.release();
+        }
 
         const where =
           scope.project === null ? "global" : `project ${scope.project}`;
@@ -1103,14 +1146,26 @@ function makeCallToolHandler(
         // session named no project and has none to narrow by.
         const scope = readPlanScope(args, sessionProject);
         const res = await dbPool.query(
-          `SELECT id, project, title, content, status, type, metadata,
-                  created_at, updated_at
-             FROM plans
-            WHERE ($1::text IS NULL OR project = $1 OR project IS NULL)
-              AND status = $2
-              AND ($3::text IS NULL OR type = $3)
-            ORDER BY (project IS NULL), updated_at DESC`,
-          [scope.project, status, planType],
+          `SELECT id,
+                  metadata ->> 'about' AS project,
+                  name AS title,
+                  content,
+                  metadata ->> 'status' AS status,
+                  type,
+                  metadata - 'about' - 'status' - 'summary_source'
+                    - 'updated_at' AS metadata,
+                  created_at,
+                  metadata ->> 'updated_at' AS updated_at
+             FROM graph_nodes
+            WHERE project = $1
+              AND ($2::text IS NULL
+                   OR metadata ->> 'about' = $2
+                   OR metadata ->> 'about' IS NULL)
+              AND metadata ->> 'status' = $3
+              AND ($4::text IS NULL OR type = $4)
+            ORDER BY (metadata ->> 'about' IS NULL),
+                     metadata ->> 'updated_at' DESC`,
+          [PLANS_PROJECT, scope.project, status, planType],
         );
 
         return {
@@ -1125,10 +1180,12 @@ function makeCallToolHandler(
           title: string;
           status: string;
         }>(
-          `DELETE FROM plans
-            WHERE id = $1
-        RETURNING project, title, status`,
-          [planId],
+          `DELETE FROM graph_nodes
+            WHERE project = $1 AND id = $2
+        RETURNING metadata ->> 'about' AS project,
+                  name AS title,
+                  metadata ->> 'status' AS status`,
+          [PLANS_PROJECT, planId],
         );
 
         // A typo and a delete have to read differently, or the caller cannot

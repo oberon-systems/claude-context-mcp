@@ -106,6 +106,7 @@ plansRouter.post(
   route(async (req, res) => {
     const body = req.body as unknown;
     const id = requireBodyString(body, "id");
+    await dbPool.query(sql.ENSURE_PLANS_PROJECT);
     const rows = await dbPool.query<{ created: boolean }>(sql.SAVE_PLAN, [
       id,
       tag(readBodyString(body, "project")),

@@ -82,7 +82,8 @@ if ! report="$(psql_query -v name="$name" <<< "
            (SELECT count(*) FROM graph_edges e WHERE e.project = p.name),
            (SELECT count(*) FROM file_hashes f WHERE f.project = p.name),
            (SELECT count(*) FROM code_embeddings c WHERE c.project = p.name),
-           (SELECT count(*) FROM plans l WHERE l.project = p.name),
+           (SELECT count(*) FROM graph_nodes g WHERE g.project = '_plans'
+              AND g.metadata ->> 'about' = p.name),
            (SELECT count(*) FROM graph_nodes g WHERE g.project = p.name
               AND g.metadata ->> 'summary_source' = 'manual')
       FROM projects p

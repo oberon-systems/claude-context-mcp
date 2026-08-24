@@ -153,10 +153,10 @@ own tab.
 
 ## Plans
 
-A plan is not derived from a tree, so it is not owned by a project: the
-`plans` table holds every plan in the database, keyed on a `plan_id` unique
-across it, with `project` as a free-text tag rather than a foreign key.
-Consequences worth knowing:
+A plan is not derived from a tree, so it is not owned by a project: every
+plan is a node of the built-in `_plans` project, keyed on a `plan_id` unique
+across the database, with `project` a free-text tag in the node's metadata
+rather than a foreign key. Consequences worth knowing:
 
 - A plan survives `make unindex` and `drop_project`, and can name a
   repository this database has never indexed.

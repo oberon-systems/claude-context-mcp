@@ -60,7 +60,9 @@ report_project() {
                (SELECT count(*) FROM graph_edges e WHERE e.project = p.name),
                (SELECT count(*) FROM file_hashes f WHERE f.project = p.name),
                (SELECT count(*) FROM code_embeddings c WHERE c.project = p.name),
-               (SELECT count(*) FROM plans l WHERE l.project = p.name),
+               (SELECT count(*) FROM graph_nodes g
+                  WHERE g.project = '_plans'
+                    AND g.metadata ->> 'about' = p.name),
                (SELECT count(*) FROM graph_nodes g WHERE g.type = 'memory'
                   AND g.metadata ->> 'about' = p.name),
                (SELECT count(*) FROM graph_nodes g WHERE g.type = 'suggestion'
@@ -178,9 +180,10 @@ SELECT format('-- created: %s', to_char(now(), 'YYYY-MM-DD HH24:MI:SS'));
 \qecho ''
 \qecho 'BEGIN;'
 SELECT format('DELETE FROM projects WHERE name = %L;', :'name');
--- Plans have no foreign key to `projects`, so the delete above does not
--- cascade to them and the COPY below would collide on the primary key.
-SELECT format('DELETE FROM plans WHERE project = %L;', :'name');
+-- Plans live under '_plans', so the delete above does not cascade to them
+-- and the COPY below would collide on the primary key.
+SELECT format($fmt$DELETE FROM graph_nodes WHERE project = '_plans'
+                    AND metadata ->> 'about' = %L;$fmt$, :'name');
 
 \qecho 'COPY projects (name, root_path, indexed_at, type) FROM stdin;'
 COPY (SELECT name, root_path, indexed_at, type
@@ -206,13 +209,21 @@ COPY (SELECT project, node_id, content_chunk, embedding, created_at
         FROM code_embeddings WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
--- A global plan has no project and belongs in no single-project file; it
--- travels in the whole-database archive instead.
-\qecho 'COPY plans (id, project, title, content, status, type, metadata,'
-\qecho '            created_at, updated_at) FROM stdin;'
-COPY (SELECT id, project, title, content, status, type, metadata, created_at,
-             updated_at
-        FROM plans WHERE project = :'name') TO STDOUT;
+-- Plans are nodes of the built-in '_plans' project, which the COPY needs to
+-- exist before it runs and which a single-project file does not otherwise
+-- carry. A global plan is about no project and belongs in no single-project
+-- file; it travels in the whole-database archive instead.
+\qecho 'INSERT INTO projects (name, root_path, type)'
+\qecho "  VALUES ('_plans', 'plans://agent', 'plans')"
+\qecho '  ON CONFLICT (name) DO NOTHING;'
+
+\qecho 'COPY graph_nodes (project, id, name, type, file_path, content,'
+\qecho '                  summary, metadata, created_at) FROM stdin;'
+COPY (SELECT project, id, name, type, file_path, content, summary, metadata,
+             created_at
+        FROM graph_nodes
+       WHERE project = '_plans'
+         AND metadata ->> 'about' = :'name') TO STDOUT;
 \qecho '\\.'
 
 \qecho 'COPY file_hashes (project, file_path, hash, updated_at) FROM stdin;'
