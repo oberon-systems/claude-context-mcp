@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from functools import cache
 from typing import Any
 
+from ctxgraph.parsers.base import qualified
 from ctxgraph.parsers.languages import YAMLParser
 from ctxgraph.parsers.yamldocs import load_yaml_documents
 
@@ -114,11 +115,6 @@ def compose_document(content: str) -> dict[str, Any] | None:
     """Load a file and return it when it is compose, or None when it is not."""
     documents = load_yaml_documents(content)
     return None if documents is None else compose_mapping(documents)
-
-
-def qualified(entity_type: str, name: str) -> str:
-    """Name an entity by its kind and its declared name."""
-    return f"{entity_type}.{name}"
 
 
 def as_list(value: Any) -> list[Any]:  # noqa: ANN401

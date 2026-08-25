@@ -10,9 +10,10 @@ The system uses both an upstream parser (`graphifyy`) and custom Tree-sitter
 parsers to extract structural information.
 
 - **Languages** (via `graphifyy`): Python, TypeScript, JavaScript, Go, Rust,
-  Ruby.
-- **Infrastructure** (via this repo's own parsers): Ansible, Docker Compose,
-  Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML, JSON.
+  Ruby, PHP, Java, C, C++, C#, Kotlin, Scala.
+- **Infrastructure and markup** (via this repo's own parsers): Ansible, Docker
+  Compose, Puppet, Terraform/HCL, Dockerfiles, Makefiles, shell scripts, YAML,
+  JSON, HTML, PHP templates.
 
 ## Controlling what gets indexed
 
@@ -150,6 +151,56 @@ order and parsed as Ruby (`.erb`) or Puppet (`.epp`), so `<%= @port %>` puts
 `@port` in the graph next to the manifest that renders the file. Ruby files
 themselves go through the upstream extractor (classes, methods, call graph),
 but report no `require` edges between files.
+
+## HTML
+
+`.html` and `.htm` are read as a page: what it declares, and what it pulls in.
+
+| Markup                          | Node                  |
+| ------------------------------- | --------------------- |
+| `<title>Dashboard</title>`      | `title.Dashboard`     |
+| `<div id="root">`               | `anchor.root`         |
+| `<my-widget>`                   | `element.my-widget`   |
+| `.card { }` in `<style>`        | `style..card`         |
+| `function boot()` in `<script>` | `boot`, as a function |
+
+A standard tag gets no node - only a hyphenated one, which is what tells a
+custom element from the structure around it. The `<script>` and `<style>`
+bodies are joined in source order and handed to the JavaScript and CSS
+grammars, so an inline script contributes the same kind of nodes a `.js` file
+would.
+
+| Reference                                   | Edge          |
+| ------------------------------------------- | ------------- |
+| `<script src>`                              | `uses_script` |
+| `<link href>`                               | `uses_style`  |
+| `<img src>`, `<source src>`, `<iframe src>` | `uses_file`   |
+| `<form action>`                             | `uses_file`   |
+
+A reference is tried next to the page first and then from the project root, so
+both `js/app.js` and `/js/app.js` reach the same file, and a `?v=2` or `#top`
+tail is trimmed before the lookup. Anything naming something other than a file
+of this project is dropped rather than turned into an external node: another
+origin (`https://cdn...`, `//cdn...`), a scheme of its own (`data:`,
+`mailto:`), a bare `#fragment`, and a value still holding `{{ }}` or `${ }`.
+
+A call an inline script makes becomes an edge only when the same page declares
+what it calls. A call into a `.js` file cannot: those files belong to the
+upstream extractor, whose symbols this pass never sees, so the edge would be a
+placeholder rather than a link.
+
+## PHP
+
+`.php` goes to the upstream extractor, which reads classes, functions,
+methods, `use` declarations and the call graph between them.
+
+`.phtml` templates cannot: the extractor routes on the `.php` suffix alone. So
+they get a parser here instead, reading the `<?php ?>` islands for classes,
+interfaces, traits, functions and methods, with the same rule as an inline
+script - a call or an `extends` becomes an edge only when the template declares
+the target itself. What does reach another file is `include` and `require`,
+which become `includes` edges resolved the way a page's assets are. The markup
+around the islands is opaque to this parser.
 
 ## JSON
 

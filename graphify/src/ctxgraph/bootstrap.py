@@ -73,7 +73,7 @@ INTERPRETER_EXTENSIONS = {
 }
 # Parser classes are named for their grammar, which spells a few of them the
 # way Python wants rather than the way the format is written.
-LABEL_OVERRIDES = {"Json": "JSON"}
+LABEL_OVERRIDES = {"Html": "HTML", "Json": "JSON", "Phtml": "PHP template"}
 # A directory is only a bulk candidate when it is both large in absolute
 # terms and a real share of the tree, so a small repository never reports one.
 BULK_MIN_FILES = 200

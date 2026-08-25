@@ -338,8 +338,8 @@ reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/depl
 Two optional gitignore-style files at the indexed project's root,
 `.ctxignore` (paths to prune) and `.ctxkeep` (files that become nodes,
 replacing the default selection). `make install` generates both from what
-the tree holds. Per-format nuances - what Ansible, Docker Compose, Puppet
-and JSON parsing extracts - are in
+the tree holds. Per-format nuances - what Ansible, Docker Compose, Puppet,
+JSON, HTML and PHP parsing extracts - are in
 [formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
 
 ## Make targets

@@ -41,6 +41,9 @@ PUPPET_TEMPLATE_DIR = "templates"
 # claims that name in ANSIBLE_RELATION_DIRS, so the two are told apart by the
 # file the edge leaves rather than by the relation alone.
 PUPPET_SOURCE_EXTENSIONS = (".pp",)
+# Pages, whose references are paths rather than module names, and whose
+# site root is the project root.
+HTML_SOURCE_EXTENSIONS = (".html", ".htm", ".phtml")
 
 
 def python_import_candidates(target: str, base_dir: str) -> list[str]:
@@ -156,6 +159,30 @@ def puppet_candidates(target: str, rel_path: str) -> list[str]:
     return candidates
 
 
+def html_candidates(target: str, rel_path: str) -> list[str]:
+    """Return the file paths an asset reference of a page may point at.
+
+    A page names an asset either relative to itself or from the site root, and
+    the site root is the project root here - so a leading slash does not put
+    the target outside the tree, it picks the second of the two candidates.
+    """
+    cleaned = target.split("?", 1)[0].split("#", 1)[0].lstrip("/")
+    if not cleaned:
+        return []
+    base_dir = posixpath.dirname(rel_path)
+    candidates = [
+        posixpath.normpath(posixpath.join(base_dir, cleaned)),
+        posixpath.normpath(cleaned),
+    ]
+    # A candidate still climbing out of the tree names no indexed file, and
+    # keeping it would only spend a lookup on it.
+    return [
+        candidate
+        for index, candidate in enumerate(candidates)
+        if not candidate.startswith("..") and candidate not in candidates[:index]
+    ]
+
+
 def resolve_file_target(
     relation_type: str, target: str, rel_path: str, known_files: set[str]
 ) -> str | None:
@@ -164,6 +191,8 @@ def resolve_file_target(
         return resolve_import(target, rel_path, known_files)
     if rel_path.endswith(PUPPET_SOURCE_EXTENSIONS):
         candidates = puppet_candidates(target, rel_path)
+    elif rel_path.endswith(HTML_SOURCE_EXTENSIONS):
+        candidates = html_candidates(target, rel_path)
     else:
         candidates = ansible_candidates(relation_type, target, rel_path)
     for candidate in candidates:

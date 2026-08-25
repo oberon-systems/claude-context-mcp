@@ -6,17 +6,21 @@ Each class is a pair of queries; the behaviour lives in CodeParser.
 from __future__ import annotations
 
 import posixpath
+import re
 from typing import Any
 
 import tree_sitter_bash
+import tree_sitter_css
 import tree_sitter_dockerfile
 import tree_sitter_embedded_template
 import tree_sitter_go
 import tree_sitter_hcl
+import tree_sitter_html
 import tree_sitter_javascript
 import tree_sitter_json
 import tree_sitter_make
 import tree_sitter_markdown
+import tree_sitter_php
 import tree_sitter_puppet
 import tree_sitter_python
 import tree_sitter_ruby
@@ -26,7 +30,13 @@ import tree_sitter_typescript
 import tree_sitter_yaml
 from tree_sitter import Language, Node, Parser, Query, QueryCursor
 
-from ctxgraph.parsers.base import CodeParser, node_text, strip_literal, unique_pairs
+from ctxgraph.parsers.base import (
+    CodeParser,
+    node_text,
+    qualified,
+    strip_literal,
+    unique_pairs,
+)
 
 
 class PythonParser(CodeParser):
@@ -127,6 +137,226 @@ class JavaScriptParser(CodeParser):
     def __init__(self) -> None:
         """Initialize JavaScript parser."""
         super().__init__(tree_sitter_javascript.language())
+
+
+# Attributes naming another file, by the tag carrying them and the edge each
+# becomes.
+HTML_ASSET_ATTRIBUTES: dict[tuple[str, str], str] = {
+    ("script", "src"): "uses_script",
+    ("link", "href"): "uses_style",
+    ("img", "src"): "uses_file",
+    ("source", "src"): "uses_file",
+    ("iframe", "src"): "uses_file",
+    ("form", "action"): "uses_file",
+}
+# A value that names something other than a file of this project: another
+# origin, a bare fragment, a scheme of its own, or a placeholder only the
+# engine rendering the page can expand.
+HTML_FOREIGN_PREFIXES = ("//", "#")
+HTML_SCHEME = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+HTML_PLACEHOLDERS = ("{{", "${", "<?", "<%")
+
+
+def asset_path(value: str) -> str:
+    """Return the project path an attribute points at, or "" when it is not one."""
+    target = value.strip()
+    if not target or target.startswith(HTML_FOREIGN_PREFIXES):
+        return ""
+    if HTML_SCHEME.match(target) or any(mark in target for mark in HTML_PLACEHOLDERS):
+        return ""
+    return target.split("?", 1)[0].split("#", 1)[0]
+
+
+def tag_header(node: Node) -> Node | None:
+    """Return the opening tag of an element, in either of its two forms."""
+    for child in node.children:
+        if child.type in {"start_tag", "self_closing_tag"}:
+            return child
+    return None
+
+
+def tag_name(node: Node) -> str:
+    """Return the lowercased name of an element."""
+    header = tag_header(node)
+    if header is None:
+        return ""
+    for child in header.children:
+        if child.type == "tag_name":
+            return node_text(child).lower()
+    return ""
+
+
+def attribute_value(node: Node) -> str:
+    """Return the value of an attribute, quoted or bare."""
+    for child in node.children:
+        if child.type == "attribute_value":
+            return node_text(child)
+        if child.type == "quoted_attribute_value":
+            for inner in child.children:
+                if inner.type == "attribute_value":
+                    return node_text(inner)
+            return ""
+    return ""
+
+
+def tag_attributes(node: Node) -> dict[str, str]:
+    """Return the attributes of an element, lowercased names to raw values."""
+    header = tag_header(node)
+    if header is None:
+        return {}
+    found: dict[str, str] = {}
+    for attribute in header.children:
+        if attribute.type != "attribute":
+            continue
+        for child in attribute.children:
+            if child.type == "attribute_name":
+                found[node_text(child).lower()] = attribute_value(attribute)
+    return found
+
+
+def element_text(node: Node) -> str:
+    """Return the direct text of an element, with its whitespace collapsed."""
+    parts = [node_text(child) for child in node.children if child.type == "text"]
+    return " ".join(" ".join(parts).split())
+
+
+def local_relations(
+    relations: list[dict[str, str]], declared: set[str]
+) -> list[dict[str, str]]:
+    """Drop the symbol relations whose target this file does not declare itself.
+
+    A symbol edge resolves against the entities our own parsers wrote, and the
+    code in the `.js` and `.php` files next to this one belongs to the upstream
+    extractor - so a call leaving the file would become an unresolved
+    placeholder rather than an edge worth having.
+    """
+    return [
+        relation
+        for relation in relations
+        if relation["scope"] == "file" or relation["target"] in declared
+    ]
+
+
+class CssParser(CodeParser):
+    """CSS specific AST parser.
+
+    Registered for no extension of its own: it is here for the `<style>`
+    blocks HtmlParser hands over.
+    """
+
+    FAMILY = "css"
+    ENTITY_QUERY = "(rule_set (selectors) @style)"
+
+    def __init__(self) -> None:
+        """Initialize CSS parser."""
+        super().__init__(tree_sitter_css.language())
+
+    def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return one node per rule, named by the selector it is written under."""
+        if self.entity_query is None:
+            return []
+        root = self.parse(content)
+        return unique_pairs(
+            (qualified(kind, " ".join(text.split())), kind)
+            for kind, text in self.capture_texts(self.entity_query, root)
+        )
+
+
+class HtmlParser(CodeParser):
+    """HTML specific AST parser: the page, its assets and the code inside it.
+
+    A page is markup and a place code is written, so the `<script>` and
+    `<style>` bodies are joined in source order and handed to the grammar that
+    can read them - the same division of labour TemplateParser makes for
+    `<% %>`, without needing to reconstruct a half-open program.
+    """
+
+    # Deliberately the ecmascript family: what an inline script declares is a
+    # JavaScript symbol, and the markup around it changes nothing about that.
+    FAMILY = "ecmascript"
+    ENTITY_QUERY = """
+        (element) @element
+        (script_element) @element
+        (style_element) @element
+    """
+
+    def __init__(self) -> None:
+        """Initialize HTML parser and the two grammars it delegates to."""
+        super().__init__(tree_sitter_html.language())
+        self.script_parser = JavaScriptParser()
+        self.style_parser = CssParser()
+
+    def elements(self, content: str) -> list[Node]:
+        """Return every element of the page, tags with a body included."""
+        if self.entity_query is None:
+            return []
+        captures = self.capture_nodes(self.entity_query, self.parse(content))
+        return sorted(captures.get("element", []), key=lambda node: node.start_byte)
+
+    @staticmethod
+    def embedded(elements: list[Node], tag: str) -> str:
+        """Join the bodies of every `<tag>` of the page into one source."""
+        spans = [
+            node_text(child).strip()
+            for element in elements
+            if tag_name(element) == tag
+            for child in element.children
+            if child.type == "raw_text"
+        ]
+        return "\n".join(span for span in spans if span)
+
+    def get_entities(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return the structure of the page plus what its inline code declares."""
+        elements = self.elements(content)
+        pairs: list[tuple[str, str]] = []
+        for element in elements:
+            name = tag_name(element)
+            if name == "title":
+                heading = element_text(element)
+                if heading:
+                    pairs.append((qualified("title", heading), "title"))
+            anchor = tag_attributes(element).get("id", "").strip()
+            if anchor:
+                pairs.append((qualified("anchor", anchor), "anchor"))
+            # A hyphen is what tells a custom element from a standard one, and
+            # only the custom ones are a declaration rather than structure.
+            if "-" in name:
+                pairs.append((qualified("element", name), "element"))
+        entities = unique_pairs(iter(pairs))
+        script = self.embedded(elements, "script")
+        if script:
+            entities.extend(self.script_parser.get_entities(script, rel_path))
+        style = self.embedded(elements, "style")
+        if style:
+            entities.extend(self.style_parser.get_entities(style, rel_path))
+        return entities
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return the files the page pulls in, and the calls its own code makes."""
+        elements = self.elements(content)
+        pairs: list[tuple[str, str]] = []
+        for element in elements:
+            name = tag_name(element)
+            for attribute, value in tag_attributes(element).items():
+                relation_type = HTML_ASSET_ATTRIBUTES.get((name, attribute))
+                if relation_type is not None:
+                    pairs.append((asset_path(value), relation_type))
+        relations = [
+            {"target": entry["name"], "type": entry["type"], "scope": "file"}
+            for entry in unique_pairs(iter(pairs))
+        ]
+        script = self.embedded(elements, "script")
+        if script:
+            declared = {
+                entity["name"]
+                for entity in self.script_parser.get_entities(script, rel_path)
+            }
+            relations.extend(
+                local_relations(
+                    self.script_parser.get_relations(script, rel_path), declared
+                )
+            )
+        return relations
 
 
 class GoParser(CodeParser):
@@ -840,3 +1070,61 @@ class EppParser(TemplateParser):
     def __init__(self) -> None:
         """Initialize EPP parser."""
         super().__init__(tree_sitter_puppet.language())
+
+
+class PhtmlParser(CodeParser):
+    """PHP template parser, reading the PHP islands of a `.phtml` file.
+
+    `.php` itself belongs to the upstream extractor, which routes on that one
+    suffix and so never sees a template. No reassembly is needed here: the
+    grammar this uses is the variant that reads text interleaved with
+    `<?php ?>` rather than PHP alone.
+    """
+
+    FAMILY = "php"
+    ENTITY_QUERY = """
+        (function_definition name: (name) @function)
+        (class_declaration name: (name) @class)
+        (interface_declaration name: (name) @interface)
+        (trait_declaration name: (name) @trait)
+        (method_declaration name: (name) @method)
+    """
+    RELATION_QUERY = """
+        (function_call_expression function: (name) @calls)
+        (function_call_expression function: (qualified_name (name) @calls))
+        (member_call_expression name: (name) @calls)
+        (scoped_call_expression name: (name) @calls)
+        (base_clause (name) @inherits)
+        (class_interface_clause (name) @inherits)
+        (class_interface_clause (qualified_name (name) @inherits))
+    """
+    # The one relation of a template that reaches another file, and the reason
+    # `.phtml` is worth a parser at all.
+    INCLUDE_QUERY = """
+        (include_expression (string (string_content) @includes))
+        (include_once_expression (string (string_content) @includes))
+        (require_expression (string (string_content) @includes))
+        (require_once_expression (string (string_content) @includes))
+    """
+
+    def __init__(self) -> None:
+        """Initialize PHP template parser."""
+        super().__init__(tree_sitter_php.language_php())
+        self.include_query = self._compile(self.INCLUDE_QUERY)
+
+    def get_relations(self, content: str, rel_path: str) -> list[dict[str, str]]:
+        """Return the files the template includes, and the calls it answers itself."""
+        declared = {entity["name"] for entity in self.get_entities(content, rel_path)}
+        relations = local_relations(super().get_relations(content, rel_path), declared)
+        if self.include_query is None:
+            return relations
+        root = self.parse(content)
+        includes = unique_pairs(
+            (text.strip(), kind)
+            for kind, text in self.capture_texts(self.include_query, root)
+        )
+        relations.extend(
+            {"target": entry["name"], "type": entry["type"], "scope": "file"}
+            for entry in includes
+        )
+        return relations

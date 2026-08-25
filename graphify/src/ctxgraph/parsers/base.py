@@ -13,6 +13,11 @@ def node_text(node: Node) -> str:
     return (node.text or b"").decode("utf-8", "replace")
 
 
+def qualified(entity_type: str, name: str) -> str:
+    """Name an entity by its kind and its declared name."""
+    return f"{entity_type}.{name}"
+
+
 def strip_literal(value: str) -> str:
     """Strip the quoting a grammar keeps around string literals."""
     return value.strip().strip("'\"`")
