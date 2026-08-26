@@ -6,7 +6,7 @@
 # skips the check rather than failing a commit it cannot run.
 set -euo pipefail
 
-image="nginx:1.27-alpine"
+image="nginx:1.30.4-alpine"
 config="nginx/default.conf"
 
 if ! command -v docker > /dev/null 2>&1; then
