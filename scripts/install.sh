@@ -143,22 +143,31 @@ skill_target="skill-install"
     AGENT_ROOT="$target" 2>&1 | sed 's/^/  /'
 note "skills" "installed for $target"
 
-# 4. The instruction file. Claude reads CLAUDE.local.md beside its CLAUDE.md;
-#    Gemini has no .local convention and reads GEMINI.md, so the same rendered
-#    text goes to both names.
+# 4. The instruction file. Claude reads CLAUDE.local.md beside its CLAUDE.md,
+#    which is private and always written. Gemini has no .local convention, so
+#    the same text goes to GEMINI.md - but only when a codebase has none, since
+#    that name is where its own instructions to Gemini live.
 echo
 echo "Instructions"
 render() {
     sed -e "s|@MAKE@|$make_prefix|g" -e "s|@ROOT@|$target|g" \
-        -e "s|@PROJECT@|$project|g" templates/CLAUDE.local.md
+        -e "s|@PROJECT@|$project|g" -e "s|@FILE@|$1|g" templates/CLAUDE.local.md
 }
 
 for name in CLAUDE.local.md GEMINI.md; do
-    if [ "$name" = "GEMINI.md" ] && ! command -v gemini > /dev/null; then
-        note "$name" "skipped (gemini is not installed)"
-        continue
+    if [ "$name" = "GEMINI.md" ]; then
+        if ! command -v gemini > /dev/null; then
+            note "$name" "skipped (gemini is not installed)"
+            continue
+        fi
+        # GEMINI.md is Gemini's counterpart of CLAUDE.md, not of
+        # CLAUDE.local.md: one already in the tree is the codebase's own.
+        if [ -e "$target/$name" ]; then
+            note "$name" "kept (the project's own instructions)"
+            continue
+        fi
     fi
-    render > "$work/$name"
+    render "$name" > "$work/$name"
     if offer "$name" "$target/$name" "$work/$name"; then
         cp "$work/$name" "$target/$name"
         note "$name" "written"

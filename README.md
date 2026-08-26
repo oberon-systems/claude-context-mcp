@@ -129,14 +129,14 @@ make install AGENT_ROOT=/home/you/work/api
 
 Six things, none of which replaces a file that already exists:
 
-| Step                           | What it leaves behind                                                                                      |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                                        |
-| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                                                  |
-| `.gemini/settings.json`        | the same address for the Gemini CLI                                                                        |
-| `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                        |
-| `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md`                                        |
-| shell alias                    | `context-install`, in `~/.bashrc` - one command onboards a tree, and indexing is a button in the dashboard |
+| Step                           | What it leaves behind                                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
+| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                                                      |
+| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                                                                |
+| `.gemini/settings.json`        | the same address for the Gemini CLI                                                                                      |
+| `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                                      |
+| `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md` - `GEMINI.md` only when the tree has none of its own |
+| shell alias                    | `context-install`, in `~/.bashrc` - one command onboards a tree, and indexing is a button in the dashboard               |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 

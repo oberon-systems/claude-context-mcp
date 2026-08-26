@@ -1,4 +1,4 @@
-# CLAUDE.local.md
+# @FILE@
 
 Written by `make install` from the claude-context-mcp template. This project is
 indexed as `@PROJECT@`, and the `context` MCP server answers from that graph.
