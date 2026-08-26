@@ -19,7 +19,7 @@ Three producers write it, and `metadata.summary_source` records which:
 | `llm`            | a local GGUF model, in a pass of its own | a real description       |
 | `manual`         | `save_node_summary`                      | yours, never overwritten |
 
-`auto` is free and immediate: `make index` takes the leading docstring,
+`auto` is free and immediate: indexing takes the leading docstring,
 comment block or first heading. It is also the reason the model pass exists.
 A Terraform file with no header comment becomes "block: locals,
 dynamic.alias, +2 more", which reads like a summary and answers nothing; a
@@ -123,7 +123,7 @@ Files that look like secrets (`.env`, `*.pem`, `*.tfvars`, `id_rsa*`) get a
 node and a head-of-file summary like any other, but the API refuses to serve
 their text - to a worker, to the dashboard, to anything. A file the graph
 names and the mount does not hold is reported as `skipped` with `not on the
-mount`: the graph is ahead of the tree, and `make reindex` settles it.
+mount`: the graph is ahead of the tree, and a fresh index run settles it.
 
 The queue is served at `/worker` on the stack's entry point, which is plain
 HTTP on every interface, so it belongs on a trusted LAN or a VPN. Terminating

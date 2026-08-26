@@ -34,7 +34,7 @@ export function DropModal({
     <div className="modal-backdrop" role="dialog" aria-modal="true">
       <div className="modal">
         <h2>Drop {report.name}</h2>
-        <p>One {"`make index`"} rebuilds:</p>
+        <p>One index run rebuilds:</p>
         <ul>
           <li>
             <Count value={report.nodes} /> nodes

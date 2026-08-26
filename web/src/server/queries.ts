@@ -62,7 +62,7 @@ export const PROJECT_EXTRAS = `
            WHERE c.project = $1) AS embeddings`;
 
 // Mirrors DROP_REPORT in mcp-server/src/index.ts, so the modal and
-// `make unindex` cannot disagree about what a drop costs.
+// the two callers cannot disagree about what a drop costs.
 export const DROP_REPORT = `
   SELECT p.root_path, p.indexed_at,
          (SELECT count(*) FROM graph_nodes AS g

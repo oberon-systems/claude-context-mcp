@@ -18,7 +18,7 @@ parsers to extract structural information.
 ## Controlling what gets indexed
 
 Two optional files at the root of the indexed project, both gitignore
-syntax, read fresh on every `make index`:
+syntax, read fresh on every index run:
 
 | File         | Purpose                                             |
 | ------------ | --------------------------------------------------- |

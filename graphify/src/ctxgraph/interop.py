@@ -124,7 +124,7 @@ def install_extractor_cache(project: str, fresh: bool = False) -> int:
 def prune_extractor_caches(known: set[str]) -> tuple[int, int]:
     """Drop cached extractions no project owns. Returns projects, entries.
 
-    A project can leave the database through `make unindex` or through the
+    A project can leave the database through the dashboard or through the
     `drop_project` tool, and neither can reach this volume: the tool runs in
     another container, and the script talks to postgres only. So the cache is
     collected here instead, against the projects that still exist.

@@ -46,9 +46,9 @@ indexed_projects() {
     echo "Indexed: ${names:-none}." >&2
 }
 
-# What one `make index` brings back and what nothing brings back are different
+# What one index run brings back and what nothing brings back are different
 # losses, so they are never added into one number: it is what tells the reader
-# whether the file matters. `unindex` splits the same counts differently -
+# whether the file matters. A project drop splits the same counts differently -
 # there, plans survive the drop, and here they only survive in this file.
 report_project() {
     local row root indexed nodes edges hashes embeddings plans manual
@@ -74,7 +74,7 @@ report_project() {
     IFS='|' read -r root indexed nodes edges hashes embeddings plans \
         memories suggestions manual <<< "$row"
     echo "project \"$1\" ($root, indexed $indexed)"
-    echo "  rebuilt by one 'make index': $nodes nodes, $edges edges," \
+    echo "  rebuilt by one index run: $nodes nodes, $edges edges," \
         "$hashes file hashes, $embeddings embeddings"
     echo "  not rebuilt, gone for good: $plans plans, $manual manual summaries"
     # Memories and suggestions about this project live under the built-in

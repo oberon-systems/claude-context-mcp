@@ -43,8 +43,8 @@ nav_order: 2
 You can index multiple codebases into the same database stack:
 
 ```bash
-make index PROJECT=/path/to/another/project
-make index PROJECT=/path/to/a/handbook TYPE=docs
+context-install                 # from /path/to/another/project
+context-install TYPE=docs       # from /path/to/a/handbook
 ```
 
 The stack manages them by path, and you can access them by name via MCP.

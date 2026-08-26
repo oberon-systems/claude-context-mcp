@@ -837,13 +837,13 @@ async function requireProject(project: string): Promise<string> {
     const names = all.rows.map((row) => row.name as string).join(", ");
     throw new Error(
       `No project named "${project}". Indexed: ${names || "none"}. ` +
-        "Index one with `make index PROJECT=/path/to/it`.",
+        "Onboard one with `context-install`, then index it from the dashboard.",
     );
   }
   return project;
 }
 
-// Counted per project rather than summed: one `make index` brings the derived
+// Counted per project rather than summed: one index run brings the derived
 // rows back, nothing brings a hand-written summary back, and a plan is not
 // tied to the project row at all - it is tagged with the name and stays.
 //
@@ -911,7 +911,7 @@ function describeDrop(
     row.type === "memory" || row.type === "suggestions"
       ? []
       : [
-          `  rebuilt by one \`make index\`: ${row.nodes} nodes, ` +
+          `  rebuilt by one index run: ${row.nodes} nodes, ` +
             `${row.edges} edges, ${row.hashes} file hashes, ` +
             `${row.embeddings} embeddings`,
         ];
@@ -1806,7 +1806,7 @@ function makeCallToolHandler(
         const typeVal = "file";
 
         // The summary is tagged manual so the indexer leaves it alone; without
-        // the tag the next `make index` run overwrites it with a generated one.
+        // the tag the next index run overwrites it with a generated one.
         await dbPool.query(
           `INSERT INTO graph_nodes (project, id, name, type, summary, metadata)
          VALUES ($1, $2, $3, $4, $5, '{"summary_source": "manual"}'::jsonb)

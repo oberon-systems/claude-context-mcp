@@ -43,7 +43,7 @@ A plan id is stored as the node id unchanged. It names a topic and is written
 by hand, so it is already unique across the database and needs none of the
 `<about>/<id>` scoping a memory id gets.
 
-`make unindex` cascades from the `projects` row, so one `DELETE` there takes
+Dropping a project cascades from the `projects` row, so one `DELETE` there takes
 that project's nodes, edges, hashes and embeddings, and nothing of any other
 project. Plans are not derived and have no foreign key, so they stay. So do
 memories and suggestions about that project: they sit under a built-in

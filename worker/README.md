@@ -353,6 +353,6 @@ that was in flight. This is why a job is a lease queue and not a list.
 - **401** - the token does not match the stack's `WORKER_API_TOKEN`.
 - **A job that finishes instantly with everything skipped** - the project was
   indexed before file text was stored. Re-index it on the stack
-  (`make reindex PROJECT=...`) and create the job again.
+  (the dashboard's Fresh button) and create the job again.
 - **The GPU is idle** - the CPU wheel got installed. Reinstall with the CUDA
   index above.

@@ -15,7 +15,7 @@ directory; there is no per-stack path to keep two apart.
 
 ## Configuration
 
-Copy `.env.example` to `.env`. `make up` and `make index` refuse to run
+Copy `.env.example` to `.env`. `make up` and `make install` refuse to run
 without it.
 
 | Variable            | Default   | Purpose                                                                                         |
@@ -119,8 +119,8 @@ Both directions print what's about to be replaced and ask first
 (`FORCE=1` skips the prompt), and both run inside a single transaction so a
 failed restore can't leave a half-restored database.
 
-Worth doing before `make unindex` and before `make clean`: nodes, edges,
-hashes and embeddings come back with one `make index`, but plans, manually
+Worth doing before dropping a project and before `make clean`: nodes, edges,
+hashes and embeddings come back with one index run, but plans, manually
 written summaries and everything in `_memory` don't come back from anywhere
 else.
 

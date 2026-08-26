@@ -13,9 +13,7 @@ make lint        run every pre-commit hook over every file
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
-make index       index PROJECT=<path>, TYPE=docs|config categorises it
-make reindex     index PROJECT=<path> again, trusting neither cache
-make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
+context-install  onboard the tree you stand in; index it from the dashboard
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
 make backup      write the database, or one project, to a file
 make restore     put a backup file back
@@ -70,7 +68,7 @@ down the client session.
 
 Every project carries a type: `codebase` (the default), `docs` and `config`
 for indexed trees, and `memory` for the built-in `_memory` project. It is set
-by `make index PROJECT=... TYPE=docs` and stored once - a later run without
+by the type given at onboarding and stored once - a later run without
 `TYPE=` keeps it rather than resetting it.
 
 The type earns its place in `search_code_nodes`, which is the one read that
@@ -104,7 +102,7 @@ drop_memory(memory_id: "api/commit-style")
 A memory is tagged with what it is about, the way a plan is - a project name,
 or `"*"` for one belonging to no repository in particular - and reading one
 scope always returns the global ones alongside it. Nothing indexes into
-`_memory`: `make index` refuses a project name starting with `_`, so a memory
+`_memory`: indexing refuses a project name starting with `_`, so a memory
 is never pruned by a re-index the way a derived node is. It is also not a
 plan: a memory is what stays true after the task, a plan is what to do next.
 
@@ -158,7 +156,7 @@ plan is a node of the built-in `_plans` project, keyed on a `plan_id` unique
 across the database, with `project` a free-text tag in the node's metadata
 rather than a foreign key. Consequences worth knowing:
 
-- A plan survives `make unindex` and `drop_project`, and can name a
+- A plan survives a project drop and `drop_project`, and can name a
   repository this database has never indexed.
 - `get_plans` defaults to the connected project plus the global ones;
   `project: "*"` lists every project's plans at once.
@@ -197,5 +195,5 @@ can reach the entry point can edit what it shows.
 
 The only writes it can make are to plans and suggestions, and dropping a
 project - a drop reports what it will cost before it happens and asks the
-project name to be typed as confirmation. Re-indexing isn't offered there; `make index`
+project name to be typed as confirmation. Re-indexing is the button next to it
 remains the way in.

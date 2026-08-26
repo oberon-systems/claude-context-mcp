@@ -80,7 +80,7 @@ else
 fi
 
 # The scanner derives the name the same way the indexer does, which is what
-# makes the /mcp/<project> address match the row `make index` will create.
+# makes the /mcp/<project> address match the row indexing will create.
 # Without it the basename is the best guess available.
 if [ -z "$project" ]; then
     project="$(basename "$target" | tr '[:upper:]' '[:lower:]' \
@@ -128,23 +128,18 @@ for name in CLAUDE.local.md GEMINI.md; do
 done
 echo "  rendered from templates/CLAUDE.local.md"
 
-# 5. The aliases. This is the one step that writes outside both repositories,
-#    so it is fenced by a pair of markers and never appends twice - and it
-#    refuses to duplicate aliases of the same names that predate the marker.
-#    A block that is already there is rewritten when it has fallen behind, which
-#    is how an alias added later reaches a shell that was onboarded before it.
+# 5. The alias. One command onboards a tree and nothing else needs one:
+#    indexing is a button in the dashboard now, and the skills come with the
+#    onboarding rather than after it. Fenced by a pair of markers so it never
+#    appends twice, and rewritten when it has fallen behind - which is how a
+#    shell onboarded under the old seven aliases loses the six that no longer
+#    point at anything.
 echo
 echo "Aliases"
 alias_block() {
     cat <<BLOCK
 $marker
-alias context-index='make -C $repo_root index PROJECT=\$(pwd)'
-alias context-reindex='make -C $repo_root reindex PROJECT=\$(pwd)'
-alias context-status='make -C $repo_root status'
 alias context-install='make -C $repo_root install AGENT_ROOT=\$(pwd)'
-alias context-install-skill='make -C $repo_root skill-install AGENT_ROOT=\$(pwd)'
-alias context-reinstall-skill='make -C $repo_root skill-reinstall AGENT_ROOT=\$(pwd)'
-alias context-status-skill='make -C $repo_root skill-status AGENT_ROOT=\$(pwd)'
 $end_marker
 BLOCK
 }

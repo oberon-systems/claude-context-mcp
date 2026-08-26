@@ -53,7 +53,7 @@ Tooling: `pre-commit`, `commitizen` (`wyld-cz` adapter when installed), `ruff`,
   `/.claude/skills/` holds the installed copies.
 - `/templates/` - the `CLAUDE.local.md` an onboarded codebase is given.
 - `/scripts/` - `install.sh` and `mcp_register.py` drive `make install`;
-  `backup.sh`, `restore.sh`, `unindex.sh` drive the database targets.
+  `backup.sh` and `restore.sh` drive the database targets.
 
 Current state is tracked in `ROADMAP.md`. Implementation may be handed to the
 Gemini CLI - see the `delegate` skill.

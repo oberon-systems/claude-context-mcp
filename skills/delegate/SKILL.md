@@ -38,7 +38,7 @@ Sonet 5 sub-agent.
      `~/.gemini/tmp/<project>/<name>`, reporting success. So either name an output
      file inside the repo, or read the result back from that fallback directory
      instead of concluding the run produced nothing.
-5. **Re-index** with `make index PROJECT=<path>`, so the review reads a graph
+5. **Re-index** from the dashboard, so the review reads a graph
    that matches the tree rather than the one from before the edit.
 
 ## What the task file must always carry

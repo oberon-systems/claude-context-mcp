@@ -39,7 +39,7 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
-	logs ps status index reindex summarize unindex backup restore psql clean \
+	logs ps status mounts summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
@@ -48,7 +48,7 @@ $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
 .PHONY: help init install mounts shell lint check build pull up down restart logs ps \
-	status index reindex summarize unindex backup restore psql clean graphify \
+	status summarize backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job \
 	require-venv require-env require-not-root require-model
@@ -118,18 +118,23 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # it is in the other repository. A codebase reaching this through a proxy
 # target of its own passes that instead.
 MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
-INDEX ?= 1
 ALIASES ?=
 SHELL_RC ?=
 
-install: require-env require-not-root  ## Onboard AGENT_ROOT and index it
+# The one command a codebase needs. It registers the project, writes its
+# selection files, installs the skills, writes the alias, and gives the API a
+# mount for the tree - but it does not index. That is a button in the
+# dashboard, because an index run is not part of setting up.
+install: require-env require-not-root  ## Onboard AGENT_ROOT: project, skills, alias, mount
 	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
 		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
 		scripts/install.sh
-	@test '$(INDEX)' = '0' \
-		|| $(MAKE) --no-print-directory index TYPE='$(TYPE)' \
-			PROJECT='$(abspath $(AGENT_ROOT))'
+	@$(MAKE) --no-print-directory mounts \
+		PROJECT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)'
+	@# The API is long lived, so a tree added just now is invisible to it
+	@# until the container is recreated against the rewritten override.
+	$(COMPOSE) up -d worker-api
 
 shell: require-venv  ## Open an interactive subshell with the virtualenv activated
 	@$(SHELL) --rcfile <(cat ~/.bashrc 2> /dev/null; \
@@ -173,7 +178,7 @@ up: require-env  ## Start the database, the services and the entry point
 	$(COMPOSE) up -d postgres worker-api mcp-server viewer web nginx
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
-# graphify container left over from `make index` keeps the network alive and
+# graphify container left over from a summarizing run keeps the network alive and
 # the teardown ends in "Resource is still in use". Name the profile so the
 # whole project goes.
 down:  ## Stop the stack, keeping the database volume
@@ -249,44 +254,6 @@ status: require-env  ## Show whether the stack runs and whether anything uses it
 			 where is_applied" 2> /dev/null | tr -d '\r'); \
 	echo "schema:     $${schema:-unmigrated}"
 
-# graphify runs to completion and exits, so `run --rm` rather than `up`.
-#
-# One database holds every indexed codebase, so the tree to walk is an argument
-# rather than a setting: `make index PROJECT=/path/to/anything` mounts that
-# path and stores its graph under its own name. The target needs nothing of the
-# indexed repository - no checkout of this one inside it, no .env, no Makefile -
-# which is what makes indexing a neighbour a one-liner. PROJECT_PATH from .env
-# is the default, so a plain `make index` keeps meaning what it did.
-#
-# PROJECT_ROOT travels alongside the mount because the container only ever sees
-# /project, and the projects table records where that came from.
-#
-# FRESH=1 re-extracts every file instead of trusting a cache - the extractor's
-# own per-file cache and the file_hashes table both. Spelled apart from FORCE,
-# which means "skip the confirmation" for `unindex` and `clean`.
-PROJECT ?=
-PROJECT_NAME ?=
-# What the project is, for the cross-project MCP search: codebase (the
-# default), docs, config. Unset keeps whatever is already stored, so it is
-# given once and not on every re-index.
-TYPE ?=
-FRESH ?=
-# SUMMARIZE=1 has the index run write model summaries as it goes. Off by
-# default because it costs seconds per file: `make summarize` is the same work
-# without holding up the graph.
-SUMMARIZE ?=
-# AUTO=1 makes `summarize` walk every indexed project even when one is named.
-# Naming none already means that, so this is for overriding a PROJECT= that is
-# in the shell's environment.
-AUTO ?=
-BG ?=
-# Stop after this many files. A first pass over a large tree is measured in
-# hours, and this is how it is timed before one is spent.
-LIMIT ?=
-FILE ?=
-# Backups rotate by default: a target that only ever grows is a target nobody
-# prunes. KEEP= empty turns it off for one run and keeps everything.
-KEEP ?= 7
 BACKUP_DIR ?=
 INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 
@@ -297,16 +264,6 @@ INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 mounts: require-env  ## Rewrite docker-compose.override.yaml from the projects table
 	@COMPOSE='$(COMPOSE)' ADD='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' \
 		scripts/mounts.sh
-
-index: require-env  ## Index PROJECT (TYPE= categorises it)
-	@$(MAKE) --no-print-directory mounts \
-		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
-	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
-		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
-		$(if $(TYPE),PROJECT_TYPE='$(TYPE)') \
-		$(if $(FRESH),FORCE_REEXTRACT=1) \
-		$(if $(SUMMARIZE),SUMMARIZE=1 LLM_MODEL_PATH='$(MODEL_PATH)') \
-		$(COMPOSE) --profile index run --rm graphify
 
 # The slow half of indexing, on its own: the model describes the files whose
 # summary still comes from the head of the file, and marks each one as its
@@ -330,25 +287,6 @@ summarize: require-env require-model  ## Summarize PROJECT, or every project (BG
 		$(COMPOSE) --profile index run --rm $(if $(BG),--detach) \
 		graphify python -m ctxgraph.summarize \
 		$(if $(or $(INDEXED),$(PROJECT_NAME)),$(if $(AUTO),--auto),--auto)
-
-# The named form of `index FRESH=1`: distrust both caches - the extractor's
-# per-file one and the file_hashes table - and parse every selected file again.
-# Nothing is deleted first, so the graph is never absent while the run proceeds:
-# the run rewrites what it finds and the usual prune pass drops what the tree no
-# longer has.
-reindex: require-env  ## Re-index PROJECT, trusting neither cache
-	@$(MAKE) --no-print-directory index FRESH=1 \
-		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)' \
-		TYPE='$(TYPE)'
-
-# The other end of `index`: one project leaves the database, the rest stay.
-# Naming it is deliberate work - PROJECT= resolves through the projects table by
-# root path, PROJECT_NAME= names the row directly, and neither defaulting to
-# PROJECT_PATH is the point. A bare `make index` is convenient; a bare
-# `make unindex` would be a way to delete the wrong graph.
-unindex: require-env  ## Drop PROJECT= or PROJECT_NAME= from the database
-	@COMPOSE='$(COMPOSE)' UNINDEX_PATH='$(INDEXED)' \
-		UNINDEX_NAME='$(PROJECT_NAME)' FORCE='$(FORCE)' scripts/unindex.sh
 
 # The weights the summarizer runs. Mounted read-only at /models by compose, so
 # MODEL_DIR is the host half of that mount and MODEL_NAME is the same file name
@@ -386,7 +324,7 @@ require-model:
 	}
 
 # The other maintenance pair: `backup` writes, `restore` puts back. Both take
-# the same selectors as `unindex` - nothing named means the whole database -
+# the same selectors the dashboard drops by - nothing named means everything -
 # and both leave the destination directory to the script, which defaults it
 # next to the database rather than reading a setting for it.
 #
@@ -398,7 +336,7 @@ backup: require-env  ## Back up the database, or PROJECT= / PROJECT_NAME= alone
 		BACKUP_NAME='$(PROJECT_NAME)' BACKUP_FILE='$(FILE)' \
 		BACKUP_DIR='$(BACKUP_DIR)' KEEP='$(KEEP)' scripts/backup.sh
 
-# No default here for the same reason `unindex` has none: a bare invocation
+# No default here, for the reason a drop never has one: a bare invocation
 # that replaces a database is the accident worth designing out.
 restore: require-env  ## Restore FILE= over the database or over one project
 	@COMPOSE='$(COMPOSE)' BACKUP_FILE='$(FILE)' BACKUP_DIR='$(BACKUP_DIR)' \

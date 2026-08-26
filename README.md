@@ -70,7 +70,7 @@ Full docs: <https://oberon-systems.github.io/claude-context-mcp/>
 A second MCP server is configured alongside: the upstream stdio server, started
 through `docker compose run`, serving the same graph from a `graph.json` written
 at index time. It brings its own tools (`query_graph`, `god_nodes`,
-`graph_stats`, `get_community`) and lags until the next `make index`. That file
+`graph_stats`, `get_community`) and lags until the next index run. That file
 also holds whichever project was indexed last and has no notion of projects at
 all, while `mcp-server` reads the database directly and does.
 
@@ -129,14 +129,14 @@ make install AGENT_ROOT=/home/you/work/api
 
 Six things, none of which replaces a file that already exists:
 
-| Step                           | What it leaves behind                                                                                          |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                                            |
-| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                                                      |
-| `.gemini/settings.json`        | the same address for the Gemini CLI                                                                            |
-| `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                            |
-| `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md`                                            |
-| shell aliases                  | `context-index`, `context-reindex`, `context-status`, `context-install` and the two skill ones, in `~/.bashrc` |
+| Step                           | What it leaves behind                                                                                      |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                                        |
+| `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                                                  |
+| `.gemini/settings.json`        | the same address for the Gemini CLI                                                                        |
+| `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                        |
+| `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md`                                        |
+| shell alias                    | `context-install`, in `~/.bashrc` - one command onboards a tree, and indexing is a button in the dashboard |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 
@@ -172,8 +172,8 @@ One stack serves every codebase you index, and any tree can be indexed without
 being touched:
 
 ```bash
-make index PROJECT=/home/you/work/api
-make index PROJECT=/home/you/work/infra
+context-install                 # from /home/you/work/api
+context-install                 # from /home/you/work/infra
 ```
 
 A re-index is authoritative: it reports how many files it selected and how many
@@ -182,10 +182,10 @@ producers skip a file whose content has not changed since the last run, so a
 re-index is cheap. What a file is compared against is its content and the
 revision of the parsers reading it, so upgrading this project re-parses the
 trees its parsers now read differently, without being asked to.
-`make reindex PROJECT=...` distrusts both caches and re-parses everything,
+The dashboard's **Fresh** button distrusts both caches and re-parses everything,
 for when a graph looks incomplete rather than merely old.
-It is the named form of `make index PROJECT=... FRESH=1`, and the
-`context-reindex` alias is the same thing for the tree you stand in.
+It is `POST /index` with `fresh`, which is also what the API takes from any
+other client.
 
 Each lands under a name taken from the last segment of its path (`api`,
 `infra`; override with `PROJECT_NAME=`). Names beginning with `_` are reserved
@@ -199,14 +199,14 @@ below.
 database narrows on:
 
 ```bash
-make index PROJECT=/home/you/work/handbook TYPE=docs
-make index PROJECT=/home/you/work/infra TYPE=config
+context-install TYPE=docs       # from /home/you/work/handbook
+context-install TYPE=config     # from /home/you/work/infra
 ```
 
 `codebase` is the default, and `docs` and `config` are the other two an index
 run may write. They are all indexed trees and differ only as a filter - the
 fourth, `memory`, is not a tree at all. The type is stored once: a later
-`make index` without `TYPE=` keeps it rather than resetting it to the default.
+An index run without a type keeps it rather than resetting it to the default.
 
 An agent connects to one project and can read the others:
 
@@ -230,21 +230,21 @@ codebases answers with all six.
 Removing one is the same shape:
 
 ```bash
-make unindex PROJECT=/home/you/work/api      # resolved by root path
-make unindex PROJECT_NAME=api                # named directly
+Dropping a project is the dashboard's job: it shows what the drop costs and
+asks for the name back before it does anything.
 ```
 
 It prints what the drop costs and asks before deleting anything (`FORCE=1`
 skips the prompt). The counts are printed in three parts on purpose: nodes,
-edges, file hashes and embeddings come back with one `make index`, manually
+edges, file hashes and embeddings come back with one index run, manually
 written summaries do not come back at all, and plans are not deleted in the
 first place - they keep the name as a tag and stay readable through
-`get_plans`. Unlike `make index`,
+`get_plans`. Unlike an index run,
 this target has no default - naming nothing is an error rather than a delete of
 whatever `PROJECT_PATH` happens to point at. The `drop_project` MCP tool does
 the same from an agent, reporting first and deleting only when called again
 with `confirm: true`. The extraction cache the project leaves behind on the
-`graph-out` volume is reclaimed by the next `make index`, whichever tree that
+`graph-out` volume is reclaimed by the next index run, whichever tree that
 one indexes - the volume is reachable from the indexing job alone.
 
 Node ids are unique within a project, not across the database: `README.md` is a
@@ -325,11 +325,11 @@ status` answers; see the Make targets section.
 
 ## Configuration
 
-Copy `.env.example` to `.env`; `make up` and `make index` refuse to run
+Copy `.env.example` to `.env`; `make up` and `make install` refuse to run
 without it. Sets the project path/name, database credentials, the entry
 point's port and bind address, and the optional
 `ALLOWED_HOSTS`/`ALLOWED_ORIGINS` DNS-rebinding allowlist. The stack is a singleton by design - one compose project name,
-one fixed data directory - so `make index PROJECT=/somewhere/else` reuses
+one fixed data directory - so onboarding a tree elsewhere reuses
 the running stack rather than starting a second one. Full variable
 reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/deployment.html).
 
@@ -355,11 +355,10 @@ make build       build every service image
 make pull        pull the published images, discarding a local build
 make up          start the database, the services and the entry point
 make down        stop the stack, keeping the database volume
-make index       index PROJECT=<path>, or PROJECT_PATH from .env
+
                  TYPE=docs|config categorises it; unset keeps what is stored
                  FRESH=1 re-parses every file instead of trusting a cache
-make reindex     index PROJECT=<path> again, trusting neither cache
-make unindex     drop PROJECT=<path> or PROJECT_NAME=<name> from the database
+
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
                  with no PROJECT= it describes every indexed project, and
                  LIMIT=<n> then caps each of them rather than the run
@@ -469,7 +468,7 @@ make summarize                       # the same, over every indexed project
 Named no project, the pass walks the `projects` table and reads the files of
 every one of them: each indexed tree is mounted read-only at `/code/<project>`
 by `docker-compose.override.yaml`, which `make mounts` writes from that same
-table and `make index` refreshes first. A node whose file is no longer on disk
+table and `make install` refreshes when it onboards. A node whose file is gone
 is counted and named in the log - the graph is ahead of the tree, and
 re-indexing is what settles it.
 
@@ -484,7 +483,7 @@ worker setup:
 Plans are managed by an AI client through `save_plan`, `get_plans` and
 `drop_plan`, and live as nodes of the built-in `_plans` project rather
 than being owned by the project they are about - that is a free-text tag in
-metadata, not a foreign key, so a plan survives `make unindex` and
+metadata, not a foreign key, so a plan survives a project drop and
 `drop_project`. Full
 lifecycle (`status` vs `type`, the `"*"` project):
 [usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
@@ -496,7 +495,7 @@ something is the way it is - has nowhere to live in a tree it may only read.
 `save_memory`, `get_memory` and `drop_memory` write it into `_memory`, a
 built-in project of type `memory` that is created by the migration and holds
 records rather than files. Nothing indexes into it: names beginning with `_`
-are refused by `make index`, so a memory is never pruned by a re-index the way
+are refused by indexing, so a memory is never pruned by a re-index the way
 a derived node is.
 
 A memory is tagged with what it is about, the way a plan is - a project name,
@@ -554,7 +553,7 @@ whatever is pending before anything else touches the database. Core tables:
 plus `graph_nodes`, `graph_edges` and `code_embeddings` (unused for now).
 Plans, memories and suggestions are `graph_nodes` rows under the built-in
 projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
-into, so they survive `make unindex` and `make clean`. Full internals,
+into, so they survive a project drop and `make clean`. Full internals,
 including how
 `make db <target>` drives goose and what a restore needs:
 [nuances](https://oberon-systems.github.io/claude-context-mcp/nuances.html).

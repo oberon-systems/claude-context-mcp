@@ -6,7 +6,7 @@
 # archive and replaces the whole database through pg_restore, a .sql.gz is one
 # project and is replayed by psql, replacing that project alone.
 #
-# Destructive either way, so it follows `unindex` and `clean`: it says what is
+# Destructive either way, so it follows `clean`: it says what is
 # about to be lost and asks, unless FORCE=1.
 
 set -euo pipefail
@@ -51,7 +51,7 @@ available() {
 
 file="${BACKUP_FILE:-}"
 
-# `make index` defaults to PROJECT_PATH from .env; this target must not have a
+# Onboarding defaults to PROJECT_PATH from .env; this target must not have a
 # default either. Guessing "the newest backup" is how a restore replaces a
 # database nobody meant to touch.
 if [ -z "$file" ]; then
@@ -166,7 +166,7 @@ else
     # than letting the transaction roll back with a constraint name.
     if [ -n "$collision" ]; then
         echo "Project \"$collision\" is already indexed from $root." >&2
-        echo "Drop it first: make unindex PROJECT_NAME=$collision" >&2
+        echo "Drop it first, from the dashboard: $collision" >&2
         exit 1
     fi
 

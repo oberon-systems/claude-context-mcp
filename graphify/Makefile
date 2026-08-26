@@ -39,7 +39,7 @@ build:
 rebuild:
 	$(DOCKER) build --no-cache --pull -t $(REF) .
 
-# Joins the compose network so `postgres` resolves. Prefer `make index` from
+# Joins the compose network so `postgres` resolves. Prefer the API from
 # the repo root, which does this through compose.
 run:
 	$(DOCKER) run --rm \
