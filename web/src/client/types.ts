@@ -1,3 +1,17 @@
+export type IndexJob = {
+  id: number;
+  project: string;
+  status: "running" | "done" | "failed";
+  files: number | null;
+  with_node: number | null;
+  entities: number | null;
+  edges: number | null;
+  failures: number | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
 export type Project = {
   name: string;
   type: string;

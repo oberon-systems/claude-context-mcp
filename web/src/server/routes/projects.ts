@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { HttpError, notFound, route } from "../args.js";
+import { UpstreamError, upstream } from "../content.js";
 import { count, dbPool } from "../db.js";
 import * as sql from "../queries.js";
 
@@ -69,6 +70,49 @@ export async function requireProject(name: string): Promise<string> {
 
 export const projectsRouter = Router();
 
+type IndexJob = {
+  id: number;
+  project: string;
+  status: string;
+  files: number | null;
+  error: string | null;
+};
+
+/** Pass an API failure on with its own status rather than as a 500. */
+function passOn(error: unknown): never {
+  if (error instanceof UpstreamError) {
+    throw new HttpError(error.status, error.message);
+  }
+  throw error;
+}
+
+projectsRouter.post(
+  "/projects/:name/index",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { fresh?: unknown } | undefined;
+    const job = await upstream<IndexJob>(
+      "POST",
+      "/index",
+      {},
+      { project: name, fresh: body?.fresh === true },
+    ).catch(passOn);
+    res.status(202).json(job);
+  }),
+);
+
+projectsRouter.get(
+  "/projects/:name/index",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = await upstream<{ jobs: IndexJob[] }>("GET", "/index", {
+      project: name,
+      limit: "1",
+    }).catch(passOn);
+    res.json(body.jobs[0] ?? null);
+  }),
+);
+
 projectsRouter.get(
   "/projects",
   route(async (_req, res) => {
@@ -126,7 +170,7 @@ projectsRouter.delete(
       throw new HttpError(
         409,
         'Send {"confirm": true} to drop the project. Ask for the drop report ' +
-          "first: the graph goes, and only `make index` brings it back.",
+          "first: the graph goes, and only indexing it again brings it back.",
       );
     }
 

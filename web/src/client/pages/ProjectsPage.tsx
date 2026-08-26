@@ -7,11 +7,12 @@ import {
   Freshness,
   Spinner,
 } from "../components/Common.js";
+import { IndexButton } from "../components/IndexButton.js";
 import { useApi } from "../hooks/useApi.js";
 import type { Page, Project } from "../types.js";
 
 export function ProjectsPage() {
-  const { data, error, loading } =
+  const { data, error, loading, reload } =
     useApi<Omit<Page<Project>, "total">>("/projects");
 
   if (error !== null) {
@@ -23,8 +24,8 @@ export function ProjectsPage() {
   if (data.items.length === 0) {
     return (
       <Empty>
-        Nothing is indexed yet. Run <code>make index PROJECT=/path</code> to put
-        a codebase in the graph.
+        Nothing is indexed yet. Onboard a codebase with{" "}
+        <code>context-install</code> from its directory, then index it here.
       </Empty>
     );
   }
@@ -43,6 +44,7 @@ export function ProjectsPage() {
             <th className="num">Files</th>
             <th className="num">Plans</th>
             <th>Indexed</th>
+            <th />
           </tr>
         </thead>
         <tbody>
@@ -82,6 +84,15 @@ export function ProjectsPage() {
                   indexedAt={project.indexed_at}
                   staleSeconds={project.stale_seconds}
                 />
+              </td>
+              <td>
+                {project.root_path.includes("://") ? (
+                  <span className="muted" title="records, not a tree">
+                    -
+                  </span>
+                ) : (
+                  <IndexButton project={project.name} onFinished={reload} />
+                )}
               </td>
             </tr>
           ))}

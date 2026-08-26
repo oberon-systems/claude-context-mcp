@@ -115,6 +115,29 @@ button:disabled {
   cursor: default;
 }
 
+/* The index controls sit in the last column of the projects table, so they
+   have to stay on one line and not stretch the row. */
+.index-control {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.index-control button {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.85rem;
+}
+
+button.secondary {
+  color: var(--muted);
+}
+
+.bad {
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
 button.danger {
   color: var(--danger);
   border-color: var(--danger);

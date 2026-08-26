@@ -17,40 +17,71 @@ export type FileText = {
  * list that keeps a key out of an HTTP reply lives in the API, in Python, in
  * one place.
  */
+export class UpstreamError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** Call the API, and turn its failures into ones this service can pass on. */
+export async function upstream<T>(
+  method: string,
+  path: string,
+  params: Record<string, string> = {},
+  body?: unknown,
+): Promise<T> {
+  const target = new URL(path, API_URL);
+  for (const [key, value] of Object.entries(params)) {
+    target.searchParams.set(key, value);
+  }
+  let response: globalThis.Response;
+  try {
+    response = await fetch(target, {
+      method,
+      headers: {
+        Authorization: `Bearer ${API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch {
+    throw new UpstreamError(502, `the API is not reachable at ${API_URL}`);
+  }
+  const text = await response.text();
+  const parsed = text === "" ? null : (JSON.parse(text) as unknown);
+  if (!response.ok) {
+    const detail = (parsed as { detail?: string } | null)?.detail;
+    throw new UpstreamError(
+      response.status,
+      detail ?? `the API answered ${response.status}`,
+    );
+  }
+  return parsed as T;
+}
+
 export async function fileText(
   project: string,
   path: string,
 ): Promise<FileText> {
-  const target = new URL("/content", API_URL);
-  target.searchParams.set("project", project);
-  target.searchParams.set("path", path);
-  target.searchParams.set("limit", String(MAX_CONTENT + 1));
-
-  let upstream: globalThis.Response;
+  let body: { content: string };
   try {
-    upstream = await fetch(target, {
-      headers: { Authorization: `Bearer ${API_TOKEN}` },
+    body = await upstream<{ content: string }>("GET", "/content", {
+      project,
+      path,
+      limit: String(MAX_CONTENT + 1),
     });
-  } catch {
+  } catch (error) {
     return {
       content: null,
       chars: 0,
       truncated: false,
-      reason: `the API is not reachable at ${API_URL}`,
+      reason:
+        error instanceof UpstreamError ? error.message : "the API call failed",
     };
   }
-  if (!upstream.ok) {
-    const detail = (await upstream.json().catch(() => null)) as {
-      detail?: string;
-    } | null;
-    return {
-      content: null,
-      chars: 0,
-      truncated: false,
-      reason: detail?.detail ?? `the API answered ${upstream.status}`,
-    };
-  }
-  const body = (await upstream.json()) as { content: string };
   const truncated = body.content.length > MAX_CONTENT;
   return {
     content: truncated ? body.content.slice(0, MAX_CONTENT) : body.content,
