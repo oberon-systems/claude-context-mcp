@@ -3,19 +3,6 @@
     "context": {
       "type": "http",
       "url": "http://localhost:3000/mcp/claude-context-mcp"
-    },
-    "graph": {
-      "command": "docker",
-      "args": [
-        "compose",
-        "run",
-        "--rm",
-        "-T",
-        "graphify",
-        "python",
-        "-m",
-        "graphify.serve"
-      ]
     }
   }
 }

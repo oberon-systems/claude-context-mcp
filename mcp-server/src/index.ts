@@ -1996,6 +1996,12 @@ const ALLOWED_HOSTS = new Set(
         "mcp-server:3000",
       ],
 );
+// `*` disables the check, and it is looked for among the entries rather than
+// compared against the whole variable: compose appends `,mcp-server:3000` to
+// whatever GATEWAY_HOSTS holds, so the value is never the bare `*` a caller
+// wrote in .env. The dashboard's guard has always read it this way; this one
+// did not, which turned GATEWAY_HOSTS=* into a 403 on every request.
+const ANY_HOST = ALLOWED_HOSTS.has("*");
 // Empty by default: legitimate MCP clients send no Origin header at all, so any
 // request that carries one is browser traffic and is refused.
 const ALLOWED_ORIGINS = new Set(csv(process.env.ALLOWED_ORIGINS));
@@ -2005,7 +2011,7 @@ function guardDnsRebinding(
   res: Response,
   next: express.NextFunction,
 ): void {
-  if (process.env.ALLOWED_HOSTS !== "*") {
+  if (!ANY_HOST) {
     const host = req.headers.host;
     if (host === undefined || !ALLOWED_HOSTS.has(host)) {
       res.status(403).send(`Host "${host ?? ""}" is not allowed`);

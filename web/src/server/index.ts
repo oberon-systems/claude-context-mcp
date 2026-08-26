@@ -66,6 +66,14 @@ for (const viewerRoute of VIEWER_ROUTES) {
 
 app.use(express.static(CLIENT_DIR, { index: false }));
 
+// A probe for something this stack does not serve must fail as a 404 rather
+// than as a page. `/.well-known/oauth-*` is the case that bit: a client
+// checking whether the MCP server is OAuth-protected got 200 and HTML, and
+// broke on parsing it instead of concluding that it is not.
+app.get("/.well-known/*", (_req, res) => {
+  res.status(404).type("text/plain").send("Not found");
+});
+
 // Every other address is a client route, and the client owns the 404.
 app.get("*", (_req, res) => {
   res.sendFile(path.join(CLIENT_DIR, "index.html"));
