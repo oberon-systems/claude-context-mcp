@@ -1,3 +1,36 @@
+## v0.14.0 (2026-08-26)
+
+### Features
+
+- **make, scripts**: install FORCE=1 offers to refresh what a project already has
+- **web**: index a project from the dashboard
+- **graphify, migrations**: indexing runs in the API instead of a container
+- **graphify, web, migrations**: file text leaves the database for the mount
+- **graphify, compose, make**: mount every indexed tree at /code/<project>
+- **graphify**: html support added
+- **migrations, mcp-server, web**: plans move to the _plans built-in project
+- **graphify**: update docker compose parsing
+- **worker**: auto mode added
+- **ai**: update cloud's local settings
+- **agents**: cloud local template updated
+
+### Bug Fixes
+
+- **mcp-server, web**: GATEWAY_HOSTS=* reaches the MCP server too
+- **scripts**: the nginx config check pins the image compose runs
+- **graphify**: set fingerprints for files hashes
+- **web/server**: guard: fix error message
+- **compose**: up nginx version to 1.30.4
+
+### Refactor
+
+- **make, scripts, docs**: one install target and one alias
+
+### Documentation
+
+- **docs**: roadmap gains per-project file tracking
+- **docs, instructions**: updated
+
 ## v0.13.0 (2026-08-21)
 
 ### Features
