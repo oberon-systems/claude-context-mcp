@@ -21,6 +21,7 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 - [ ] **Shebang Support:** Enable parsing for extension-less scripts.
 - [ ] **Language Extractor Improvements:** Enhance Python/Ruby cross-file resolution.
 - [ ] **Incremental Extraction (Code):** Speed up re-indexing for large codebases.
+- [ ] **base**: some settings, formats and so should being stored in database (\_configs)
 
 ## Developer Experience & Workflows
 
