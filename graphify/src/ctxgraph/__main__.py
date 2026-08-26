@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 
-from ctxgraph.indexer import scan_and_build_graph
+from ctxgraph.config import FORCE_REEXTRACT, PROJECT_TYPE, SUMMARIZE
+from ctxgraph.indexer import resolve_project, scan_and_build_graph
 
 
 def main() -> None:
@@ -17,7 +18,8 @@ def main() -> None:
     logging.basicConfig(
         level="INFO", format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
-    scan_and_build_graph()
+    project, root_path, _ = resolve_project()
+    scan_and_build_graph(project, root_path, PROJECT_TYPE, FORCE_REEXTRACT, SUMMARIZE)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ IGNORE_FILE = ".ctxignore"
 KEEP_FILE = ".ctxkeep"
 # Re-extract every file instead of trusting either cache: the extractor's own
 # per-file cache and our file_hashes table. For when a cache is suspected
-# rather than known to be wrong. `make index FRESH=1` sets it.
+# rather than known to be wrong. The API's `fresh` flag sets it.
 FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
     "",
     "0",
@@ -166,7 +166,7 @@ SUMMARY_ENTITY_LIMIT = 8
 
 # Whether an index run also writes model summaries. Off by default: a first
 # index of a large tree would spend hours in the model, and the summaries the
-# parsers write are there immediately. `make index SUMMARIZE=1` turns it on
+# parsers write are there immediately. The API's `summarize` flag turns it on
 # for one run, and `make summarize` does the same work afterwards instead.
 SUMMARIZE = os.getenv("SUMMARIZE", "").strip().lower() not in {
     "",

@@ -28,7 +28,7 @@ from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
-from ctxgraph import jobs, sources
+from ctxgraph import indexjobs, jobs, sources
 from ctxgraph.config import (
     LLM_INPUT_CHARS,
     LLM_MAX_TOKENS,
@@ -41,7 +41,7 @@ from ctxgraph.config import (
     WORKER_MAX_BATCH,
     WORKER_MAX_REPLY_CHARS,
 )
-from ctxgraph.identifiers import project_mount
+from ctxgraph.identifiers import project_mount, project_name
 from ctxgraph.storage import (
     get_cached_summary,
     get_db_url,
@@ -113,6 +113,25 @@ def require_token(authorization: str = Header(default="")) -> None:
             detail="bad token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+
+class IndexRequest(BaseModel):
+    """What starting an index run needs to know."""
+
+    project: str = Field(
+        default="",
+        description="the project to index; derived from root_path when unset",
+    )
+    root_path: str = Field(
+        default="",
+        description="host path of the tree; taken from the projects row when unset",
+    )
+    project_type: str = Field(
+        default="", description="codebase, docs or config; keeps the stored one"
+    )
+    fresh: bool = Field(
+        default=False, description="trust neither cache and parse every file"
+    )
 
 
 class JobRequest(BaseModel):
@@ -222,6 +241,104 @@ def get_projects() -> dict[str, Any]:
             }
         )
     return {"projects": projects}
+
+
+def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, str]:
+    """Settle which project a request means, and where its tree lives.
+
+    A shell alias knows only `$(pwd)`, so the name is derived here rather than
+    on the host: `project_name` is the one implementation of that rule, and a
+    second copy of it would eventually disagree with the mounts.
+    """
+    if project:
+        cursor.execute("SELECT root_path FROM projects WHERE name = %s;", (project,))
+        row = cursor.fetchone()
+        if row is None and not root_path:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"no project named {project!r}; pass root_path to index a "
+                    "tree for the first time"
+                ),
+            )
+        return project, root_path or str(row[0])
+
+    if not root_path:
+        raise HTTPException(
+            status_code=422, detail="name the project, or pass its root_path"
+        )
+    # An already indexed tree keeps the name it was given, which may not be
+    # the one its last path segment would produce.
+    cursor.execute("SELECT name FROM projects WHERE root_path = %s;", (root_path,))
+    row = cursor.fetchone()
+    return (str(row[0]) if row else project_name("", root_path)), root_path
+
+
+@api.post("/index", status_code=202)
+def post_index(request: IndexRequest) -> dict[str, Any]:
+    """Start indexing a project, and answer before it finishes.
+
+    The work runs on a thread of this process: the trees are mounted here and
+    the parsers are in this image, so nothing has to start a container. Poll
+    `/index/{id}` for how it went.
+    """
+    with transaction() as cursor:
+        project, root_path = resolve_target(
+            cursor, request.project.strip(), request.root_path.strip()
+        )
+
+        if not os.path.isdir(project_mount(project)):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{project} is not mounted at "
+                    f"{project_mount(project)}; the override has to be "
+                    "rewritten and this service recreated before it can be read"
+                ),
+            )
+
+        running = indexjobs.running_job(cursor, project)
+        if running is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"job {running['id']} is already indexing this project",
+            )
+        job_id = indexjobs.open_job(
+            cursor,
+            project,
+            request.fresh,
+            request.project_type.strip() or None,
+        )
+        view = indexjobs.job_row(cursor, job_id)
+
+    indexjobs.run_in_background(
+        job_id,
+        project,
+        root_path,
+        request.project_type.strip() or None,
+        request.fresh,
+    )
+    return view or {"id": job_id}
+
+
+@api.get("/index")
+def get_index_jobs(
+    project: str | None = Query(default=None, description="one project, or all"),
+    limit: int = Query(default=20, ge=1, le=200),
+) -> dict[str, Any]:
+    """List index runs, newest first."""
+    with transaction() as cursor:
+        return {"jobs": indexjobs.recent_jobs(cursor, project, limit)}
+
+
+@api.get("/index/{job_id}")
+def get_index_job(job_id: int) -> dict[str, Any]:
+    """Show one index run, running or finished."""
+    with transaction() as cursor:
+        view = indexjobs.job_row(cursor, job_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail="unknown index job")
+    return view
 
 
 @api.get("/content")

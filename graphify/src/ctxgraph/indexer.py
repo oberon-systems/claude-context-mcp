@@ -16,7 +16,6 @@ import psycopg2
 from psycopg2.extensions import cursor as Cursor
 
 from ctxgraph.config import (
-    FORCE_REEXTRACT,
     GRAPHIFY_OUT_DIR,
     GRAPHIFYY_EXTENSIONS,
     KNOWN_PROJECT_TYPES,
@@ -24,9 +23,7 @@ from ctxgraph.config import (
     MAX_NODE_ID_LENGTH,
     PROJECT_NAME,
     PROJECT_ROOT,
-    PROJECT_TYPE,
     SOURCE_GRAPHIFYY,
-    SUMMARIZE,
 )
 from ctxgraph.discovery import iter_source_files, read_source
 from ctxgraph.identifiers import (
@@ -283,41 +280,53 @@ def resolve_project() -> tuple[str, str, str]:
 
     The host path says where the checkout lives and is what the projects table
     records; the mount says where this container reads it. They differ, so the
-    host path has to arrive separately; `make index` passes it, and a
-    hand-rolled `docker run` has to as well.
+    host path has to arrive separately; the API takes it from the projects
+    row, and a hand-rolled `docker run` has to pass it.
     """
     root_path = PROJECT_ROOT.strip()
     if not root_path:
         raise RuntimeError(
             "PROJECT_ROOT is not set. It is the host path of the tree being "
             "indexed, and it is what tells one project in the database from "
-            "another. Pass it, or run the job through `make index`."
+            "another. Pass it, or index through the API instead."
         )
     project = project_name(PROJECT_NAME, root_path)
     return project, root_path, project_mount(project)
 
 
-def scan_and_build_graph() -> None:
-    """Walk the project and build the graph from both producers."""
-    project, root_path, mount = resolve_project()
+def scan_and_build_graph(
+    project: str,
+    root_path: str,
+    project_type: str | None = None,
+    fresh: bool = False,
+    summarize: bool = False,
+) -> dict[str, int]:
+    """Walk one project and build its graph. Returns what the run wrote.
+
+    Every argument used to be an environment variable read once at import,
+    which is what tied a run to a container started for it. They are
+    parameters now, so the API can index any mounted project in its own
+    process.
+    """
+    mount = project_mount(project)
     if not os.path.isdir(mount):
         raise RuntimeError(
             f"{mount} is not a directory. Every indexed tree is mounted there "
-            "by the generated compose override; run `make mounts`, or index "
-            "through `make index`, which refreshes it first."
+            "by the generated compose override, which `make install` writes; "
+            "a project added since the API started needs it recreated."
         )
 
-    if PROJECT_TYPE is not None and PROJECT_TYPE not in KNOWN_PROJECT_TYPES:
+    if project_type is not None and project_type not in KNOWN_PROJECT_TYPES:
         LOG.warning(
-            "TYPE=%s is not one of %s; storing it anyway",
-            PROJECT_TYPE,
+            "type=%s is not one of %s; storing it anyway",
+            project_type,
             ", ".join(sorted(KNOWN_PROJECT_TYPES)),
         )
     # Only when asked for. Loading the weights costs a gigabyte and seconds
     # per file after that, so an index run is the fast producer by default and
-    # `make summarize` is where the model earns its time. Before the database
-    # either way, so missing weights stop the run in one line.
-    summarizer = Summarizer(LLM_MODEL_PATH, FORCE_REEXTRACT) if SUMMARIZE else None
+    # the summarizing pass is where the model earns its time. Before the
+    # database either way, so missing weights stop the run in one line.
+    summarizer = Summarizer(LLM_MODEL_PATH, fresh) if summarize else None
 
     conn = get_db_connection()
     try:
@@ -325,9 +334,9 @@ def scan_and_build_graph() -> None:
         # name already claimed by a different checkout has to stop the run
         # rather than merge two codebases into one graph.
         with conn.cursor() as cursor:
-            ensure_project(cursor, project, root_path, PROJECT_TYPE)
+            ensure_project(cursor, project, root_path, project_type)
             conn.commit()
-            # A project can leave the database through `make unindex` or the
+            # A project can leave the database through the dashboard or the
             # drop_project tool, neither of which can reach this volume.
             dropped, entries = prune_extractor_caches(
                 {name for name, _, _, _ in list_projects(cursor)}
@@ -366,7 +375,7 @@ def scan_and_build_graph() -> None:
                     code_sources,
                     gaps,
                     summarizer,
-                    FORCE_REEXTRACT,
+                    fresh,
                 )
                 conn.commit()
                 LOG.info("graphifyy: %d nodes, %d edges", nodes, edges)
@@ -394,9 +403,7 @@ def scan_and_build_graph() -> None:
 
                 file_hash = compute_hash(content)
                 stored_hash = (
-                    None
-                    if FORCE_REEXTRACT
-                    else get_file_hash(cursor, project, rel_path)
+                    None if fresh else get_file_hash(cursor, project, rel_path)
                 )
 
                 if stored_hash == file_hash:
@@ -495,6 +502,15 @@ def scan_and_build_graph() -> None:
                 LOG.warning("  %s (%s)", rel_path, reason)
             if len(gaps) > GAP_REPORT_LIMIT:
                 LOG.warning("  ... and %d more", len(gaps) - GAP_REPORT_LIMIT)
+        return {
+            "files": len(discovered),
+            "with_node": len(discovered) - len(gaps),
+            "entities": entity_total,
+            "edges": edge_total,
+            "pruned": pruned,
+            "failures": failures,
+            "gaps": len(gaps),
+        }
     finally:
         if summarizer is not None:
             summarizer.close()
