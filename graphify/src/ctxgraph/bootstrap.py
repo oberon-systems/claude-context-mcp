@@ -34,6 +34,7 @@ from ctxgraph.config import (
 )
 from ctxgraph.discovery import load_spec, walk_selected
 from ctxgraph.identifiers import project_name
+from ctxgraph.parsers.compose import is_compose_name
 from ctxgraph.parsers.registry import (
     EXTENSION_PARSERS,
     FILENAME_PARSERS,
@@ -72,8 +73,13 @@ INTERPRETER_EXTENSIONS = {
     "zsh": ".sh",
 }
 # Parser classes are named for their grammar, which spells a few of them the
-# way Python wants rather than the way the format is written.
-LABEL_OVERRIDES = {"Html": "HTML", "Json": "JSON", "Phtml": "PHP template"}
+# way Python wants - and one of which answers to more shapes than its name.
+LABEL_OVERRIDES = {
+    "Ansible": "Ansible, Docker Compose and plain YAML",
+    "Html": "HTML",
+    "Json": "JSON",
+    "Phtml": "PHP template",
+}
 # A directory is only a bulk candidate when it is both large in absolute
 # terms and a real share of the tree, so a small repository never reports one.
 BULK_MIN_FILES = 200
@@ -92,6 +98,7 @@ class Inventory:
     extensions: Counter[str] = field(default_factory=Counter)
     filenames: dict[str, str] = field(default_factory=dict)
     dockerfile_suffixed: bool = False
+    compose: list[str] = field(default_factory=list)
     shebangs: list[tuple[str, str]] = field(default_factory=list)
     directories: Counter[str] = field(default_factory=Counter)
     generated: set[str] = field(default_factory=set)
@@ -144,6 +151,8 @@ def collect(root_path: str) -> Inventory:
                 inventory.directories[top] += 1
             lowered = file_name.lower()
             extension = posixpath.splitext(lowered)[1]
+            if is_compose_name(lowered):
+                inventory.compose.append(rel_path)
             if lowered in IGNORED_FILE_NAMES:
                 inventory.generated.add(file_name)
             elif extension:
@@ -313,7 +322,9 @@ def ignore_document(inventory: Inventory) -> list[str]:
                 "# code calls into loses real edges when it goes.",
             ]
         )
-        lines.extend(f"# {name}/  ({count} files)" for name, count in candidates)
+        # Without a count, so a file added anywhere under one of them does
+        # not make the whole .ctxignore differ from what a re-run writes.
+        lines.extend(f"# {name}/" for name, _ in candidates)
     return lines
 
 
@@ -370,6 +381,18 @@ def verify(
     lines.extend(detail("supported, and .ctxignore drops it - on purpose?", pruned))
     lines.extend(detail("over the 1 MB limit, read and then dropped", oversized))
     lines.extend(detail("file node with a summary and nothing else", unparsed))
+    lines.extend(
+        detail(
+            "read as Docker Compose rather than as plain YAML",
+            [rel for rel in inventory.compose if rel in kept_set],
+        )
+    )
+    lines.extend(
+        detail(
+            "bulk directory, named in .ctxignore as a comment to decide on",
+            [f"{name}/ ({count} files)" for name, count in bulk_candidates(inventory)],
+        )
+    )
     lines.extend(
         detail(
             "extension-less scripts admitted by their shebang",
