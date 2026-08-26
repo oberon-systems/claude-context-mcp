@@ -14,6 +14,7 @@ here would block the event loop for every other request in flight.
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import uuid
 from collections.abc import Iterator
@@ -27,9 +28,9 @@ from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
-from ctxgraph import jobs
+from ctxgraph import jobs, sources
 from ctxgraph.config import (
-    CONTENT_STORE_CHARS,
+    LLM_INPUT_CHARS,
     LLM_MAX_TOKENS,
     WORKER_API_DOCS,
     WORKER_API_PORT,
@@ -40,7 +41,9 @@ from ctxgraph.config import (
     WORKER_MAX_BATCH,
     WORKER_MAX_REPLY_CHARS,
 )
+from ctxgraph.identifiers import project_mount
 from ctxgraph.storage import (
+    get_cached_summary,
     get_db_url,
     put_cached_summary,
     save_llm_summary,
@@ -190,9 +193,6 @@ def get_projects() -> dict[str, Any]:
             SELECT p.name, p.root_path, p.indexed_at,
                    COUNT(n.id) FILTER (WHERE n.type = 'file'),
                    COUNT(n.id) FILTER (
-                       WHERE n.type = 'file' AND COALESCE(n.content, '') <> ''
-                   ),
-                   COUNT(n.id) FILTER (
                        WHERE n.type = 'file'
                        AND COALESCE(n.metadata ->> 'summary_source', 'auto')
                            = 'auto'
@@ -209,14 +209,14 @@ def get_projects() -> dict[str, Any]:
             job = jobs.running_job(cursor, name)
             running[name] = int(job["id"]) if job else None
     projects = []
-    for name, root_path, indexed_at, files, with_content, pending in rows:
+    for name, root_path, indexed_at, files, pending in rows:
         projects.append(
             {
                 "name": name,
                 "root_path": root_path,
                 "indexed_at": indexed_at,
                 "files": int(files),
-                "with_content": int(with_content),
+                "mounted": os.path.isdir(project_mount(str(name))),
                 "without_llm_summary": int(pending),
                 "running_job": running[name],
             }
@@ -224,14 +224,38 @@ def get_projects() -> dict[str, Any]:
     return {"projects": projects}
 
 
+@api.get("/content")
+def get_content(
+    project: str = Query(description="the project the file belongs to"),
+    path: str = Query(description="the file, relative to the project root"),
+    limit: int = Query(default=0, ge=0, description="characters, 0 for all"),
+) -> dict[str, Any]:
+    """Read one file of an indexed tree from its mount.
+
+    The graph names files; this is what serves their text, so that nothing
+    else needs a copy of the tree or a column holding one. A file the deny
+    list covers is refused whether or not it is on disk.
+    """
+    content, reason = sources.read(project, path, limit)
+    if content is None:
+        status = 403 if reason == sources.DENIED else 404
+        raise HTTPException(status_code=status, detail=reason)
+    return {
+        "project": project,
+        "path": path,
+        "chars": len(content),
+        "content": content,
+    }
+
+
 @api.post("/jobs", status_code=201)
 def post_job(request: JobRequest) -> dict[str, Any]:
     """Open a job over every file of a project that still needs describing."""
-    input_chars = request.input_chars or CONTENT_STORE_CHARS
-    if not 1 <= input_chars <= CONTENT_STORE_CHARS:
+    input_chars = request.input_chars or LLM_INPUT_CHARS
+    if not 1 <= input_chars <= LLM_INPUT_CHARS:
         raise HTTPException(
             status_code=422,
-            detail=f"input_chars must be between 1 and {CONTENT_STORE_CHARS}",
+            detail=f"input_chars must be between 1 and {LLM_INPUT_CHARS}",
         )
     lease_seconds = request.lease_seconds or WORKER_LEASE_SECONDS
     if not 30 <= lease_seconds <= 3600:
@@ -257,32 +281,16 @@ def post_job(request: JobRequest) -> dict[str, Any]:
             lease_seconds,
             request.model,
         )
-        total, skipped = jobs.populate_job(
-            cursor, job_id, request.project, input_chars, request.refresh, request.limit
+        total = jobs.populate_job(
+            cursor, job_id, request.project, request.refresh, request.limit
         )
-        cached = 0
-        if not request.refresh:
-            for _, rel_path, summary in jobs.settle_cached(
-                cursor, job_id, request.project
-            ):
-                apply_summary(cursor, request.project, rel_path, summary)
-                cached += 1
         jobs.finish_job_if_drained(cursor, job_id)
         view = job_view(cursor, jobs.job_row(cursor, job_id) or {})
 
     hint = None
-    if skipped:
-        hint = (
-            f"{skipped} files have no stored content; "
-            "re-index the project so the worker can read them"
-        )
-    return {
-        **view,
-        "enqueued": total,
-        "cached": cached,
-        "skipped": skipped,
-        "hint": hint,
-    }
+    if not os.path.isdir(project_mount(request.project)):
+        hint = "the project is not mounted, so no file can be read; run `make mounts`"
+    return {**view, "enqueued": total, "hint": hint}
 
 
 @api.get("/jobs")
@@ -339,7 +347,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
     """Claim a batch, and be handed the text and the prompt to run on it.
 
     The batch can come back smaller than asked, or empty: cache hits and files
-    with no stored text are settled here and never leased.
+    the mount does not hold are settled here and never leased.
     """
     token = str(uuid.uuid4())
     batch = min(request.batch, WORKER_MAX_BATCH)
@@ -386,6 +394,14 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
             digest = content_key(text)
             if digest != task["content_hash"]:
                 jobs.set_task_hash(cursor, int(task["task_id"]), digest)
+            # The digest is only knowable once the file has been read, so the
+            # cache is consulted here rather than when the job was created.
+            if not job["refresh"]:
+                cached = get_cached_summary(cursor, project, digest)
+                if cached is not None:
+                    apply_summary(cursor, project, str(task["file_path"]), cached)
+                    jobs.settle_task(cursor, int(task["task_id"]))
+                    continue
             tasks.append(
                 {
                     "task_id": int(task["task_id"]),
@@ -395,7 +411,7 @@ def post_lease(job_id: int, request: LeaseRequest) -> dict[str, Any]:
                     "prompt": f"File: {task['file_path']}\n\n{text}",
                 }
             )
-        jobs.skip_tasks(cursor, empty, jobs.NO_CONTENT)
+        jobs.skip_tasks(cursor, empty, jobs.NO_FILE)
         jobs.finish_job_if_drained(cursor, job_id)
         progress = jobs.job_progress(cursor, job_id)
         status = str((jobs.job_row(cursor, job_id) or {}).get("status", "running"))

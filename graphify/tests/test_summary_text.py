@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from ctxgraph.summary_text import (
-    body_for_storage,
     content_key,
     shape,
     strip_preamble,
@@ -49,18 +48,3 @@ def test_useful_rejects_an_answer_that_is_the_file_name() -> None:
     """That is worse than the summary it would replace."""
     assert not useful("CHANGELOG.md", "CHANGELOG.md")
     assert useful("Records what changed in each release.", "CHANGELOG.md")
-
-
-def test_a_secret_is_never_stored_for_the_worker_to_read() -> None:
-    """The column this fills is served over the network by the worker API."""
-    assert body_for_storage(".env", "TOKEN=hunter2") == ""
-    assert body_for_storage("deploy/.env.production", "TOKEN=hunter2") == ""
-    assert body_for_storage("certs/server.pem", "-----BEGIN") == ""
-    assert body_for_storage("infra/terraform.tfvars", 'password = "x"') == ""
-    assert body_for_storage("src/app.py", "import os") == "import os"
-
-
-def test_the_stored_body_is_bounded() -> None:
-    """An index run holds one of these per code file at once."""
-    stored = body_for_storage("src/big.py", "x" * 100_000)
-    assert 0 < len(stored) <= 16_000

@@ -114,7 +114,6 @@ def upsert_file_node(
     rel_path: str,
     summary: str,
     source: str = SOURCE_NATIVE,
-    content: str = "",
 ) -> None:
     """Insert or refresh the node standing for a file.
 
@@ -129,17 +128,16 @@ def upsert_file_node(
     cursor.execute(
         """
         INSERT INTO graph_nodes (
-            project, id, name, type, file_path, summary, content, metadata
+            project, id, name, type, file_path, summary, metadata
         )
         VALUES (
-            %s, %s, %s, 'file', %s, %s, %s,
+            %s, %s, %s, 'file', %s, %s,
             JSONB_BUILD_OBJECT('summary_source', 'auto', 'source', %s)
         )
         ON CONFLICT (project, id) DO UPDATE SET
             name = EXCLUDED.name,
             type = 'file',
             file_path = EXCLUDED.file_path,
-            content = COALESCE(EXCLUDED.content, graph_nodes.content),
             metadata = graph_nodes.metadata || JSONB_BUILD_OBJECT('source', %s),
             summary = CASE
                 WHEN COALESCE(
@@ -155,31 +153,9 @@ def upsert_file_node(
             truncate(posixpath.basename(rel_path), MAX_NAME_LENGTH),
             rel_path,
             summary,
-            content or None,
             source,
             source,
         ),
-    )
-
-
-def store_file_content(
-    cursor: Cursor, project: str, rel_path: str, content: str
-) -> None:
-    """Write a file node's text without re-parsing the file.
-
-    An unchanged file skips indexing entirely, so a tree indexed before
-    content was stored would never fill the column for the files our own
-    parsers own - the extractor rewrites its half on every run regardless.
-    """
-    if not content:
-        return
-    cursor.execute(
-        """
-        UPDATE graph_nodes SET content = %s
-         WHERE project = %s AND id = %s AND type = 'file'
-           AND content IS DISTINCT FROM %s;
-        """,
-        (content, project, truncate(rel_path, MAX_NODE_ID_LENGTH), content),
     )
 
 
@@ -418,29 +394,6 @@ def list_files_without_llm_summary(
         (project, refresh),
     )
     return [row[0] for row in cursor.fetchall()]
-
-
-def list_pending_summaries(
-    cursor: Cursor, project: str, refresh: bool = False
-) -> list[tuple[str, str]]:
-    """List the same file nodes with the text stored for each of them.
-
-    Left for the worker API, which serves this column to a machine that has
-    no checkout. The summarizing pass no longer uses it: every tree is mounted
-    at /code/<project>, so it reads the files. A file with no stored text
-    comes back with an empty one rather than being left out.
-    """
-    cursor.execute(
-        """
-        SELECT file_path, COALESCE(content, '') FROM graph_nodes
-         WHERE project = %s AND type = 'file' AND file_path IS NOT NULL
-           AND COALESCE(metadata ->> 'summary_source', 'auto')
-               = ANY(CASE WHEN %s THEN ARRAY['auto', 'llm'] ELSE ARRAY['auto'] END)
-         ORDER BY file_path;
-        """,
-        (project, refresh),
-    )
-    return [(row[0], row[1]) for row in cursor.fetchall()]
 
 
 def get_cached_summary(cursor: Cursor, project: str, content_hash: str) -> str | None:

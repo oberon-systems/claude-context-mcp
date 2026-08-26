@@ -196,17 +196,10 @@ LLM_INPUT_CHARS = int(os.getenv("LLM_INPUT_CHARS", "2000"))
 # how a first pass over a large tree is timed before one is spent on it.
 SUMMARY_LIMIT = int(os.getenv("SUMMARY_LIMIT", "") or 0)
 
-# How much of each file's text is kept in graph_nodes.content, which is where
-# a summarizing worker on another machine reads it from: it has no checkout of
-# the tree and no mount. Zero stores nothing and turns remote summarizing off.
-# Deliberately larger than the head the fast summary is written from - a GPU
-# can afford a context a CPU could not - and the dial to turn down on a very
-# large tree, since an index run holds one of these per code file at once.
-CONTENT_STORE_CHARS = int(os.getenv("CONTENT_STORE_CHARS", "16000") or 0)
 # Files that get a node and a head-of-file summary like any other, but whose
-# text is never stored. Storing it would put a secret in a table the worker
-# API serves over the network, and a tree without a .ctxignore is the case
-# this exists for.
+# text the API never serves. A tree without a .ctxignore is the case this
+# exists for: the mount holds whatever the checkout holds, and a key in it
+# must not travel over the network because a node names the file.
 CONTENT_DENIED_NAMES = (
     ".env",
     ".env.*",

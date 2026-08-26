@@ -12,14 +12,11 @@ from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
-# A file whose node carries no text cannot be described by a worker that has
-# no copy of the tree.
-NO_CONTENT = "no stored content, re-index the project"
+from ctxgraph import sources
 
-# The digest of the text a worker is handed, computed in the database so that
-# creating a job does not drag the whole corpus through this process. The
-# result must equal summary_text.content_key of the same slice.
-HASH_SQL = "ENCODE(SHA256(CONVERT_TO(LEFT(n.content, %s), 'UTF8')), 'hex')"
+# A file the graph names but the mount does not hold: the graph is ahead of
+# the tree, and re-indexing is what settles it.
+NO_FILE = "not on the mount, re-index the project"
 
 
 def running_job(cursor: Cursor, project: str) -> dict[str, Any] | None:
@@ -79,28 +76,20 @@ def populate_job(
     cursor: Cursor,
     job_id: int,
     project: str,
-    input_chars: int,
     refresh: bool,
     limit: int = 0,
-) -> tuple[int, int]:
-    """Enqueue the files of a project. Returns the tasks written and skipped.
+) -> int:
+    """Enqueue the files of a project. Returns the tasks written.
 
-    A file with no stored text is enqueued as skipped rather than left out: a
-    job that silently covered a tenth of a project would read as a finished
-    one.
+    Every file node is enqueued pending with an empty digest. The text lives
+    on the mount rather than in the graph, so what a file hashes to - and
+    whether it is there at all - is only known when a worker claims it.
     """
-    sources = ["auto", "llm"] if refresh else ["auto"]
+    wanted = ["auto", "llm"] if refresh else ["auto"]
     cursor.execute(
-        f"""
-        INSERT INTO summary_tasks (job_id, file_path, content_hash, state, note)
-        SELECT
-            %s,
-            n.file_path,
-            COALESCE({HASH_SQL}, ''),
-            CASE
-                WHEN COALESCE(n.content, '') = '' THEN 'skipped' ELSE 'pending'
-            END,
-            CASE WHEN COALESCE(n.content, '') = '' THEN %s END
+        """
+        INSERT INTO summary_tasks (job_id, file_path, content_hash, state)
+        SELECT %s, n.file_path, '', 'pending'
           FROM graph_nodes AS n
          WHERE n.project = %s AND n.type = 'file' AND n.file_path IS NOT NULL
            AND COALESCE(n.metadata ->> 'summary_source', 'auto') = ANY(%s)
@@ -109,10 +98,9 @@ def populate_job(
         ON CONFLICT (job_id, file_path) DO NOTHING
         RETURNING state;
         """,
-        (job_id, input_chars, NO_CONTENT, project, sources, limit or None),
+        (job_id, project, wanted, limit or None),
     )
-    states = [row[0] for row in cursor.fetchall()]
-    return len(states), states.count("skipped")
+    return len(cursor.fetchall())
 
 
 def settle_cached(
@@ -350,18 +338,17 @@ def claim_batch(
 def read_task_content(
     cursor: Cursor, project: str, task_ids: list[int], input_chars: int
 ) -> dict[int, str]:
-    """Read the text of the claimed tasks, exactly as it will be sent."""
+    """Read the text of the claimed tasks off the mount, as it will be sent."""
     cursor.execute(
-        """
-        SELECT t.id, LEFT(n.content, %s)
-          FROM summary_tasks AS t
-          LEFT JOIN graph_nodes AS n
-            ON n.project = %s AND n.id = t.file_path AND n.type = 'file'
-         WHERE t.id = ANY(%s);
-        """,
-        (input_chars, project, task_ids),
+        "SELECT id, file_path FROM summary_tasks WHERE id = ANY(%s);",
+        (task_ids,),
     )
-    return {int(row[0]): row[1] or "" for row in cursor.fetchall()}
+    rows = cursor.fetchall()
+    texts: dict[int, str] = {}
+    for task_id, rel_path in rows:
+        content, _ = sources.read(project, rel_path, input_chars)
+        texts[int(task_id)] = content or ""
+    return texts
 
 
 def set_task_hash(cursor: Cursor, task_id: int, content_hash: str) -> None:
@@ -369,6 +356,20 @@ def set_task_hash(cursor: Cursor, task_id: int, content_hash: str) -> None:
     cursor.execute(
         "UPDATE summary_tasks SET content_hash = %s WHERE id = %s;",
         (content_hash, task_id),
+    )
+
+
+def settle_task(cursor: Cursor, task_id: int) -> None:
+    """Close one task the cache could already answer."""
+    cursor.execute(
+        """
+        UPDATE summary_tasks
+           SET state = 'done', origin = 'cache', lease_token = NULL,
+               worker_id = NULL, lease_expires_at = NULL,
+               updated_at = CURRENT_TIMESTAMP
+         WHERE id = %s;
+        """,
+        (task_id,),
     )
 
 

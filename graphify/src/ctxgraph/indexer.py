@@ -56,14 +56,12 @@ from ctxgraph.storage import (
     list_projects,
     prune_missing_files,
     prune_orphans,
-    store_file_content,
     upsert_entity_node,
     upsert_file_hash,
     upsert_file_node,
 )
 from ctxgraph.summaries import extract_summary
 from ctxgraph.summarizer import Summarizer
-from ctxgraph.summary_text import body_for_storage
 from graphify.extract import extract
 
 LOG = logging.getLogger(__name__)
@@ -106,7 +104,6 @@ def index_file(
         project,
         rel_path,
         extract_summary(rel_path, content, entities),
-        content=body_for_storage(rel_path, content),
     )
     if summarizer is not None:
         summarizer.refine(cursor, project, rel_path, content)
@@ -253,7 +250,6 @@ def index_with_graphifyy(
         LOG.info("Cleared %d cached extractions before re-extracting", cleared)
 
     heads: dict[str, str] = {}
-    bodies: dict[str, str] = {}
     unread: dict[str, str] = {}
     for full_path, rel_path in sources:
         content, reason = read_source(full_path, rel_path)
@@ -261,7 +257,6 @@ def index_with_graphifyy(
             unread[rel_path] = reason
         else:
             heads[rel_path] = "\n".join(content.splitlines()[:SUMMARY_HEAD_LINES])
-            bodies[rel_path] = body_for_storage(rel_path, content)
 
     extraction = extract([Path(full_path) for full_path, _ in sources])
     normalize_extraction(extraction, mount)
@@ -275,7 +270,7 @@ def index_with_graphifyy(
         clear_file_artifacts(cursor, project, rel_path)
 
     nodes, edges, extracted = import_extraction(
-        cursor, project, extraction, heads, bodies, summarizer
+        cursor, project, extraction, heads, summarizer
     )
     for _, rel_path in sources:
         if rel_path not in extracted:
@@ -407,9 +402,6 @@ def scan_and_build_graph() -> None:
                 if stored_hash == file_hash:
                     # Skip parsing, retrieve entities from DB
                     entities = get_file_entities(cursor, project, rel_path)
-                    store_file_content(
-                        cursor, project, rel_path, body_for_storage(rel_path, content)
-                    )
                 else:
                     # Re-parse file
                     try:

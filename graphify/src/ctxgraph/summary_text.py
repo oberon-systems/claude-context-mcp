@@ -8,16 +8,11 @@ do it.
 
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import posixpath
 import re
 
-from ctxgraph.config import (
-    CONTENT_DENIED_NAMES,
-    CONTENT_STORE_CHARS,
-    MAX_SUMMARY_LENGTH,
-)
+from ctxgraph.config import MAX_SUMMARY_LENGTH
 from ctxgraph.identifiers import truncate
 
 # Shorter than this and the model has said nothing a file name does not.
@@ -126,19 +121,3 @@ def useful(summary: str, rel_path: str) -> bool:
         if spelled == "".join(char for char in name if char.isalnum()):
             return False
     return True
-
-
-def body_for_storage(rel_path: str, content: str) -> str:
-    """Return the text of a file as graph_nodes.content should hold it.
-
-    Empty for a run that stores no content, and for a file whose text must not
-    leave this machine: the worker API serves this column over the network,
-    and a tree without a .ctxignore is the case this exists for.
-    """
-    if CONTENT_STORE_CHARS <= 0:
-        return ""
-    name = posixpath.basename(rel_path)
-    for pattern in CONTENT_DENIED_NAMES:
-        if fnmatch.fnmatch(name, pattern):
-            return ""
-    return content[:CONTENT_STORE_CHARS]

@@ -78,7 +78,7 @@ model on the card, and a worker feeds it. Both can live on this same
 machine, over loopback:
 
 ```bash
-make api-up                             # the job queue, served at /worker
+make up                                 # the API serves the queue at /worker
 
 docker run --rm --gpus all -p 8080:8080 \
     -v ~/.local/share/context-mcp/models:/models \
@@ -95,7 +95,8 @@ The weights are the ones `make llm-model-install` already downloaded. The
 worker in this mode loads no model of its own and needs nothing installed:
 `ctxworker` is standard library apart from the model, so it runs from a bare
 checkout. `WORKER_API_TOKEN` comes from the stack's `.env`
-(`openssl rand -hex 24`), and `make api-up` refuses to start without it.
+(`openssl rand -hex 24`), and the API refuses to start without it; `make up`
+generates one when `.env` has none.
 
 ## 2. The worker on another machine
 
@@ -106,21 +107,23 @@ reaches it over HTTP.
 On the stack, once:
 
 ```bash
-openssl rand -hex 24                 # into .env as WORKER_API_TOKEN
-make reindex PROJECT=/path/to/repo   # so the file text is in the graph
-make api-up                          # serves the queue at /worker
+make up                              # generates WORKER_API_TOKEN if unset
+make mounts                          # so the API can read every tree
+make jobs PROJECT_NAME=kurum         # queue every file with no model summary
 make jobs PROJECT_NAME=kurum         # queue every file with no model summary
 make job ID=7                        # how far along it is
 ```
 
-That text has to be in the graph for any of this to work, and it is:
-indexing stores the first `CONTENT_STORE_CHARS` characters (16000 by
-default) of every file in `graph_nodes.content`. Files that look like
-secrets (`.env`, `*.pem`, `*.tfvars`, `id_rsa*`) still get a node and a
-head-of-file summary, but their text is never stored, and
-`CONTENT_STORE_CHARS=0` turns storage off entirely. A project indexed before
-this existed has no text at all, and its job reports every file as
-`skipped` - `make reindex` is the fix.
+The text is read off the mount when a worker claims a file, not stored in
+the graph: every indexed tree is mounted read-only at `/code/<project>` and
+the API is the only service that opens it. `input_chars` on the job decides
+how much of a file the model is shown, bounded by `LLM_INPUT_CHARS`.
+
+Files that look like secrets (`.env`, `*.pem`, `*.tfvars`, `id_rsa*`) get a
+node and a head-of-file summary like any other, but the API refuses to serve
+their text - to a worker, to the dashboard, to anything. A file the graph
+names and the mount does not hold is reported as `skipped` with `not on the
+mount`: the graph is ahead of the tree, and `make reindex` settles it.
 
 The queue is served at `/worker` on the stack's entry point, which is plain
 HTTP on every interface, so it belongs on a trusted LAN or a VPN. Terminating

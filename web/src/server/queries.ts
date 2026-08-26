@@ -103,13 +103,7 @@ export const NODES = `
    LIMIT $5 OFFSET $6`;
 
 export const NODE = `
-  SELECT id, name, type, file_path, summary, metadata, created_at,
-         length(content) AS content_length
-    FROM graph_nodes
-   WHERE project = $1 AND id = $2`;
-
-export const NODE_CONTENT = `
-  SELECT substring(content FROM 1 FOR $3) AS content
+  SELECT id, name, type, file_path, summary, metadata, created_at
     FROM graph_nodes
    WHERE project = $1 AND id = $2`;
 

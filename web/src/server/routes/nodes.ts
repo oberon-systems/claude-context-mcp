@@ -10,13 +10,10 @@ import {
   requireQuery,
   route,
 } from "../args.js";
+import { fileText } from "../content.js";
 import { count, dbPool } from "../db.js";
 import * as sql from "../queries.js";
 import { requireProject } from "./projects.js";
-
-// Node content is whole file bodies. A page of them would be measured in
-// megabytes, so it is sent only when asked for and only this far.
-const MAX_CONTENT = 100_000;
 
 // A one-character search matches most of a large graph and costs a full scan
 // to say so.
@@ -73,7 +70,7 @@ nodesRouter.get(
   route(async (req, res) => {
     const name = await requireProject(req.params.name);
     const id = requireQuery(req, "id");
-    const rows = await dbPool.query<{ content_length: string | null }>(
+    const rows = await dbPool.query<{ type: string; file_path: string | null }>(
       sql.NODE,
       [name, id],
     );
@@ -82,21 +79,22 @@ nodesRouter.get(
     }
 
     const row = rows.rows[0];
-    const length = count(row.content_length);
     const detail = {
       ...row,
-      content_length: length,
+      content_length: 0,
       content: null as string | null,
       content_truncated: false,
+      content_reason: null as string | null,
     };
 
-    if (readFlag(req, "content") && length > 0) {
-      const body = await dbPool.query<{ content: string | null }>(
-        sql.NODE_CONTENT,
-        [name, id, MAX_CONTENT],
-      );
-      detail.content = body.rows[0].content;
-      detail.content_truncated = length > MAX_CONTENT;
+    // Only a file has text, and it lives on the mount rather than in the
+    // graph, so it is fetched rather than selected.
+    if (readFlag(req, "content") && row.type === "file" && row.file_path) {
+      const text = await fileText(name, row.file_path);
+      detail.content = text.content;
+      detail.content_length = text.chars;
+      detail.content_truncated = text.truncated;
+      detail.content_reason = text.reason;
     }
 
     res.json(detail);

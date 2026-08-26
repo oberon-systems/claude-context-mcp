@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 
 from ctxgraph.config import BUILTIN_PROJECT_TYPES
-from ctxgraph.storage import ensure_project, list_pending_summaries
+from ctxgraph.storage import ensure_project, list_files_without_llm_summary
 
 
 class FakeCursor:
@@ -81,23 +81,17 @@ def test_still_refuses_a_name_pointing_at_another_path() -> None:
         ensure_project(cursor, "kurum", "/src/kurum")
 
 
-def test_pending_summaries_carry_the_stored_text() -> None:
-    """The auto pass reads the graph, so the text arrives with the path."""
-    cursor = FakeCursor([("src/app.py", "import os"), ("README.md", "# kurum")])
-    assert list_pending_summaries(cursor, "kurum") == [
-        ("src/app.py", "import os"),
-        ("README.md", "# kurum"),
+def test_files_without_a_summary_come_back_as_paths() -> None:
+    """The pass reads files from the mount, so only the path is needed."""
+    cursor = FakeCursor([("src/app.py",), ("README.md",)])
+    assert list_files_without_llm_summary(cursor, "kurum") == [
+        "src/app.py",
+        "README.md",
     ]
-
-
-def test_a_file_with_no_stored_text_is_still_listed() -> None:
-    """Dropping it here would hide how much of a project needs re-indexing."""
-    cursor = FakeCursor([(".env", "")])
-    assert list_pending_summaries(cursor, "kurum") == [(".env", "")]
 
 
 def test_refresh_widens_the_selection_to_what_the_model_wrote() -> None:
     """The flag reaches the statement; the CASE in it does the widening."""
     cursor = FakeCursor([])
-    list_pending_summaries(cursor, "kurum", True)
+    list_files_without_llm_summary(cursor, "kurum", True)
     assert cursor.calls[-1][1] == ("kurum", True)

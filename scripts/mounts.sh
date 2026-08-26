@@ -73,8 +73,12 @@ trap 'rm -f "$work"' EXIT
     fi
     echo
     echo "services:"
-    echo "  graphify:"
-    echo "    volumes: *code-mounts"
+    # Both services that touch files: the indexer walks the trees, the API
+    # serves their text to the dashboard and to a remote worker.
+    for service in graphify worker-api; do
+        echo "  $service:"
+        echo "    volumes: *code-mounts"
+    done
 } > "$work"
 
 mv "$work" "$output"

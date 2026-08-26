@@ -1,5 +1,10 @@
 import type { Request, RequestHandler, Response } from "express";
 
+// Where file text comes from. The dashboard reads no tree of its own: the
+// API holds the mounts and the deny list that guards them.
+export const API_URL = process.env.API_URL ?? "http://worker-api:3003";
+export const API_TOKEN = process.env.API_TOKEN ?? "";
+
 export const MAX_LIMIT = 200;
 export const DEFAULT_LIMIT = 50;
 

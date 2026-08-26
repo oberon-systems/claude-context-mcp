@@ -124,17 +124,17 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # The queue a summarizing worker on another machine claims work from. Same
-  # image as the indexer, run as another module, the way the viewer is. Reached
-  # through the ingress at /worker, from off this host - the GPU that answers
-  # it is elsewhere - which is why it is the one service here that carries a
-  # token of its own, and why it stays behind a profile: nobody who does not
-  # use a remote worker has to configure one.
+  # The API: the only service that reads files, and the queue a summarizing
+  # worker on another machine claims work from. Same image as the indexer, run
+  # as another module, the way the viewer is. Reached through the ingress at
+  # /worker, from off this host as well - the GPU that answers it is elsewhere
+  # - which is why it carries a token of its own. It holds the same /code
+  # mounts as the indexer, because a file node names a file and something has
+  # to be able to read it.
   worker-api:
     image: ghcr.io/oberon-systems/claude-context-mcp/graphify:latest
     restart: unless-stopped
     command: ["python", "-m", "ctxgraph.workerapi"]
-    profiles: [remote]
     environment:
       DATABASE_URL: *database-url
       WORKER_API_PORT: 3003
@@ -145,7 +145,7 @@ services:
       WORKER_LEASE_SECONDS: ${WORKER_LEASE_SECONDS:-300}
       WORKER_MAX_BATCH: ${WORKER_MAX_BATCH:-8}
       WORKER_MAX_ATTEMPTS: ${WORKER_MAX_ATTEMPTS:-3}
-      CONTENT_STORE_CHARS: ${CONTENT_STORE_CHARS:-16000}
+      CODE_ROOT: /code
     networks: [base]
     depends_on:
       migrate:
@@ -176,6 +176,9 @@ services:
       DATABASE_URL: *database-url
       PORT: 3002
       VIEWER_URL: http://viewer:3001
+      # File text comes from the API, which owns the mounts and the deny list.
+      API_URL: http://worker-api:3003
+      API_TOKEN: ${WORKER_API_TOKEN:-}
       # Behind the ingress the Host header carries the gateway's port, not
       # this service's, so the built-in default would refuse every request.
       WEB_ALLOWED_HOSTS: ${GATEWAY_HOSTS:-localhost:3000,127.0.0.1:3000,[::1]:3000},web:3002

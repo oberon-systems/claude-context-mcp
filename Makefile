@@ -41,7 +41,7 @@ SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
 	logs ps status index reindex summarize unindex backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
-	llm-model-install api-up api-down api-logs jobs job $(SUBS)
+	llm-model-install api-logs jobs job $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
 SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
@@ -50,8 +50,8 @@ endif
 .PHONY: help init install mounts shell lint check build pull up down restart logs ps \
 	status index reindex summarize unindex backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
-	llm-model-install api-up api-down api-logs jobs job \
-	require-venv require-env require-not-root require-model require-api
+	llm-model-install api-logs jobs job \
+	require-venv require-env require-not-root require-model
 
 help:  ## Show the current version and the available targets
 	@echo "$(NAME) $(VERSION)"
@@ -170,7 +170,7 @@ pull:  ## Pull the published images, discarding a local build
 # The viewer is named here rather than left to a bare `up` so that /graph,
 # which the dashboard proxies, answers on a stack this target started.
 up: require-env  ## Start the database, the services and the entry point
-	$(COMPOSE) up -d postgres mcp-server viewer web nginx
+	$(COMPOSE) up -d postgres worker-api mcp-server viewer web nginx
 
 # The index job sits behind a profile, so a plain `down` does not see it: a
 # graphify container left over from `make index` keeps the network alive and
@@ -189,16 +189,10 @@ API_URL := http://127.0.0.1:$(GATEWAY_PORT)/worker
 CURL_AUTH = printf 'header = "Authorization: Bearer %s"\n' \
 	"$$(sed -n 's/^WORKER_API_TOKEN=//p' .env)" | curl -sS --config -
 
-api-up: require-env require-api  ## Start the remote summarization API
-	$(COMPOSE) --profile remote up -d worker-api
+api-logs:  ## Follow the API log
+	$(COMPOSE) logs -f worker-api
 
-api-down:  ## Stop the remote summarization API
-	$(COMPOSE) --profile remote stop worker-api
-
-api-logs:  ## Follow the remote summarization API log
-	$(COMPOSE) --profile remote logs -f worker-api
-
-jobs: require-api  ## Queue a summarization job: make jobs PROJECT_NAME=kurum
+jobs: require-env  ## Queue a summarization job: make jobs PROJECT_NAME=kurum
 	@test -n '$(PROJECT_NAME)' || { \
 		echo "PROJECT_NAME= is required" >&2; exit 1; \
 	}
@@ -207,17 +201,10 @@ jobs: require-api  ## Queue a summarization job: make jobs PROJECT_NAME=kurum
 		-d '{"project":"$(PROJECT_NAME)","refresh":$(if $(FRESH),true,false)}'
 	@echo
 
-job: require-api  ## Show a summarization job: make job ID=7
+job: require-env  ## Show a summarization job: make job ID=7
 	@test -n '$(ID)' || { echo "ID= is required" >&2; exit 1; }
 	@$(CURL_AUTH) '$(API_URL)/jobs/$(ID)'
 	@echo
-
-require-api:
-	@grep -q '^WORKER_API_TOKEN=..' .env 2>/dev/null || { \
-		echo "WORKER_API_TOKEN is not set in .env." >&2; \
-		echo "Generate one with: openssl rand -hex 24" >&2; \
-		exit 1; \
-	}
 
 logs:  ## Follow the logs of the running services
 	$(COMPOSE) logs -f
@@ -545,6 +532,12 @@ require-env:
 	@test -f .env || { \
 		echo ".env is missing, copy .env.example and fill it in" >&2; \
 		exit 1; \
+	}
+	@grep -qE '^WORKER_API_TOKEN=.{16,}' .env || { \
+		sed -i '/^WORKER_API_TOKEN=/d' .env; \
+		printf 'WORKER_API_TOKEN=%s\n' "$$(openssl rand -hex 24)" >> .env; \
+		echo "Generated WORKER_API_TOKEN in .env: the API serves file text" \
+			"and refuses to start without one." >&2; \
 	}
 
 # Under sudo the agents' own state lives in /root, so an install would land
