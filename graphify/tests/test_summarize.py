@@ -1,13 +1,15 @@
 """The pass over every project: which files reach the model, and how many.
 
-No database and no model: the two queries and the summarizer are replaced, so
-what is left under test is the loop itself - one project after another, the
-limit applied to each, and the files nothing was stored for left alone.
+No database and no model, but real trees on disk: the listing query and the
+summarizer are replaced while the mounts are actual directories, so what is
+left under test is the loop itself - one project after another, the limit
+applied to each, and a node whose file is gone left alone.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import pathlib
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import pytest
@@ -16,7 +18,7 @@ from ctxgraph import summarize
 
 
 class FakeConnection:
-    """A connection whose cursors do nothing, both queries being patched out."""
+    """A connection whose cursors do nothing, the query being patched out."""
 
     def __init__(self) -> None:
         """Count the commits, which is what makes the pass resumable."""
@@ -71,87 +73,125 @@ def stack(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeConnection, FakeSummariz
     return conn, summarizer
 
 
-def with_projects(
-    monkeypatch: pytest.MonkeyPatch, pending: dict[str, list[tuple[str, str]]]
-) -> None:
-    """Answer both queries from a table of project name to file rows."""
-    monkeypatch.setattr(
-        summarize,
-        "list_projects",
-        lambda cursor: [(name, f"/src/{name}", "codebase", 1) for name in pending],
-    )
-    monkeypatch.setattr(
-        summarize,
-        "list_pending_summaries",
-        lambda cursor, project, refresh=False: pending[project],
-    )
+Pending = dict[str, list[tuple[str, str | None]]]
+
+
+@pytest.fixture
+def trees(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[Pending], None]:
+    """Build the mounts as real directories and answer the listing from them.
+
+    Real files rather than a mocked read: reading the tree is the whole point
+    of the mount, and a text of None is a node whose file is gone.
+    """
+
+    def build(pending: Pending) -> None:
+        for project, files in pending.items():
+            root = tmp_path / project
+            root.mkdir(parents=True, exist_ok=True)
+            for rel_path, text in files:
+                if text is None:
+                    continue
+                path = root / rel_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
+        monkeypatch.setattr(
+            summarize, "project_mount", lambda project: str(tmp_path / project)
+        )
+        monkeypatch.setattr(
+            summarize,
+            "list_projects",
+            lambda cursor: [(name, f"/src/{name}", "codebase", 1) for name in pending],
+        )
+        monkeypatch.setattr(
+            summarize,
+            "list_files_without_llm_summary",
+            lambda cursor, project, refresh=False: [
+                rel_path for rel_path, _ in pending[project]
+            ],
+        )
+
+    return build
 
 
 def test_every_project_is_described(
-    monkeypatch: pytest.MonkeyPatch, stack: tuple[FakeConnection, FakeSummarizer]
+    trees: Callable[[Pending], None], stack: tuple[FakeConnection, FakeSummarizer]
 ) -> None:
     """A bare pass walks the projects table rather than one mounted tree."""
     conn, summarizer = stack
-    with_projects(
-        monkeypatch,
+    trees(
         {
             "kurum": [("app.py", "import os")],
             "oberon": [("main.go", "package main")],
-        },
+        }
     )
-    summarize.summarize_stored()
+    summarize.summarize_projects()
     assert summarizer.seen == [("kurum", "app.py"), ("oberon", "main.go")]
     assert conn.commits == 2
     assert summarizer.closed
 
 
 def test_the_limit_is_spent_on_each_project(
-    monkeypatch: pytest.MonkeyPatch, stack: tuple[FakeConnection, FakeSummarizer]
+    monkeypatch: pytest.MonkeyPatch,
+    trees: Callable[[Pending], None],
+    stack: tuple[FakeConnection, FakeSummarizer],
 ) -> None:
     """A budget for the whole run would be spent entirely on the first project."""
     _, summarizer = stack
     monkeypatch.setattr(summarize, "SUMMARY_LIMIT", 1)
-    with_projects(
-        monkeypatch,
+    trees(
         {
             "kurum": [("app.py", "import os"), ("util.py", "import sys")],
             "oberon": [("main.go", "package main"), ("go.mod", "module oberon")],
-        },
+        }
     )
-    summarize.summarize_stored()
+    summarize.summarize_projects()
     assert summarizer.seen == [("kurum", "app.py"), ("oberon", "main.go")]
 
 
-def test_a_file_with_no_stored_text_never_reaches_the_model(
-    monkeypatch: pytest.MonkeyPatch, stack: tuple[FakeConnection, FakeSummarizer]
+def test_a_node_whose_file_is_gone_never_reaches_the_model(
+    trees: Callable[[Pending], None], stack: tuple[FakeConnection, FakeSummarizer]
 ) -> None:
-    """Nothing to describe, and the count is what names the project to re-index."""
+    """The graph is ahead of the tree, and the count is what says so."""
     conn, summarizer = stack
-    with_projects(monkeypatch, {"kurum": [(".env", ""), ("app.py", "import os")]})
-    summarize.summarize_stored()
+    trees({"kurum": [("deleted.py", None), ("app.py", "import os")]})
+    summarize.summarize_projects()
     assert summarizer.seen == [("kurum", "app.py")]
     assert conn.commits == 1
 
 
-def test_a_named_project_skips_the_listing(
-    monkeypatch: pytest.MonkeyPatch, stack: tuple[FakeConnection, FakeSummarizer]
+def test_an_unmounted_project_is_skipped(
+    trees: Callable[[Pending], None], stack: tuple[FakeConnection, FakeSummarizer]
 ) -> None:
-    """--project names one project without the tree having to be mounted."""
+    """A project with no mount is reported rather than read as an empty tree."""
     _, summarizer = stack
-    with_projects(monkeypatch, {"kurum": [("app.py", "import os")]})
+    trees({"kurum": [("app.py", "import os")]})
+    summarize.summarize_projects(["kurum", "never-mounted"])
+    assert summarizer.seen == [("kurum", "app.py")]
+
+
+def test_a_named_project_skips_the_listing(
+    monkeypatch: pytest.MonkeyPatch,
+    trees: Callable[[Pending], None],
+    stack: tuple[FakeConnection, FakeSummarizer],
+) -> None:
+    """--project names one project without walking the projects table."""
+    _, summarizer = stack
+    trees({"kurum": [("app.py", "import os")]})
     monkeypatch.setattr(
         summarize, "list_projects", lambda cursor: pytest.fail("listed anyway")
     )
-    summarize.summarize_stored(["kurum"])
+    summarize.summarize_projects(["kurum"])
     assert summarizer.seen == [("kurum", "app.py")]
 
 
 def test_an_empty_database_loads_no_model(
-    monkeypatch: pytest.MonkeyPatch, stack: tuple[FakeConnection, FakeSummarizer]
+    trees: Callable[[Pending], None], stack: tuple[FakeConnection, FakeSummarizer]
 ) -> None:
     """A gigabyte of weights is not read to describe nothing."""
     _, summarizer = stack
-    with_projects(monkeypatch, {})
-    summarize.summarize_stored()
+    trees({})
+    summarize.summarize_projects()
     assert summarizer.seen == []
     assert not summarizer.closed

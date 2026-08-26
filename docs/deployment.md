@@ -20,7 +20,7 @@ without it.
 
 | Variable            | Default   | Purpose                                                                                         |
 | ------------------- | --------- | ----------------------------------------------------------------------------------------------- |
-| `PROJECT_PATH`      | required  | Absolute host path of the codebase to index, mounted read-only at `/project`                    |
+| `PROJECT_PATH`      | required  | Absolute host path of the codebase to index; the default tree, mounted like every other one     |
 | `PROJECT_NAME`      | derived   | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
 | `POSTGRES_PASSWORD` | required  | Database password; compose fails fast when unset                                                |
 | `POSTGRES_USER`     | `user`    | Database user                                                                                   |

@@ -6,9 +6,17 @@ of the package, so it stays importable from anywhere.
 
 import os
 
-PROJECT_PATH = os.getenv("TARGET_PROJECT_PATH", "/project")
-# The host path of the tree being indexed. Inside the container the mount is
-# always at PROJECT_PATH, which says nothing about where it came from, so the
+# Where a tree is mounted before it is a project at all. `ctxgraph.bootstrap`
+# runs against a checkout with no row, no settled name and no generated mount,
+# usually with the stack down, so it gets a fixed path of its own. Nothing
+# else uses it.
+SCAN_PATH = os.getenv("TARGET_PROJECT_PATH", "/project")
+# Every indexed tree is mounted read-only at CODE_ROOT/<project> by the
+# generated compose override, so a pass over several projects reads the files
+# of all of them rather than the one that happened to be mounted.
+CODE_ROOT = os.getenv("CODE_ROOT", "/code")
+# The host path of the tree being indexed. Inside the container it is reached
+# through the mount above, which says nothing about where it came from, so the
 # real location is passed separately and recorded in the projects table. That
 # is what lets a project name be traced back to a checkout, and what stops two
 # checkouts sharing a basename from merging into one graph.

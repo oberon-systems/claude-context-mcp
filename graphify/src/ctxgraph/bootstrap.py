@@ -29,8 +29,8 @@ from ctxgraph.config import (
     KEEP_FILE,
     MAX_FILE_BYTES,
     PROJECT_NAME,
-    PROJECT_PATH,
     PROJECT_ROOT,
+    SCAN_PATH,
 )
 from ctxgraph.discovery import load_spec, walk_selected
 from ctxgraph.identifiers import project_name
@@ -388,7 +388,9 @@ def emit(section: str, lines: list[str]) -> None:
 
 def main() -> None:
     """Scan the mounted tree and print the proposal, the name and the report."""
-    root_path = PROJECT_PATH
+    # The one pass that runs before a project exists: no row, no settled
+    # name, no generated mount, and usually no stack either.
+    root_path = SCAN_PATH
     if not os.path.isdir(root_path):
         print(f"{root_path} is not a directory", file=sys.stderr)
         raise SystemExit(1)

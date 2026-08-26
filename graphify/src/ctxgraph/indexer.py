@@ -23,14 +23,18 @@ from ctxgraph.config import (
     LLM_MODEL_PATH,
     MAX_NODE_ID_LENGTH,
     PROJECT_NAME,
-    PROJECT_PATH,
     PROJECT_ROOT,
     PROJECT_TYPE,
     SOURCE_GRAPHIFYY,
     SUMMARIZE,
 )
 from ctxgraph.discovery import iter_source_files, read_source
-from ctxgraph.identifiers import entity_node_id, project_name, truncate
+from ctxgraph.identifiers import (
+    entity_node_id,
+    project_mount,
+    project_name,
+    truncate,
+)
 from ctxgraph.interop import (
     import_extraction,
     install_extractor_cache,
@@ -224,6 +228,7 @@ def normalize_extraction(
 def index_with_graphifyy(
     cursor: Cursor,
     project: str,
+    mount: str,
     sources: list[tuple[str, str]],
     gaps: dict[str, str],
     summarizer: Summarizer | None = None,
@@ -259,7 +264,7 @@ def index_with_graphifyy(
             bodies[rel_path] = body_for_storage(rel_path, content)
 
     extraction = extract([Path(full_path) for full_path, _ in sources])
-    normalize_extraction(extraction, PROJECT_PATH)
+    normalize_extraction(extraction, mount)
 
     clear_producer_artifacts(cursor, project, SOURCE_GRAPHIFYY)
     # Also clear by file. A tree indexed before the extractor was introduced
@@ -278,13 +283,13 @@ def index_with_graphifyy(
     return nodes, edges
 
 
-def resolve_project() -> tuple[str, str]:
-    """Settle on the name and the host path of the tree being indexed.
+def resolve_project() -> tuple[str, str, str]:
+    """Settle the name, the host path and the mount of the tree being indexed.
 
-    The mount inside the container is always `/project`, which says nothing
-    about which codebase it is. One database now holds several, so the host
-    path has to arrive separately; `make index` passes it, and a hand-rolled
-    `docker run` has to as well.
+    The host path says where the checkout lives and is what the projects table
+    records; the mount says where this container reads it. They differ, so the
+    host path has to arrive separately; `make index` passes it, and a
+    hand-rolled `docker run` has to as well.
     """
     root_path = PROJECT_ROOT.strip()
     if not root_path:
@@ -293,15 +298,20 @@ def resolve_project() -> tuple[str, str]:
             "indexed, and it is what tells one project in the database from "
             "another. Pass it, or run the job through `make index`."
         )
-    return project_name(PROJECT_NAME, root_path), root_path
+    project = project_name(PROJECT_NAME, root_path)
+    return project, root_path, project_mount(project)
 
 
 def scan_and_build_graph() -> None:
     """Walk the project and build the graph from both producers."""
-    if not os.path.isdir(PROJECT_PATH):
-        raise RuntimeError(f"{PROJECT_PATH} is not a directory")
+    project, root_path, mount = resolve_project()
+    if not os.path.isdir(mount):
+        raise RuntimeError(
+            f"{mount} is not a directory. Every indexed tree is mounted there "
+            "by the generated compose override; run `make mounts`, or index "
+            "through `make index`, which refreshes it first."
+        )
 
-    project, root_path = resolve_project()
     if PROJECT_TYPE is not None and PROJECT_TYPE not in KNOWN_PROJECT_TYPES:
         LOG.warning(
             "TYPE=%s is not one of %s; storing it anyway",
@@ -334,7 +344,7 @@ def scan_and_build_graph() -> None:
                     dropped,
                 )
 
-        discovered = list(iter_source_files(PROJECT_PATH))
+        discovered = list(iter_source_files(mount))
         code_sources = [pair for pair in discovered if is_graphifyy_source(pair[1])]
         sources = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
         LOG.info(
@@ -355,7 +365,13 @@ def scan_and_build_graph() -> None:
         with conn.cursor() as cursor:
             try:
                 nodes, edges = index_with_graphifyy(
-                    cursor, project, code_sources, gaps, summarizer, FORCE_REEXTRACT
+                    cursor,
+                    project,
+                    mount,
+                    code_sources,
+                    gaps,
+                    summarizer,
+                    FORCE_REEXTRACT,
                 )
                 conn.commit()
                 LOG.info("graphifyy: %d nodes, %d edges", nodes, edges)

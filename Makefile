@@ -47,7 +47,7 @@ SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init install shell lint check build pull up down restart logs ps \
+.PHONY: help init install mounts shell lint check build pull up down restart logs ps \
 	status index reindex summarize unindex backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-up api-down api-logs jobs job \
@@ -303,7 +303,17 @@ KEEP ?= 7
 BACKUP_DIR ?=
 INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 
+# Every indexed tree is mounted read-only at /code/<project>, so a pass over
+# several projects can read the files of all of them. The list is generated
+# from the projects table rather than written by hand, which is what stops it
+# drifting from what is actually indexed.
+mounts: require-env  ## Rewrite docker-compose.override.yaml from the projects table
+	@COMPOSE='$(COMPOSE)' ADD='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' \
+		scripts/mounts.sh
+
 index: require-env  ## Index PROJECT (TYPE= categorises it)
+	@$(MAKE) --no-print-directory mounts \
+		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(if $(TYPE),PROJECT_TYPE='$(TYPE)') \
@@ -317,12 +327,14 @@ index: require-env  ## Index PROJECT (TYPE= categorises it)
 # next one starts from what is left. FRESH=1 re-describes everything instead,
 # cache included; BG=1 detaches, for the hours a large tree takes.
 #
-# Named no project, it describes every project in the database. Only one tree
-# is ever mounted, so that pass reads the text the index stored on each node
-# rather than the files, and LIMIT= then caps each project rather than the run
-# - a budget spent entirely on the first project is not a pass over all of
-# them. AUTO=1 asks for it even when a project is named.
+# Named no project, it describes every project in the database. Every tree is
+# mounted at /code/<project>, so that pass reads the files of all of them, and
+# LIMIT= then caps each project rather than the run - a budget spent entirely
+# on the first project is not a pass over all of them. AUTO=1 asks for it even
+# when a project is named.
 summarize: require-env require-model  ## Summarize PROJECT, or every project (BG=1 detaches)
+	@$(MAKE) --no-print-directory mounts \
+		PROJECT='$(PROJECT)' PROJECT_NAME='$(PROJECT_NAME)'
 	$(if $(INDEXED),PROJECT_PATH='$(INDEXED)') \
 		$(if $(PROJECT_NAME),PROJECT_NAME='$(PROJECT_NAME)') \
 		$(if $(FRESH),FORCE_REEXTRACT=1) \

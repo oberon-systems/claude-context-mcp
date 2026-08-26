@@ -425,10 +425,10 @@ def list_pending_summaries(
 ) -> list[tuple[str, str]]:
     """List the same file nodes with the text stored for each of them.
 
-    The pass over every project cannot read from disk - one tree is mounted
-    and the rest are elsewhere - so it reads the column the worker API already
-    serves. A file with no stored text comes back with an empty one rather
-    than being left out, so the caller can say how many need re-indexing.
+    Left for the worker API, which serves this column to a machine that has
+    no checkout. The summarizing pass no longer uses it: every tree is mounted
+    at /code/<project>, so it reads the files. A file with no stored text
+    comes back with an empty one rather than being left out.
     """
     cursor.execute(
         """

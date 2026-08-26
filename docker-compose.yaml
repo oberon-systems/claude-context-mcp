@@ -59,11 +59,14 @@ services:
     restart: "no"
     environment:
       DATABASE_URL: *database-url
+      # Where a tree is read before it is a project: the bootstrap scan runs
+      # against a checkout with no row and no name yet. Indexing reads
+      # CODE_ROOT/<project> instead, mounted by the generated override.
       TARGET_PROJECT_PATH: /project
-      # The mount is always /project inside the container, which says nothing
-      # about which codebase it holds. The host path travels separately so the
-      # projects table can record where the graph came from, and the name is
-      # derived from it unless one is given.
+      CODE_ROOT: /code
+      # The host path travels separately so the projects table can record
+      # where the graph came from, and the name is derived from it unless one
+      # is given.
       PROJECT_ROOT: ${PROJECT_PATH}
       PROJECT_NAME: ${PROJECT_NAME:-}
       # Set by `make index TYPE=docs`: what kind of project this is, which is
@@ -87,6 +90,9 @@ services:
       LLM_THREADS: ${LLM_THREADS:-2}
     volumes:
       # Read-only by contract: the indexer must never mutate host sources.
+      # Only the bootstrap scan reads this one; every indexed tree arrives at
+      # /code/<project> through docker-compose.override.yaml, which
+      # `make mounts` writes.
       - ${PROJECT_PATH}:/project:ro
       - graph-out:/app/graphify-out
       # The summarizer weights, put there by `make llm-model-install`.

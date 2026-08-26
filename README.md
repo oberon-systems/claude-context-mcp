@@ -466,11 +466,12 @@ make summarize PROJECT=$(pwd)        # describe what has no model summary yet
 make summarize                       # the same, over every indexed project
 ```
 
-Named no project, the pass walks the `projects` table and reads the text the
-index stored on each node rather than the files: only one tree is mounted at a
-time, and the rest are on paths the container cannot see. A file indexed
-before that text was stored is counted and named in the log, and re-indexing
-its project is what makes it describable.
+Named no project, the pass walks the `projects` table and reads the files of
+every one of them: each indexed tree is mounted read-only at `/code/<project>`
+by `docker-compose.override.yaml`, which `make mounts` writes from that same
+table and `make index` refreshes first. A node whose file is no longer on disk
+is counted and named in the log - the graph is ahead of the tree, and
+re-indexing is what settles it.
 
 That pass can also run on another machine with a GPU instead of the stack's
 CPU, over HTTP, with no checkout of the code and no database access -

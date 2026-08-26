@@ -28,3 +28,8 @@ id_ed25519
 # The default selection skips these; an explicit .ctxkeep
 # pattern would otherwise pull them back in.
 package-lock.json
+
+# Written by `make mounts` from the projects table: host paths of every
+# indexed tree, generated per machine and ignored by git. Indexing it would
+# put those paths in the graph.
+docker-compose.override.yaml

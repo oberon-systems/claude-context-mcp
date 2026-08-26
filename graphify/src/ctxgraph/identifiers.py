@@ -11,6 +11,7 @@ import re
 
 from ctxgraph.config import (
     BUILTIN_NAME_PREFIX,
+    CODE_ROOT,
     ENTITY_SEPARATOR,
     MAX_NODE_ID_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
@@ -62,3 +63,12 @@ def project_name(explicit: str, root_path: str) -> str:
             "pass PROJECT_NAME explicitly"
         )
     return truncate(cleaned, MAX_PROJECT_NAME_LENGTH)
+
+
+def project_mount(project: str) -> str:
+    """Return where a project's tree is mounted inside the container.
+
+    The compose override is generated from the same name, so a mount and the
+    row it belongs to cannot disagree about what a project is called.
+    """
+    return posixpath.join(CODE_ROOT, project)
