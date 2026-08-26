@@ -45,7 +45,8 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **web**: should show how many files without summory (llm generated) in each project
 - [ ] **web**: allow to change repository type in web interface
 - [ ] **web**: drow graph for a specific file
-- [ ] **web**: reindex button for force reindex
+- [x] **web**: reindex button for force reindex
+- [ ] **web**: indexing status and summarize status
 
 ## Semantic & Advanced Intelligence
 

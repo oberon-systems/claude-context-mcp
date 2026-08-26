@@ -125,11 +125,13 @@ SHELL_RC ?=
 # selection files, installs the skills, writes the alias, and gives the API a
 # mount for the tree - but it does not index. That is a button in the
 # dashboard, because an index run is not part of setting up.
-install: require-env require-not-root  ## Onboard AGENT_ROOT: project, skills, alias, mount
+# FORCE=1 turns a re-run into a refresh: every file this version would write
+# and the tree already has is shown as a diff and asked about, one at a time.
+install: require-env require-not-root  ## Onboard AGENT_ROOT (FORCE=1 offers to refresh)
 	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
 		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
-		scripts/install.sh
+		FORCE='$(FORCE)' scripts/install.sh
 	@$(MAKE) --no-print-directory mounts \
 		PROJECT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)'
 	@# The API is long lived, so a tree added just now is invisible to it

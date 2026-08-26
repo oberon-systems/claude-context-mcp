@@ -22,6 +22,43 @@ make_bin="${MAKE_BIN:-make}"
 make_prefix="${MAKE_PREFIX:-make -C $repo_root}"
 python_bin="${PYTHON_BIN:-python3}"
 shell_rc="${SHELL_RC:-$HOME/.bashrc}"
+# Whether a file already in the tree should be replaced by what this version
+# would write. Without FORCE nothing is touched, which is what makes a re-run
+# safe. With it, anything that differs is shown and asked about one file at a
+# time: a yes here overwrites work someone did by hand.
+offer() {
+    local label="$1" existing="$2" candidate="$3" reply
+    if [ ! -e "$existing" ]; then
+        return 0
+    fi
+    if [ -z "${FORCE:-}" ]; then
+        note "$label" "kept (already in the tree, FORCE=1 offers to replace)"
+        return 1
+    fi
+    if cmp -s "$existing" "$candidate"; then
+        note "$label" "kept (already current)"
+        return 1
+    fi
+    # Opened rather than tested: /dev/tty exists as a path even where there is
+    # no controlling terminal to open, and the test would pass while the read
+    # printed an error and answered nothing.
+    if ! { exec 3< /dev/tty; } 2> /dev/null; then
+        note "$label" "kept (differs, but there is no terminal to ask at)"
+        return 1
+    fi
+    echo
+    echo "  $label differs from what this version writes:"
+    diff -u "$existing" "$candidate" 2> /dev/null | tail -n +3 | sed 's/^/    /'
+    printf '  replace %s? [y/N] ' "$label"
+    read -r reply <&3 || reply=""
+    exec 3<&-
+    echo
+    case "$reply" in
+        [yY]*) return 0 ;;
+        *) note "$label" "kept (declined)"; return 1 ;;
+    esac
+}
+
 marker="# >>> claude-context-mcp >>>"
 end_marker="# <<< claude-context-mcp <<<"
 
@@ -64,9 +101,7 @@ if PROJECT_PATH="$target" PROJECT_NAME="${PROJECT_NAME:-}" \
     ' "$work/scan"
     project="$(tr -d '[:space:]' < "$work/name")"
     for name in ctxkeep ctxignore; do
-        if [ -e "$target/.$name" ]; then
-            note ".$name" "kept (already in the tree)"
-        else
+        if offer ".$name" "$target/.$name" "$work/$name"; then
             cp "$work/$name" "$target/.$name"
             note ".$name" "written"
         fi
@@ -100,7 +135,11 @@ echo
 echo "Skills"
 # The gemini consent notice goes to stderr; folded in so the whole step is
 # indented like the rest, and pipefail still reports a failure.
-"$make_bin" --no-print-directory -C "$repo_root" skill-install \
+# FORCE also drops skills that went away, which a plain install cannot do:
+# it copies what exists and leaves anything renamed behind.
+skill_target="skill-install"
+[ -z "${FORCE:-}" ] || skill_target="skill-reinstall"
+"$make_bin" --no-print-directory -C "$repo_root" "$skill_target" \
     AGENT_ROOT="$target" 2>&1 | sed 's/^/  /'
 note "skills" "installed for $target"
 
@@ -119,10 +158,9 @@ for name in CLAUDE.local.md GEMINI.md; do
         note "$name" "skipped (gemini is not installed)"
         continue
     fi
-    if [ -e "$target/$name" ]; then
-        note "$name" "kept (already in the tree)"
-    else
-        render > "$target/$name"
+    render > "$work/$name"
+    if offer "$name" "$target/$name" "$work/$name"; then
+        cp "$work/$name" "$target/$name"
         note "$name" "written"
     fi
 done
