@@ -150,7 +150,7 @@ project that will never exist.
 | -------------- | --------------------- | ------------------------------------------ |
 | `AGENT_ROOT`   | this repository       | the tree being onboarded                   |
 | `PROJECT_NAME` | its last path segment | the name it is stored and addressed under  |
-| `INDEX`        | `1`                   | `INDEX=0` stops before building the graph  |
+| `TYPE`         | `codebase`            | `docs` or `config`; unset keeps the stored |
 | `ALIASES`      | `1`                   | `ALIASES=0` leaves the shell rc file alone |
 | `SHELL_RC`     | `~/.bashrc`           | which rc file the alias block goes to      |
 
@@ -348,17 +348,15 @@ Run `make` for the full list, including the per-service subdivisions.
 
 ```text
 make init        create the virtualenv and install the pre-commit hooks
-make install     onboard AGENT_ROOT=<path> onto the stack, then index it
-                 INDEX=0 skips the indexing, ALIASES=0 leaves ~/.bashrc alone
+make install     onboard AGENT_ROOT=<path> onto the stack and register it
+                 TYPE=docs|config categorises it; unset keeps what is stored
+                 ALIASES=0 leaves ~/.bashrc alone
 make lint        run every pre-commit hook over every file
 make build       build every service image
 make pull        pull the published images, discarding a local build
 make up          start the database, the services and the entry point
 make down        stop the stack, keeping the database volume
-
-                 TYPE=docs|config categorises it; unset keeps what is stored
-                 FRESH=1 re-parses every file instead of trusting a cache
-
+make mounts      rewrite the compose override from the projects table
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
                  with no PROJECT= it describes every indexed project, and
                  LIMIT=<n> then caps each of them rather than the run

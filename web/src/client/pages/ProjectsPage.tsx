@@ -24,15 +24,16 @@ export function ProjectsPage() {
   if (data.items.length === 0) {
     return (
       <Empty>
-        Nothing is indexed yet. Onboard a codebase with{" "}
-        <code>context-install</code> from its directory, then index it here.
+        No project is registered yet. Onboard a codebase with{" "}
+        <code>context-install</code> from its directory and it appears here,
+        with a button that builds its graph.
       </Empty>
     );
   }
 
   return (
     <>
-      <h1>Indexed projects</h1>
+      <h1>Projects</h1>
       <table className="grid">
         <thead>
           <tr>

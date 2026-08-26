@@ -32,11 +32,15 @@ nav_order: 2
    make up
    ```
 
-5. Index your codebase:
+5. Onboard your codebase:
 
    ```bash
    make install AGENT_ROOT=/path/to/your/project
    ```
+
+   This registers the project and mounts its tree; it does not build the
+   graph. The dashboard lists it as `never indexed` with an Index button
+   beside it, and that button is what indexes it.
 
 ## Adding new codebases
 
@@ -50,6 +54,9 @@ context-install TYPE=docs       # from /path/to/a/handbook
 The stack manages them by path, and you can access them by name via MCP.
 `TYPE=` categorises a project - `codebase` (the default), `docs` or `config` -
 which is what `search_code_nodes` narrows on when it searches every project at
-once. It is stored once, so a later re-index without `TYPE=` keeps it. Names
-beginning with `_` are refused: they belong to the built-in projects, `_memory`
-today.
+once. It is stored with the row, so a later run without `TYPE=` keeps it.
+Names beginning with `_` are refused: they belong to the built-in projects,
+`_memory` today.
+
+Onboarding a tree twice is safe. No file that exists is replaced, and the
+project row keeps the type and the index date it already had.

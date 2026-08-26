@@ -101,7 +101,8 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # Everything a codebase needs to be usable from an agent, in one pass: the
 # `context` server registered for both agents, the skills installed, an
 # instruction file, the .ctxkeep/.ctxignore pair generated from what the tree
-# actually holds, the shell aliases, and finally the graph itself.
+# actually holds, the shell aliases, and the projects row the rest of the
+# stack addresses the tree by.
 #
 # It reads AGENT_ROOT exactly as the skill targets below do, and their
 # comment is where that variable is explained, so onboarding a neighbour is
@@ -109,9 +110,10 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # is what makes a second run safe: it fills in whatever is missing and reports
 # the rest as kept.
 #
-# INDEX=0 stops before building the graph, for a large tree that is better
-# indexed later. ALIASES=0 leaves the shell rc file alone; SHELL_RC= names a
-# different one.
+# TYPE= categorises the project for the cross-project search - codebase, docs
+# or config - and is stored with the row; empty keeps whatever a project was
+# registered as before. ALIASES=0 leaves the shell rc file alone; SHELL_RC=
+# names a different one.
 # MAKE_PREFIX is how the onboarded codebase reaches these targets, substituted
 # into the instruction file: a plain `make` from inside this repository, and
 # `make -C` here from anywhere else, since the stack lives here and nothing of
@@ -121,19 +123,25 @@ MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(
 ALIASES ?=
 SHELL_RC ?=
 
-# The one command a codebase needs. It registers the project, writes its
-# selection files, installs the skills, writes the alias, and gives the API a
+# The one command a codebase needs. It writes the selection files, installs
+# the skills, writes the alias, registers the project and gives the API a
 # mount for the tree - but it does not index. That is a button in the
 # dashboard, because an index run is not part of setting up.
+#
+# Registering is the mount step: REGISTER=1 has it store the tree as a project
+# with no indexed_at, which is what puts the row in the dashboard with an
+# Index button next to it and what keeps the mount from being dropped the next
+# time this override is generated from the table.
 # FORCE=1 turns a re-run into a refresh: every file this version would write
 # and the tree already has is shown as a diff and asked about, one at a time.
-install: require-env require-not-root  ## Onboard AGENT_ROOT (FORCE=1 offers to refresh)
+install: require-env require-not-root  ## Onboard AGENT_ROOT (TYPE= categorises it, FORCE=1 refreshes)
 	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
 		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
 		FORCE='$(FORCE)' scripts/install.sh
-	@$(MAKE) --no-print-directory mounts \
-		PROJECT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)'
+	@$(MAKE) --no-print-directory mounts REGISTER=1 \
+		PROJECT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
+		TYPE='$(TYPE)'
 	@# The API is long lived, so a tree added just now is invisible to it
 	@# until the container is recreated against the rewritten override.
 	$(COMPOSE) up -d worker-api
@@ -265,7 +273,7 @@ INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 # drifting from what is actually indexed.
 mounts: require-env  ## Rewrite docker-compose.override.yaml from the projects table
 	@COMPOSE='$(COMPOSE)' ADD='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' \
-		scripts/mounts.sh
+		REGISTER='$(REGISTER)' PROJECT_TYPE='$(TYPE)' scripts/mounts.sh
 
 # The slow half of indexing, on its own: the model describes the files whose
 # summary still comes from the head of the file, and marks each one as its

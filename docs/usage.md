@@ -8,12 +8,13 @@ nav_order: 7
 
 ```text
 make init        create the virtualenv and install the pre-commit hooks
-make install     onboard AGENT_ROOT=<path> onto the stack, then index it
+make install     onboard AGENT_ROOT=<path> onto the stack and register it
 make lint        run every pre-commit hook over every file
 make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
 context-install  onboard the tree you stand in; index it from the dashboard
+make mounts      rewrite the compose override from the projects table
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
 make backup      write the database, or one project, to a file
 make restore     put a backup file back

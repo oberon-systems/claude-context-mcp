@@ -40,24 +40,15 @@ def get_db_connection() -> Connection:
     return psycopg2.connect(get_db_url())
 
 
-def ensure_project(
-    cursor: Cursor,
-    project: str,
-    root_path: str,
-    project_type: str | None = None,
-) -> None:
-    """Register the project being indexed, or refresh when it was.
+def check_project_identity(cursor: Cursor, project: str, root_path: str) -> None:
+    """Refuse a name/path pairing that would merge or orphan a graph.
 
-    Both directions of the name/path pairing are checked first, and neither is
-    repaired silently. A name pointing at a new path means two checkouts share
-    a directory name, and letting the second one through would merge two
-    unrelated codebases into one graph. A path arriving under a new name means
-    a rename, which is legitimate but has to move the existing rows rather
-    than orphan them, so it is refused here rather than half done.
-
-    `project_type` categorises the project for the cross-project MCP search.
-    None means "leave whatever is stored alone", so a plain re-index does not
-    demote a project that was registered as something other than the default.
+    Both directions are checked, and neither is repaired silently. A name
+    pointing at a new path means two checkouts share a directory name, and
+    letting the second one through would merge two unrelated codebases into
+    one graph. A path arriving under a new name means a rename, which is
+    legitimate but has to move the existing rows rather than orphan them, so
+    it is refused here rather than half done.
     """
     cursor.execute("SELECT root_path, type FROM projects WHERE name = %s;", (project,))
     row = cursor.fetchone()
@@ -82,12 +73,51 @@ def ensure_project(
             f"rename it in the projects table before indexing it as {project!r}"
         )
 
+
+def ensure_project(
+    cursor: Cursor,
+    project: str,
+    root_path: str,
+    project_type: str | None = None,
+) -> None:
+    """Register the project being indexed, or refresh when it was.
+
+    `project_type` categorises the project for the cross-project MCP search.
+    None means "leave whatever is stored alone", so a plain re-index does not
+    demote a project that was registered as something other than the default.
+    """
+    check_project_identity(cursor, project, root_path)
     cursor.execute(
         """
         INSERT INTO projects (name, root_path, indexed_at, type)
         VALUES (%s, %s, CURRENT_TIMESTAMP, COALESCE(%s, %s))
         ON CONFLICT (name) DO UPDATE SET
             indexed_at = CURRENT_TIMESTAMP,
+            type = COALESCE(%s, projects.type);
+        """,
+        (project, root_path, project_type, DEFAULT_PROJECT_TYPE, project_type),
+    )
+
+
+def register_project(
+    cursor: Cursor,
+    project: str,
+    root_path: str,
+    project_type: str | None = None,
+) -> None:
+    """Record a tree as a project without claiming it has been indexed.
+
+    Onboarding writes the row so the tree is listed, mounted and offered an
+    index run; the graph itself comes later. `indexed_at` is therefore left
+    alone in both branches - NULL on the insert, untouched on the update - so
+    a project already indexed keeps its freshness when it is onboarded again.
+    """
+    check_project_identity(cursor, project, root_path)
+    cursor.execute(
+        """
+        INSERT INTO projects (name, root_path, indexed_at, type)
+        VALUES (%s, %s, NULL, COALESCE(%s, %s))
+        ON CONFLICT (name) DO UPDATE SET
             type = COALESCE(%s, projects.type);
         """,
         (project, root_path, project_type, DEFAULT_PROJECT_TYPE, project_type),

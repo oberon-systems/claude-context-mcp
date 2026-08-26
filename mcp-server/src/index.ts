@@ -836,7 +836,7 @@ async function requireProject(project: string): Promise<string> {
     const all = await dbPool.query(`SELECT name FROM projects ORDER BY name`);
     const names = all.rows.map((row) => row.name as string).join(", ");
     throw new Error(
-      `No project named "${project}". Indexed: ${names || "none"}. ` +
+      `No project named "${project}". Registered: ${names || "none"}. ` +
         "Onboard one with `context-install`, then index it from the dashboard.",
     );
   }
