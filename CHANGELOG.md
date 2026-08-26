@@ -1,3 +1,18 @@
+## v0.14.1 (2026-08-26)
+
+### Bug Fixes
+
+- **graphify**: report compose files and drop volatile counts
+- **install, templates**: keep a codebase's own GEMINI.md
+
+### Build
+
+- **ctxkeep**: regenerate the selection, keeping *.conf by hand
+
+### Documentation
+
+- **roadmap**: settings and formats move to the database
+
 ## v0.14.0 (2026-08-26)
 
 ### Features
