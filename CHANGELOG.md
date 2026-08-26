@@ -1,3 +1,9 @@
+## v0.14.2 (2026-08-26)
+
+### Refactor
+
+- **make, scripts, graphify**: register the project row when its mount is written
+
 ## v0.14.1 (2026-08-26)
 
 ### Bug Fixes
