@@ -32,16 +32,20 @@ PROJECT_TYPE = os.getenv("PROJECT_TYPE", "").strip() or None
 # Documentation, not validation: the column is deliberately unconstrained, so
 # an unknown value is warned about and then stored.
 KNOWN_PROJECT_TYPES = frozenset(
-    {"codebase", "docs", "config", "memory", "plans", "suggestions"}
+    {"codebase", "docs", "config", "memory", "plans", "suggestions", "settings"}
 )
 DEFAULT_PROJECT_TYPE = "codebase"
 # The types that are not trees at all. A project of one of these holds
 # records written through the MCP tools, so an index run would prune every
 # one of them rather than refresh anything.
-BUILTIN_PROJECT_TYPES = frozenset({"memory", "plans", "suggestions"})
+BUILTIN_PROJECT_TYPES = frozenset({"memory", "plans", "suggestions", "settings"})
 # Reserved for built-in projects the indexer never writes: `_memory`,
-# `_plans` and `_suggestions` today, `_common` when shared records land.
+# `_plans`, `_suggestions` and `_settings` today, `_common` when shared
+# records land.
 BUILTIN_NAME_PREFIX = "_"
+# The built-in project holding the global selection defaults, as the row
+# ('_settings', ''). Every project falls back to it.
+SETTINGS_PROJECT = "_settings"
 IGNORE_FILE = ".ctxignore"
 KEEP_FILE = ".ctxkeep"
 # Re-extract every file instead of trusting either cache: the extractor's own

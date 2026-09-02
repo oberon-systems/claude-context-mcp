@@ -15,12 +15,17 @@ import pytest
 from ctxgraph.config import BUILTIN_PROJECT_TYPES
 from ctxgraph.storage import (
     add_source,
+    clear_settings,
     drop_source,
     ensure_project,
+    has_settings,
     list_files_without_llm_summary,
     list_sources,
     promote_root,
+    read_settings,
     register_project,
+    set_selection_origin,
+    write_settings,
 )
 
 
@@ -38,6 +43,7 @@ class FakeCursor:
         rows: list[tuple[Any, ...] | None] | None = None,
         projects: dict[str, tuple[str, str]] | None = None,
         sources: list[tuple[str, str, str]] | None = None,
+        settings: dict[tuple[str, str], tuple[str | None, str | None]] | None = None,
     ) -> None:
         """Seed the database this cursor pretends to be."""
         self.rows = list(rows or [])
@@ -45,6 +51,10 @@ class FakeCursor:
         self.projects = dict(projects or {})
         # (project, alias, root_path), in the order they were added
         self.sources = list(sources or [])
+        # (project, alias) -> (ctxkeep, ctxignore)
+        self.settings = dict(settings or {})
+        # (project, alias) -> (keep_source, ignore_source)
+        self.origins: dict[tuple[str, str], tuple[str, str]] = {}
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.answer: list[tuple[Any, ...]] | None = None
 
@@ -82,6 +92,20 @@ class FakeCursor:
                 for project, alias, root in self.sources
                 if project == params[0] and root == params[1]
             ]
+        if text.startswith("SELECT ctxkeep, ctxignore FROM project_settings"):
+            stored = self.settings.get((params[0], params[1]))
+            return [stored] if stored else []
+        if text.startswith("SELECT 1 FROM project_settings WHERE project"):
+            return [(1,) for project, _ in self.settings if project == params[0]][:1]
+        if text.startswith("INSERT INTO project_settings"):
+            self.settings[(params[0], params[1])] = (params[2], params[3])
+            return []
+        if text.startswith("DELETE FROM project_settings"):
+            self.settings.pop((params[0], params[1]), None)
+            return []
+        if text.startswith("UPDATE project_sources SET keep_source"):
+            self.origins[(params[2], params[3])] = (params[0], params[1])
+            return []
         if text.startswith("INSERT INTO projects"):
             name, root, project_type, default, _ = params
             stored = self.projects.get(name)
@@ -333,3 +357,65 @@ def test_refresh_widens_the_selection_to_what_the_model_wrote() -> None:
     cursor = FakeCursor([])
     list_files_without_llm_summary(cursor, "kurum", True)
     assert cursor.calls[-1][1] == ("kurum", True)
+
+
+def test_a_level_with_no_row_says_nothing_about_the_selection() -> None:
+    """A missing row and a row of two NULLs are the same answer."""
+    cursor = FakeCursor(settings={("kurum", ""): (None, None)})
+    assert read_settings(cursor, "kurum", "") == (None, None)
+    assert read_settings(cursor, "kurum", "docs") == (None, None)
+
+
+def test_a_stored_pair_reads_back_verbatim() -> None:
+    """Comments and blank lines are part of the document, not noise."""
+    cursor = FakeCursor()
+    keep = "# what this tree holds\n\n*.py\n"
+    write_settings(cursor, "kurum", "", keep, "*.pem\n")
+    assert read_settings(cursor, "kurum", "") == (keep, "*.pem\n")
+
+
+def test_clearing_one_half_lets_the_level_above_answer() -> None:
+    """Writing NULL is how a level stops speaking for a document."""
+    cursor = FakeCursor()
+    write_settings(cursor, "kurum", "", "*.py\n", "*.pem\n")
+    write_settings(cursor, "kurum", "", None, "*.pem\n")
+    assert read_settings(cursor, "kurum", "") == (None, "*.pem\n")
+
+
+def test_a_project_holding_no_row_anywhere_is_reported_empty() -> None:
+    """Onboarding writes the generated pair only into a project with none."""
+    cursor = FakeCursor()
+    assert has_settings(cursor, "kurum") is False
+    write_settings(cursor, "kurum", "configs", "*.yaml\n", None)
+    assert has_settings(cursor, "kurum") is True
+    clear_settings(cursor, "kurum", "configs")
+    assert has_settings(cursor, "kurum") is False
+
+
+def test_the_run_records_where_each_source_read_its_selection() -> None:
+    """The dashboard holds no mount, so the run that looked reports it."""
+    cursor = FakeCursor(sources=[("mono", "configs", "/mono/configs")])
+    set_selection_origin(cursor, "mono", "configs", "file", "global")
+    assert cursor.origins[("mono", "configs")] == ("file", "global")
+
+
+def test_dropping_a_directory_drops_the_settings_it_had() -> None:
+    """A row for a directory nothing reads is listed nowhere.
+
+    It would also decide the selection again if that alias came back.
+    """
+    cursor = FakeCursor(
+        projects={"mono": ("/mono/configs", "codebase")},
+        sources=[
+            ("mono", "configs", "/mono/configs"),
+            ("mono", "agents", "/mono/agents"),
+        ],
+        settings={
+            ("mono", "agents"): ("*.py\n", None),
+            ("mono", ""): ("*.md\n", None),
+        },
+    )
+    drop_source(cursor, "mono", "agents")
+    assert read_settings(cursor, "mono", "agents") == (None, None)
+    # The project level is not a directory and is left exactly as it was.
+    assert read_settings(cursor, "mono", "") == ("*.md\n", None)

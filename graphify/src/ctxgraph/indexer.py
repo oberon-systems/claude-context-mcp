@@ -42,6 +42,7 @@ from ctxgraph.interop import (
 )
 from ctxgraph.parsers import get_parser, parsers_revision
 from ctxgraph.resolution import placeholder_id, resolve_file_target, resolve_symbol
+from ctxgraph.selection import resolve_all
 from ctxgraph.storage import (
     clear_file_artifacts,
     clear_producer_artifacts,
@@ -55,6 +56,7 @@ from ctxgraph.storage import (
     list_sources,
     prune_missing_files,
     prune_orphans,
+    set_selection_origin,
     upsert_entity_node,
     upsert_file_hash,
     upsert_file_node,
@@ -370,7 +372,25 @@ def scan_and_build_graph(
                 "mounts` and recreate this service before indexing again"
             )
 
-        discovered = list(iter_project_files(mount, aliases))
+        # What each source indexes, and where that answer came from: a
+        # `.ctxkeep` still in the tree, a row of `project_settings`, or the
+        # built-in default. Recorded on the source, because the dashboard
+        # holds no mount and cannot look for itself.
+        with conn.cursor() as cursor:
+            selections = resolve_all(cursor, project, aliases)
+            for alias, selection in selections:
+                set_selection_origin(
+                    cursor,
+                    project,
+                    alias,
+                    selection.keep_origin,
+                    selection.ignore_origin,
+                )
+            conn.commit()
+
+        discovered = list(
+            iter_project_files(mount, [(alias, sel.specs) for alias, sel in selections])
+        )
         code_files = [pair for pair in discovered if is_graphifyy_source(pair[1])]
         native_files = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
         LOG.info(
@@ -382,6 +402,13 @@ def scan_and_build_graph(
             len(code_files),
             len(native_files),
         )
+        for alias, selection in selections:
+            LOG.info(
+                "Selection for %s: ctxkeep from %s, ctxignore from %s",
+                source_mount(project, alias),
+                selection.keep_origin,
+                selection.ignore_origin,
+            )
 
         # Every selected file the run leaves without a node of its own, and
         # why. Both producers add to it, and it is what the closing report

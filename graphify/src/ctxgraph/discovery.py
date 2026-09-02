@@ -9,16 +9,28 @@ from collections.abc import Iterator
 
 import pathspec
 
-from ctxgraph.config import (
-    DEFAULT_IGNORED_DIRS,
-    IGNORE_FILE,
-    KEEP_FILE,
-    MAX_FILE_BYTES,
-)
+from ctxgraph.config import DEFAULT_IGNORED_DIRS, MAX_FILE_BYTES
 from ctxgraph.identifiers import source_node_id
 from ctxgraph.parsers import is_default_source
 
 LOG = logging.getLogger(__name__)
+
+# One source's two specs, keep first, as `ctxgraph.selection` resolves them.
+SpecPair = tuple[pathspec.PathSpec | None, pathspec.PathSpec | None]
+
+
+def to_spec(lines: list[str]) -> pathspec.PathSpec | None:
+    """Build a PathSpec from the lines of a selection document.
+
+    A document holding only comments and blank lines is None rather than an
+    empty spec, which is what makes it identical to no document at all.
+    """
+    patterns = [
+        line.strip()
+        for line in lines
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns) if patterns else None
 
 
 def load_spec(root_path: str, file_name: str) -> pathspec.PathSpec | None:
@@ -28,37 +40,27 @@ def load_spec(root_path: str, file_name: str) -> pathspec.PathSpec | None:
         return None
     try:
         with open(path, encoding="utf-8") as handle:
-            lines = [
-                line
-                for line in (raw.strip() for raw in handle)
-                if line and not line.startswith("#")
-            ]
+            return to_spec(handle.readlines())
     except OSError:
         LOG.exception("Failed to read %s", file_name)
         return None
-    return pathspec.PathSpec.from_lines("gitwildmatch", lines) if lines else None
 
 
-def iter_source_files(root_path: str) -> Iterator[tuple[str, str]]:
-    """Yield (absolute path, project relative path) for every file to index."""
-    yield from walk_selected(
-        root_path,
-        load_spec(root_path, IGNORE_FILE),
-        load_spec(root_path, KEEP_FILE),
-    )
-
-
-def iter_project_files(mount: str, aliases: list[str]) -> Iterator[tuple[str, str]]:
+def iter_project_files(
+    mount: str, selections: list[tuple[str, SpecPair]]
+) -> Iterator[tuple[str, str]]:
     """Yield (absolute path, project relative path) for every source of a project.
 
-    Each source is walked from its own root and carries its own selection pair,
-    so a slice of a monorepo says which of its files are worth indexing without
-    the repository it was cut from having to agree. The empty alias is the
-    project mounted whole, and yields exactly what `iter_source_files` does.
+    Each source is walked from its own root under its own selection, so a slice
+    of a monorepo says which of its files are worth indexing without the
+    repository it was cut from having to agree. Where a selection came from -
+    a file in the tree or a row of `project_settings` - is settled by
+    `ctxgraph.selection` before the walk, so nothing here reads a database.
+    The empty alias is the project mounted whole.
     """
-    for alias in aliases:
+    for alias, (keep_spec, ignore_spec) in selections:
         base = os.path.join(mount, alias) if alias else mount
-        for full_path, rel_path in iter_source_files(base):
+        for full_path, rel_path in walk_selected(base, ignore_spec, keep_spec):
             yield full_path, source_node_id(alias, rel_path)
 
 
@@ -69,9 +71,10 @@ def walk_selected(
 ) -> Iterator[tuple[str, str]]:
     """Yield the files two specs select, without reading either from disk.
 
-    Split out of iter_source_files so a proposed selection can be simulated
-    against the tree it is proposed for. The mount is read-only, so the pair
-    cannot be written and read back the ordinary way.
+    Neither spec is loaded here, so a selection that exists only as a proposal
+    or as a row of `project_settings` is walked exactly as one read off disk
+    would be. The mount is read-only, so a stored pair could not be written
+    into the tree and read back the ordinary way.
     """
     for current_dir, dir_names, file_names in os.walk(root_path):
         rel_dir = os.path.relpath(current_dir, root_path)

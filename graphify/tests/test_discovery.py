@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ctxgraph.discovery import iter_project_files
+from ctxgraph.config import IGNORE_FILE, KEEP_FILE
+from ctxgraph.discovery import SpecPair, iter_project_files, load_spec
 
 
 def build(root: Path) -> None:
@@ -24,9 +25,15 @@ def build(root: Path) -> None:
     (root / "agents" / "notes.txt").write_text("nothing to parse\n")
 
 
+def specs(base: Path) -> SpecPair:
+    """Load one source's pair off disk, as `ctxgraph.selection` does."""
+    return load_spec(str(base), KEEP_FILE), load_spec(str(base), IGNORE_FILE)
+
+
 def selected(root: Path, aliases: list[str]) -> list[str]:
     """Return the project relative paths, sorted for comparison."""
-    return sorted(rel for _, rel in iter_project_files(str(root), aliases))
+    pairs = [(alias, specs(root / alias if alias else root)) for alias in aliases]
+    return sorted(rel for _, rel in iter_project_files(str(root), pairs))
 
 
 def test_every_path_opens_with_its_alias(tmp_path: Path) -> None:

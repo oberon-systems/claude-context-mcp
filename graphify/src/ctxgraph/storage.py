@@ -160,7 +160,10 @@ def drop_source(cursor: Cursor, project: str, alias: str) -> None:
     """Stop reading one directory of a project.
 
     The nodes it produced stay until the next index run prunes them, which is
-    the same path a deleted file takes.
+    the same path a deleted file takes. Its settings do not: a row keyed on an
+    alias the project no longer reads describes nothing, is listed nowhere,
+    and would silently decide the selection again if that alias ever came
+    back.
     """
     sources = dict(list_sources(cursor, project))
     if alias not in sources:
@@ -177,6 +180,7 @@ def drop_source(cursor: Cursor, project: str, alias: str) -> None:
         "DELETE FROM project_sources WHERE project = %s AND alias = %s;",
         (project, alias),
     )
+    clear_settings(cursor, project, alias)
     set_primary(cursor, project)
 
 
@@ -198,6 +202,92 @@ def promote_root(cursor: Cursor, project: str, alias: str) -> None:
     cursor.execute(
         "UPDATE project_sources SET alias = %s WHERE project = %s AND alias = '';",
         (alias, project),
+    )
+
+
+def read_settings(
+    cursor: Cursor, project: str, alias: str
+) -> tuple[str | None, str | None]:
+    """Read one settings row as (ctxkeep, ctxignore), without any fallback.
+
+    The precedence between the levels is `ctxgraph.selection`'s business, so
+    this answers about the one row it was asked for and nothing else. A missing
+    row and a row holding two NULLs are the same answer on purpose: both mean
+    this level says nothing about the selection.
+    """
+    cursor.execute(
+        "SELECT ctxkeep, ctxignore FROM project_settings "
+        "WHERE project = %s AND alias = %s;",
+        (project, alias),
+    )
+    row = cursor.fetchone()
+    if row is None:
+        return None, None
+    return row[0], row[1]
+
+
+def write_settings(
+    cursor: Cursor,
+    project: str,
+    alias: str,
+    ctxkeep: str | None,
+    ctxignore: str | None,
+) -> None:
+    """Store the selection documents for one level, verbatim.
+
+    Both are written every time, NULL included: clearing one document is how a
+    level stops speaking for it and lets the level above answer instead.
+    """
+    cursor.execute(
+        """
+        INSERT INTO project_settings (project, alias, ctxkeep, ctxignore)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (project, alias) DO UPDATE SET
+            ctxkeep = EXCLUDED.ctxkeep,
+            ctxignore = EXCLUDED.ctxignore,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        (project, alias, ctxkeep, ctxignore),
+    )
+
+
+def clear_settings(cursor: Cursor, project: str, alias: str) -> None:
+    """Drop one settings row, so the level above it takes over again."""
+    cursor.execute(
+        "DELETE FROM project_settings WHERE project = %s AND alias = %s;",
+        (project, alias),
+    )
+
+
+def has_settings(cursor: Cursor, project: str) -> bool:
+    """Report whether a project holds a settings row at any of its levels.
+
+    Onboarding writes the generated pair only into a project that has none,
+    which is the same rule that kept it from replacing a file already in a
+    tree.
+    """
+    cursor.execute(
+        "SELECT 1 FROM project_settings WHERE project = %s LIMIT 1;",
+        (project,),
+    )
+    return cursor.fetchone() is not None
+
+
+def set_selection_origin(
+    cursor: Cursor, project: str, alias: str, keep: str, ignore: str
+) -> None:
+    """Record where an index run read one source's selection from.
+
+    The dashboard holds no mount and cannot look at a tree, so the run that
+    did the looking is what reports it.
+    """
+    cursor.execute(
+        """
+        UPDATE project_sources
+           SET keep_source = %s, ignore_source = %s
+         WHERE project = %s AND alias = %s;
+        """,
+        (keep, ignore, project, alias),
     )
 
 
