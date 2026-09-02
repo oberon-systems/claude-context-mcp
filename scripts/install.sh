@@ -18,6 +18,10 @@ cd "$repo_root"
 read -r -a compose <<< "${COMPOSE:-docker compose}"
 
 target="${AGENT_ROOT:-$repo_root}"
+# Which directory of the tree the project actually reads. Usually the whole of
+# it; a slice when a monorepo is onboarded one piece at a time, and the literal
+# "none" when the project is registered ahead of every directory it will read.
+source_dir="${SOURCE:-$target}"
 make_bin="${MAKE_BIN:-make}"
 make_prefix="${MAKE_PREFIX:-make -C $repo_root}"
 python_bin="${PYTHON_BIN:-python3}"
@@ -67,6 +71,13 @@ if [ ! -d "$target" ]; then
     exit 1
 fi
 target="$(cd "$target" && pwd)"
+if [ "$source_dir" != "none" ]; then
+    if [ ! -d "$source_dir" ]; then
+        echo "SOURCE=$source_dir is not a directory" >&2
+        exit 1
+    fi
+    source_dir="$(cd "$source_dir" && pwd)"
+fi
 
 # The credentials and the port live in .env, which make does not source.
 env_value() {
@@ -92,7 +103,15 @@ echo
 #    touched, hence --no-deps: this runs before the stack is up.
 echo "Selection"
 project=""
-if PROJECT_PATH="$target" PROJECT_NAME="${PROJECT_NAME:-}" \
+# The name comes from AGENT_ROOT even when the directory being scanned is one
+# inside it, so the /mcp/<project> address written below is the one the mount
+# step registers the row under.
+scan_name="${PROJECT_NAME:-$(basename "$target")}"
+if [ "$source_dir" = "none" ]; then
+    echo "  the project reads no directory yet, so there is nothing to select"
+    note ".ctxkeep" "skipped (no directory yet)"
+    note ".ctxignore" "skipped (no directory yet)"
+elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
         "${compose[@]}" --profile index run --rm --no-deps -T graphify \
         python -m ctxgraph.bootstrap > "$work/scan" 2> "$work/scan.err"; then
     awk -v dir="$work" '
@@ -101,8 +120,8 @@ if PROJECT_PATH="$target" PROJECT_NAME="${PROJECT_NAME:-}" \
     ' "$work/scan"
     project="$(tr -d '[:space:]' < "$work/name")"
     for name in ctxkeep ctxignore; do
-        if offer ".$name" "$target/.$name" "$work/$name"; then
-            cp "$work/$name" "$target/.$name"
+        if offer ".$name" "$source_dir/.$name" "$work/$name"; then
+            cp "$work/$name" "$source_dir/.$name"
             note ".$name" "written"
         fi
     done
@@ -121,6 +140,14 @@ if [ -z "$project" ]; then
     project="$(basename "$target" | tr '[:upper:]' '[:lower:]' \
         | tr -c 'a-z0-9._-' '-' | sed 's/^-*//; s/-*$//')"
     echo "  falling back to the basename for the project name: $project" >&2
+fi
+
+if [ "$source_dir" = "none" ]; then
+    note "directory" "none yet, add one with context-source"
+elif [ -n "${ALIAS:-}" ]; then
+    note "directory" "$source_dir as '$ALIAS'"
+else
+    note "directory" "$source_dir"
 fi
 
 # 2. Both agents, one address.
@@ -175,18 +202,31 @@ for name in CLAUDE.local.md GEMINI.md; do
 done
 echo "  rendered from templates/CLAUDE.local.md"
 
-# 5. The alias. One command onboards a tree and nothing else needs one:
-#    indexing is a button in the dashboard now, and the skills come with the
-#    onboarding rather than after it. Fenced by a pair of markers so it never
-#    appends twice, and rewritten when it has fallen behind - which is how a
-#    shell onboarded under the old seven aliases loses the six that no longer
-#    point at anything.
+# 5. The aliases. Onboarding a whole tree is one command and always was;
+#    the other three are what a project reading several directories needs:
+#    one to register it before it reads anything, one to hand it the directory
+#    the shell is standing in, one to take that back. Fenced by a pair of
+#    markers so it never appends twice, and rewritten when it has fallen
+#    behind - which is how a shell onboarded under the old aliases picks these
+#    up on its next install.
 echo
 echo "Aliases"
 alias_block() {
     cat <<BLOCK
 $marker
 alias context-install='make -C $repo_root install AGENT_ROOT=\$(pwd)'
+alias context-project='make -C $repo_root install AGENT_ROOT=\$(pwd) SOURCE=none'
+alias context-sources='make -C $repo_root sources'
+context-source() {
+    make -C $repo_root source-add PROJECT="\$(pwd)" \\
+        PROJECT_NAME="\${1:?usage: context-source <project> [alias]}" \\
+        ALIAS="\${2:-\$(basename "\$(pwd)")}"
+}
+context-source-drop() {
+    make -C $repo_root source-drop \\
+        PROJECT_NAME="\${1:?usage: context-source-drop <project> <alias>}" \\
+        ALIAS="\${2:?usage: context-source-drop <project> <alias>}"
+}
 $end_marker
 BLOCK
 }

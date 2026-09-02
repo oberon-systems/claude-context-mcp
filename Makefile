@@ -39,7 +39,8 @@ SHELL := /bin/bash
 # the override.
 SUBS := graphify mcp db web
 ROOT_GOALS := help init install shell lint check build pull up down restart \
-	logs ps status mounts summarize backup restore psql clean \
+	logs ps status mounts sources source-add source-drop source-promote \
+	summarize backup restore psql clean \
 	skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job $(SUBS)
 ifneq (,$(filter $(firstword $(MAKECMDGOALS)),$(SUBS)))
@@ -47,7 +48,8 @@ SUBARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
 $(eval $(filter-out $(ROOT_GOALS),$(SUBARGS)):;@:)
 endif
 
-.PHONY: help init install mounts shell lint check build pull up down restart logs ps \
+.PHONY: help init install mounts sources source-add source-drop source-promote \
+	shell lint check build pull up down restart logs ps \
 	status summarize backup restore psql clean graphify \
 	mcp db web skill-install skill-reinstall skill-uninstall skill-status \
 	llm-model-install api-logs jobs job \
@@ -123,6 +125,20 @@ MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(
 ALIASES ?=
 SHELL_RC ?=
 
+# Which directory the onboarded project reads, and under which alias. The
+# whole tree and no alias is what a project has always been. SOURCE=none
+# registers the project without a directory at all: the row, the agent files
+# and the address exist, and `make source-add` fills it in one slice at a
+# time, which is how a monorepo is indexed without taking all of it.
+SOURCE ?= $(AGENT_ROOT)
+ALIAS ?=
+EMPTY = $(filter none,$(SOURCE))
+# The project is named after AGENT_ROOT even when SOURCE is a directory inside
+# it, so the /mcp/<project> address written into the agent files is the one the
+# row is created under. `project_name` cleans the basename the same way it
+# cleans a path's last segment, so this is what onboarding has always derived.
+INSTALL_NAME = $(if $(PROJECT_NAME),$(PROJECT_NAME),$(notdir $(abspath $(AGENT_ROOT))))
+
 # The one command a codebase needs. It writes the selection files, installs
 # the skills, writes the alias, registers the project and gives the API a
 # mount for the tree - but it does not index. That is a button in the
@@ -134,14 +150,15 @@ SHELL_RC ?=
 # time this override is generated from the table.
 # FORCE=1 turns a re-run into a refresh: every file this version would write
 # and the tree already has is shown as a diff and asked about, one at a time.
-install: require-env require-not-root  ## Onboard AGENT_ROOT (TYPE= categorises it, FORCE=1 refreshes)
+install: require-env require-not-root  ## Onboard AGENT_ROOT (SOURCE=none leaves it empty, TYPE= categorises it)
 	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
 		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
 		FORCE='$(FORCE)' scripts/install.sh
 	@$(MAKE) --no-print-directory mounts REGISTER=1 \
-		PROJECT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
-		TYPE='$(TYPE)'
+		PROJECT='$(if $(EMPTY),$(abspath $(AGENT_ROOT)),$(abspath $(SOURCE)))' \
+		PROJECT_NAME='$(INSTALL_NAME)' ALIAS='$(ALIAS)' \
+		CREATE='$(EMPTY)' TYPE='$(TYPE)'
 	@# The API is long lived, so a tree added just now is invisible to it
 	@# until the container is recreated against the rewritten override.
 	$(COMPOSE) up -d worker-api
@@ -273,7 +290,42 @@ INDEXED := $(if $(PROJECT),$(abspath $(PROJECT)),)
 # drifting from what is actually indexed.
 mounts: require-env  ## Rewrite docker-compose.override.yaml from the projects table
 	@COMPOSE='$(COMPOSE)' ADD='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' \
-		REGISTER='$(REGISTER)' PROJECT_TYPE='$(TYPE)' scripts/mounts.sh
+		ALIAS='$(ALIAS)' REGISTER='$(REGISTER)' CREATE='$(CREATE)' \
+		DROP='$(DROP)' PROMOTE='$(PROMOTE)' PROJECT_TYPE='$(TYPE)' \
+		scripts/mounts.sh
+
+# Which directories a project reads. A project holds either one unnamed
+# directory, mounted whole at /code/<project>, or several named ones, each at
+# /code/<project>/<alias> - and the alias opens every node id that directory
+# produces, which is what keeps two files of the same name in two slices apart.
+#
+# PROJECT is a host path and PROJECT_NAME a project, as everywhere else here.
+# Each target rewrites the override and recreates the API, because a service
+# that is already running holds the mounts it started with.
+sources: require-env  ## List what each project reads (PROJECT_NAME= narrows it)
+	@COMPOSE='$(COMPOSE)' scripts/sources.sh
+
+source-add: require-env  ## Add PROJECT= to PROJECT_NAME= as ALIAS=
+	@test -n '$(PROJECT)' || { echo "PROJECT=<host path> is required" >&2; exit 1; }
+	@test -n '$(PROJECT_NAME)' || { echo "PROJECT_NAME= is required" >&2; exit 1; }
+	@$(MAKE) --no-print-directory mounts REGISTER=1 \
+		PROJECT='$(INDEXED)' PROJECT_NAME='$(PROJECT_NAME)' ALIAS='$(ALIAS)' \
+		TYPE='$(TYPE)'
+	$(COMPOSE) up -d worker-api
+
+source-drop: require-env  ## Stop PROJECT_NAME= reading ALIAS=
+	@test -n '$(PROJECT_NAME)' || { echo "PROJECT_NAME= is required" >&2; exit 1; }
+	@test -n '$(ALIAS)' || { echo "ALIAS= is required" >&2; exit 1; }
+	@$(MAKE) --no-print-directory mounts \
+		PROJECT_NAME='$(PROJECT_NAME)' DROP='$(ALIAS)'
+	$(COMPOSE) up -d worker-api
+
+source-promote: require-env  ## Name the root of PROJECT_NAME= as ALIAS=
+	@test -n '$(PROJECT_NAME)' || { echo "PROJECT_NAME= is required" >&2; exit 1; }
+	@test -n '$(ALIAS)' || { echo "ALIAS= is required" >&2; exit 1; }
+	@$(MAKE) --no-print-directory mounts \
+		PROJECT_NAME='$(PROJECT_NAME)' PROMOTE='$(ALIAS)'
+	$(COMPOSE) up -d worker-api
 
 # The slow half of indexing, on its own: the model describes the files whose
 # summary still comes from the head of the file, and marks each one as its
