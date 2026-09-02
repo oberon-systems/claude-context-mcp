@@ -155,15 +155,20 @@ else
                || '|' ||
                coalesce((SELECT name FROM projects
                           WHERE root_path = :'root' AND name <> :'name'),
+                        (SELECT project FROM project_sources
+                          WHERE root_path = :'root' AND project <> :'name'),
                         '')")"; then
         echo "Cannot reach the database. Is the stack up? Try 'make up'." >&2
         exit 1
     fi
     IFS='|' read -r exists collision <<< "$held"
 
-    # root_path is UNIQUE, so a second project already claiming this path would
-    # fail the insert halfway through. Say so before anything is deleted rather
-    # than letting the transaction roll back with a constraint name.
+    # root_path is UNIQUE in both tables, so a second project already reading
+    # this path would fail the insert halfway through. Say so before anything
+    # is deleted rather than letting the transaction roll back with a
+    # constraint name. Only the primary directory is checked: it is the one the
+    # header carries, and a collision on any of the others still rolls the
+    # whole restore back.
     if [ -n "$collision" ]; then
         echo "Project \"$collision\" is already indexed from $root." >&2
         echo "Drop it first, from the dashboard: $collision" >&2
