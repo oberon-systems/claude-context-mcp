@@ -1,22 +1,25 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { get, query } from "../api.js";
+import { get, patch, post, query, remove } from "../api.js";
 import {
   Count,
   Empty,
   ErrorBox,
   Freshness,
   Pager,
+  SelectionBadge,
   Spinner,
 } from "../components/Common.js";
 import { DropModal } from "../components/DropModal.js";
 import { GraphFrame } from "../components/GraphFrame.js";
 import { NodeBrowser } from "../components/NodeBrowser.js";
+import { PROJECT_TYPES } from "./ProjectsPage.js";
+import { SettingsTab } from "./SettingsTab.js";
 import { useApi, useDebounced } from "../hooks/useApi.js";
 import type { DropReport, FileRow, Page, ProjectDetail } from "../types.js";
 
-const TABS = ["overview", "graph", "nodes", "files"] as const;
+const TABS = ["overview", "graph", "nodes", "files", "settings"] as const;
 type Tab = (typeof TABS)[number];
 
 export function ProjectPage() {
@@ -63,7 +66,26 @@ export function ProjectPage() {
         </button>
       </div>
       <p>
-        <span className="kind">{project.type}</span>{" "}
+        {project.name.startsWith("_") ? (
+          <span className="kind">{project.type}</span>
+        ) : (
+          <select
+            value={project.type}
+            onChange={(event) =>
+              void patch(`/projects/${encodeURIComponent(name)}`, {
+                type: event.target.value,
+              }).then(() => {
+                detail.reload();
+              })
+            }
+          >
+            {[...new Set([project.type, ...PROJECT_TYPES])].map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+        )}{" "}
         <span className="path">{project.root_path}</span>
       </p>
       <p>
@@ -95,6 +117,9 @@ export function ProjectPage() {
             next.set("type", type);
             setParams(next);
           }}
+          onSources={() => {
+            detail.reload();
+          }}
         />
       )}
       {tab === "graph" && (
@@ -110,6 +135,7 @@ export function ProjectPage() {
         />
       )}
       {tab === "files" && <FileList project={project.name} />}
+      {tab === "settings" && <SettingsTab project={project.name} />}
 
       {report !== null && (
         <DropModal
@@ -128,9 +154,11 @@ export function ProjectPage() {
 function Overview({
   project,
   onType,
+  onSources,
 }: {
   project: ProjectDetail;
   onType: (type: string) => void;
+  onSources: () => void;
 }) {
   return (
     <>
@@ -145,43 +173,7 @@ function Overview({
       </div>
 
       <h2>Directories</h2>
-      {project.sources.length === 0 ? (
-        <Empty>
-          This project reads no directory yet. Add one with{" "}
-          <code>context-source {project.name} &lt;alias&gt;</code> from the
-          directory itself, then index it here.
-        </Empty>
-      ) : (
-        <table className="grid">
-          <thead>
-            <tr>
-              <th>Alias</th>
-              <th>Host path</th>
-            </tr>
-          </thead>
-          <tbody>
-            {project.sources.map((source) => (
-              <tr key={source.alias}>
-                <td>
-                  {source.alias === "" ? (
-                    <span className="muted">the whole tree</span>
-                  ) : (
-                    <code>{source.alias}/</code>
-                  )}
-                </td>
-                <td className="path">{source.root_path}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {project.sources.length > 1 && (
-        <p className="muted">
-          Each alias opens every node id that directory produced, so a file of
-          the first slice is <code>{project.sources[0].alias}/...</code> in the
-          graph.
-        </p>
-      )}
+      <Directories project={project} onChanged={onSources} />
 
       <h2>Node types</h2>
       <div className="chips">
@@ -221,6 +213,144 @@ function Overview({
           Plans tagged with this project
         </Link>
       </p>
+    </>
+  );
+}
+
+/** What a project reads, and the two ways that changes.
+ *
+ * Neither writes a mount: the compose override is a file on the host and both
+ * services hold the mounts they started with, so the API answers with what
+ * finishes the job and that is shown rather than summarised.
+ */
+function Directories({
+  project,
+  onChanged,
+}: {
+  project: ProjectDetail;
+  onChanged: () => void;
+}) {
+  const [rootPath, setRootPath] = useState("");
+  const [alias, setAlias] = useState("");
+  const [hint, setHint] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const path = `/projects/${encodeURIComponent(project.name)}/sources`;
+
+  async function run(work: () => Promise<{ mounts?: string }>) {
+    setError(null);
+    try {
+      const answer = await work();
+      setHint(answer.mounts ?? null);
+      onChanged();
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
+
+  return (
+    <>
+      {error !== null && <ErrorBox message={error} />}
+      {project.sources.length === 0 ? (
+        <Empty>
+          This project reads no directory yet. Name one below, or run{" "}
+          <code>context-source {project.name} &lt;alias&gt;</code> from the
+          directory itself.
+        </Empty>
+      ) : (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>Alias</th>
+              <th>Host path</th>
+              <th title="where the last index run read the selection from">
+                Selection
+              </th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {project.sources.map((source) => (
+              <tr key={source.alias}>
+                <td>
+                  {source.alias === "" ? (
+                    <span className="muted">the whole tree</span>
+                  ) : (
+                    <code>{source.alias}/</code>
+                  )}
+                </td>
+                <td className="path">{source.root_path}</td>
+                <td>
+                  <SelectionBadge origin={source.keep_source} />{" "}
+                  <SelectionBadge origin={source.ignore_source} />
+                </td>
+                <td>
+                  {project.sources.length > 1 && (
+                    <button
+                      type="button"
+                      className="danger"
+                      onClick={() =>
+                        void run(() =>
+                          remove<{ mounts?: string }>(
+                            `${path}/${encodeURIComponent(source.alias)}`,
+                          ),
+                        )
+                      }
+                    >
+                      Drop
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <div className="filters">
+        <label>
+          Host path
+          <input
+            value={rootPath}
+            placeholder="/home/you/src/mono/services/api"
+            onChange={(event) => setRootPath(event.target.value)}
+          />
+        </label>
+        <label>
+          Alias, derived from the last segment when empty
+          <input
+            value={alias}
+            onChange={(event) => setAlias(event.target.value)}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={rootPath === ""}
+          onClick={() =>
+            void run(async () => {
+              const answer = await post<{ mounts?: string }>(path, {
+                root_path: rootPath,
+                alias,
+              });
+              setRootPath("");
+              setAlias("");
+              return answer;
+            })
+          }
+        >
+          Add directory
+        </button>
+      </div>
+
+      {hint !== null && <p className="stale">{hint}</p>}
+
+      {project.sources.length > 1 && (
+        <p className="muted">
+          Each alias opens every node id that directory produced, so a file of
+          the first slice is <code>{project.sources[0].alias}/...</code> in the
+          graph. The last directory cannot be dropped: a project with no tree is
+          dropped itself.
+        </p>
+      )}
     </>
   );
 }

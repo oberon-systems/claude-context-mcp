@@ -5,6 +5,7 @@ import { PlanPage } from "./pages/PlanPage.js";
 import { PlansPage } from "./pages/PlansPage.js";
 import { ProjectPage } from "./pages/ProjectPage.js";
 import { ProjectsPage } from "./pages/ProjectsPage.js";
+import { SettingsPage } from "./pages/SettingsPage.js";
 import { SuggestionPage } from "./pages/SuggestionPage.js";
 import { SuggestionsPage } from "./pages/SuggestionsPage.js";
 
@@ -21,6 +22,7 @@ export function App() {
           </NavLink>
           <NavLink to="/plans">Plans</NavLink>
           <NavLink to="/suggestions">Suggestions</NavLink>
+          <NavLink to="/settings">Settings</NavLink>
         </nav>
       </header>
       <main>
@@ -31,6 +33,7 @@ export function App() {
           <Route path="/plans/:id" element={<PlanPage />} />
           <Route path="/suggestions" element={<SuggestionsPage />} />
           <Route path="/suggestions/:id" element={<SuggestionPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route
             path="*"
             element={<Empty>There is no such page here.</Empty>}
