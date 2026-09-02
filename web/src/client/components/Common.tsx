@@ -111,3 +111,45 @@ export function Freshness({
     </span>
   );
 }
+
+// Where a selection came from, in the space a table column can spare. A file
+// still in the tree wins over every stored row, so it is worth seeing at a
+// glance which projects are still configured from a repository rather than
+// from here - those are the ones whose pair has yet to be deleted.
+const SELECTION_LABELS: Record<string, string> = {
+  file: "FILE",
+  directory: "DB",
+  project: "DB",
+  global: "DB",
+  default: "none",
+};
+
+const SELECTION_TITLES: Record<string, string> = {
+  file: "a .ctxkeep or .ctxignore in the tree, which beats every stored row",
+  directory: "stored here, on the directory",
+  project: "stored here, on the project",
+  global: "stored here, as the global default",
+  default: "nothing selected it: the built-in set of file types",
+};
+
+export function SelectionBadge({ origin }: { origin: string | null }) {
+  if (origin === null) {
+    return (
+      <span
+        className="muted"
+        title="never indexed, so nothing read a selection"
+      >
+        -
+      </span>
+    );
+  }
+  const label = SELECTION_LABELS[origin] ?? origin;
+  return (
+    <span
+      className={`origin origin-${label.toLowerCase()}`}
+      title={SELECTION_TITLES[origin] ?? origin}
+    >
+      {label}
+    </span>
+  );
+}

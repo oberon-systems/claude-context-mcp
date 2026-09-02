@@ -9,6 +9,7 @@ import { proxyViewer, VIEWER_ROUTES } from "./proxy.js";
 import { nodesRouter } from "./routes/nodes.js";
 import { plansRouter } from "./routes/plans.js";
 import { projectsRouter } from "./routes/projects.js";
+import { settingsRouter } from "./routes/settings.js";
 import { suggestionsRouter } from "./routes/suggestions.js";
 
 const PORT = Number(process.env.PORT ?? 3002);
@@ -37,6 +38,7 @@ api.use(projectsRouter);
 api.use(nodesRouter);
 api.use(plansRouter);
 api.use(suggestionsRouter);
+api.use(settingsRouter);
 
 api.use((_req, res) => {
   res.status(404).json({ error: "No such endpoint" });

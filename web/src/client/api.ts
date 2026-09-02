@@ -62,5 +62,7 @@ export const post = <T>(path: string, body?: unknown) =>
   write<T>("POST", path, body);
 export const patch = <T>(path: string, body?: unknown) =>
   write<T>("PATCH", path, body);
+export const put = <T>(path: string, body?: unknown) =>
+  write<T>("PUT", path, body);
 export const remove = <T>(path: string, body?: unknown) =>
   write<T>("DELETE", path, body);

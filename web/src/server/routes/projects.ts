@@ -1,6 +1,12 @@
 import { Router } from "express";
 
-import { HttpError, notFound, route } from "../args.js";
+import {
+  HttpError,
+  badRequest,
+  notFound,
+  readBodyString,
+  route,
+} from "../args.js";
 import { UpstreamError, upstream } from "../content.js";
 import { count, dbPool } from "../db.js";
 import * as sql from "../queries.js";
@@ -8,7 +14,22 @@ import * as sql from "../queries.js";
 type ProjectSource = {
   alias: string;
   root_path: string;
+  // Where the last index run read this directory's selection from: "file",
+  // "directory", "project", "global" or "default". Null until first indexed.
+  keep_source: string | null;
+  ignore_source: string | null;
 };
+
+// The vocabulary of ctxgraph.config.KNOWN_PROJECT_TYPES. The column is
+// unconstrained on purpose (migration 0006), so this is where a dashboard
+// write is held to it.
+const PROJECT_TYPES = ["codebase", "docs", "config"] as const;
+
+// The types that hold records written by an agent rather than an indexed
+// tree. Refused in both directions: a project turned into one of these would
+// have every record it holds deleted by the next index run, and one turned
+// out of it would be indexed over.
+const BUILTIN_TYPES = new Set(["memory", "plans", "suggestions", "settings"]);
 
 type ProjectRow = {
   name: string;
@@ -22,6 +43,33 @@ type ProjectRow = {
   plans: string;
   sources: ProjectSource[];
 };
+
+type SettingsRow = {
+  alias: string;
+  root_path: string;
+  keep_source: string | null;
+  ignore_source: string | null;
+  ctxkeep: string | null;
+  ctxignore: string | null;
+  updated_at: Date | null;
+};
+
+type LevelRow = {
+  ctxkeep: string | null;
+  ctxignore: string | null;
+  updated_at: Date | null;
+};
+
+// The built-in project the global defaults hang off, as migration 0012
+// creates it and ctxgraph.config.SETTINGS_PROJECT names it.
+const SETTINGS_PROJECT = "_settings";
+
+// The project level is the empty alias, which a URL path cannot carry. `-` is
+// what the mount listing already writes for it, so it is what the dashboard
+// spells it too.
+function alias(raw: string): string {
+  return raw === "-" ? "" : raw;
+}
 
 type DropReportRow = {
   root_path: string;
@@ -155,6 +203,65 @@ projectsRouter.delete(
   }),
 );
 
+// Registering a project is the one route that must not require one first.
+// Nothing is mounted by it either: the row comes first and `make mounts` on
+// the host finishes the job, which is what the API's reply says.
+projectsRouter.post(
+  "/projects",
+  route(async (req, res) => {
+    const body = req.body as Record<string, unknown> | undefined;
+    const answer = await upstream<unknown>(
+      "POST",
+      "/projects",
+      {},
+      {
+        name: readBodyString(body, "name") ?? "",
+        root_path: readBodyString(body, "root_path") ?? "",
+        alias: readBodyString(body, "alias") ?? "",
+        project_type: readBodyString(body, "type") ?? "",
+      },
+    ).catch(passOn);
+    res.status(201).json(answer);
+  }),
+);
+
+projectsRouter.patch(
+  "/projects/:name",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const type = readBodyString(req.body, "type");
+    if (type === undefined) {
+      throw badRequest('Send {"type": "codebase" | "docs" | "config"}');
+    }
+    if (BUILTIN_TYPES.has(type)) {
+      throw new HttpError(
+        409,
+        `"${type}" holds records written by an agent rather than an indexed ` +
+          "tree, and indexing into it would delete every one of them. Only " +
+          `${PROJECT_TYPES.join(", ")} can be set here.`,
+      );
+    }
+    if (!(PROJECT_TYPES as readonly string[]).includes(type)) {
+      throw badRequest(
+        `"${type}" is not a project type. Expected one of ` +
+          `${PROJECT_TYPES.join(", ")}.`,
+      );
+    }
+    const current = await dbPool.query<{ type: string }>(sql.PROJECT_TYPE, [
+      name,
+    ]);
+    if (BUILTIN_TYPES.has(current.rows[0].type)) {
+      throw new HttpError(
+        409,
+        `${name} holds agent ${current.rows[0].type} rather than an indexed ` +
+          "tree. Its type is what keeps an index run out of it.",
+      );
+    }
+    const updated = await dbPool.query(sql.PATCH_PROJECT_TYPE, [name, type]);
+    res.json(updated.rows[0]);
+  }),
+);
+
 projectsRouter.get(
   "/projects",
   route(async (_req, res) => {
@@ -191,6 +298,95 @@ projectsRouter.get(
       hashed_files: count(extras.rows[0].hashed_files),
       embeddings: count(extras.rows[0].embeddings),
     });
+  }),
+);
+
+// What a project indexes, per directory, and where that answer comes from.
+// The rows are read here rather than through the API: the documents are in
+// this database, and only the origin needs the mount the API holds.
+projectsRouter.get(
+  "/projects/:name/settings",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const [sources, project, global] = await Promise.all([
+      dbPool.query<SettingsRow>(sql.PROJECT_SETTINGS, [name]),
+      dbPool.query<LevelRow>(sql.PROJECT_LEVEL_SETTINGS, [name, ""]),
+      dbPool.query<LevelRow>(sql.PROJECT_LEVEL_SETTINGS, [
+        SETTINGS_PROJECT,
+        "",
+      ]),
+    ]);
+    res.json({
+      sources: sources.rows,
+      project: project.rows[0] ?? null,
+      global: global.rows[0] ?? null,
+    });
+  }),
+);
+
+projectsRouter.get(
+  "/projects/:name/file-types",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const rows = await dbPool.query<{ extension: string; count: string }>(
+      sql.PROJECT_FILE_TYPES,
+      [name],
+    );
+    res.json({
+      items: rows.rows.map((row) => ({
+        extension: row.extension,
+        count: count(row.count),
+      })),
+    });
+  }),
+);
+
+projectsRouter.put(
+  "/projects/:name/settings/:alias",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as Record<string, unknown> | undefined;
+    // An empty document is stored as NULL rather than as an empty string:
+    // that is how a level stops speaking for one half and lets the level
+    // above answer, and the two must not be different states.
+    const keep = readBodyString(body, "ctxkeep")?.trim();
+    const ignore = readBodyString(body, "ctxignore")?.trim();
+    const saved = await dbPool.query(sql.SAVE_SETTINGS, [
+      name,
+      alias(req.params.alias),
+      keep === undefined || keep === "" ? null : `${keep}\n`,
+      ignore === undefined || ignore === "" ? null : `${ignore}\n`,
+    ]);
+    res.json(saved.rows[0]);
+  }),
+);
+
+projectsRouter.delete(
+  "/projects/:name/settings/:alias",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const dropped = await dbPool.query(sql.CLEAR_SETTINGS, [
+      name,
+      alias(req.params.alias),
+    ]);
+    res.json(dropped.rows[0] ?? { project: name, alias: req.params.alias });
+  }),
+);
+
+// Propose a selection for one directory from the file types it actually
+// holds. The scan needs the tree, so it runs where the mounts are.
+projectsRouter.post(
+  "/projects/:name/scan",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { alias?: unknown } | undefined;
+    const answer = await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/scan`,
+      {},
+      { alias: alias(String(body?.alias ?? "")) },
+    ).catch(passOn);
+    res.json(answer);
   }),
 );
 

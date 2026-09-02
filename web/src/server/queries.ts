@@ -19,8 +19,13 @@ export const PROJECTS = `
              AND l.metadata ->> 'about' = p.name) AS plans,
          -- What the project reads. An empty alias is the project mounted
          -- whole; several named ones are the slices it was assembled from.
+         -- keep_source and ignore_source say where the last index run read
+         -- that directory's selection from, which is the only place the
+         -- dashboard can learn it: it holds no mount and cannot look.
          (SELECT coalesce(json_agg(json_build_object(
-                   'alias', s.alias, 'root_path', s.root_path)
+                   'alias', s.alias, 'root_path', s.root_path,
+                   'keep_source', s.keep_source,
+                   'ignore_source', s.ignore_source)
                    ORDER BY s.created_at, s.alias), '[]'::json)
             FROM project_sources AS s
            WHERE s.project = p.name) AS sources
@@ -42,7 +47,9 @@ export const PROJECT = `
          -- What the project reads. An empty alias is the project mounted
          -- whole; several named ones are the slices it was assembled from.
          (SELECT coalesce(json_agg(json_build_object(
-                   'alias', s.alias, 'root_path', s.root_path)
+                   'alias', s.alias, 'root_path', s.root_path,
+                   'keep_source', s.keep_source,
+                   'ignore_source', s.ignore_source)
                    ORDER BY s.created_at, s.alias), '[]'::json)
             FROM project_sources AS s
            WHERE s.project = p.name) AS sources
@@ -100,7 +107,77 @@ export const DROP_REPORT = `
     FROM projects AS p
    WHERE p.name = $1`;
 
+// What kind of thing a project is. The column is deliberately unconstrained
+// (migration 0006), so the vocabulary is enforced by the route rather than
+// here - and the route refuses the built-in types both ways, because an index
+// run into a records project deletes every record it holds.
+export const PATCH_PROJECT_TYPE = `
+  UPDATE projects SET type = $2
+   WHERE name = $1
+  RETURNING name, type`;
+
+// The file types actually in the graph, which is what "currently indexed"
+// means: the selection says what would be picked up, this says what was.
+// A name with no dot counts as itself, so Dockerfile and Makefile are types
+// rather than one nameless bucket.
+export const PROJECT_FILE_TYPES = `
+  WITH named AS (
+    SELECT split_part(id, '/', -1) AS file_name
+      FROM graph_nodes
+     WHERE project = $1 AND type = 'file'
+  )
+  SELECT CASE
+           WHEN strpos(file_name, '.') = 0 THEN file_name
+           ELSE '.' || lower(split_part(file_name, '.', -1))
+         END AS extension,
+         count(*) AS count
+    FROM named
+   GROUP BY extension
+   ORDER BY count DESC, extension`;
+
+// Every level a project's selection can come from, in the order
+// ctxgraph.selection reads them: the directories it holds, the project row,
+// and the global default under _settings. A directory with no row of its own
+// still appears, because the editor has to offer to write one.
+export const PROJECT_SETTINGS = `
+  SELECT s.alias,
+         s.root_path,
+         s.keep_source,
+         s.ignore_source,
+         t.ctxkeep,
+         t.ctxignore,
+         t.updated_at
+    FROM project_sources AS s
+    LEFT JOIN project_settings AS t
+      ON t.project = s.project AND t.alias = s.alias
+   WHERE s.project = $1
+   ORDER BY s.created_at, s.alias`;
+
+export const PROJECT_LEVEL_SETTINGS = `
+  SELECT ctxkeep, ctxignore, updated_at
+    FROM project_settings
+   WHERE project = $1 AND alias = $2`;
+
+// The same upsert ctxgraph.storage.write_settings runs. Both documents are
+// written every time, NULL included: clearing one is how a level stops
+// speaking for it and lets the level above answer instead.
+export const SAVE_SETTINGS = `
+  INSERT INTO project_settings (project, alias, ctxkeep, ctxignore)
+  VALUES ($1, $2, $3, $4)
+  ON CONFLICT (project, alias) DO UPDATE SET
+    ctxkeep = EXCLUDED.ctxkeep,
+    ctxignore = EXCLUDED.ctxignore,
+    updated_at = CURRENT_TIMESTAMP
+  RETURNING project, alias, ctxkeep, ctxignore, updated_at`;
+
+export const CLEAR_SETTINGS = `
+  DELETE FROM project_settings
+   WHERE project = $1 AND alias = $2
+  RETURNING project, alias`;
+
 export const PROJECT_EXISTS = `SELECT 1 FROM projects WHERE name = $1`;
+
+export const PROJECT_TYPE = `SELECT type FROM projects WHERE name = $1`;
 
 export const DROP_PROJECT = `DELETE FROM projects WHERE name = $1`;
 

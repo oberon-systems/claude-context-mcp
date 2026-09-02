@@ -15,6 +15,42 @@ export type IndexJob = {
 export type ProjectSource = {
   alias: string;
   root_path: string;
+  // Where the last index run read this directory's selection from: "file" for
+  // a .ctxkeep still in the tree, "directory" / "project" / "global" for a
+  // stored row, "default" for the built-in set. Null until first indexed.
+  keep_source: string | null;
+  ignore_source: string | null;
+};
+
+// One level of the selection: a directory, the project, or the global
+// default. Either document may be null, which is that level declining to
+// speak for it and letting the level above answer.
+export type SettingsLevel = {
+  ctxkeep: string | null;
+  ctxignore: string | null;
+  updated_at: string | null;
+};
+
+export type SettingsSource = ProjectSource & SettingsLevel;
+
+export type ProjectSettings = {
+  sources: SettingsSource[];
+  project: SettingsLevel | null;
+  global: SettingsLevel | null;
+};
+
+// What a scan of one directory proposes, and what that proposal would select.
+export type ScanResult = {
+  project: string;
+  alias: string;
+  ctxkeep: string;
+  ctxignore: string;
+  report: string;
+};
+
+export type FileType = {
+  extension: string;
+  count: number;
 };
 
 export type Project = {

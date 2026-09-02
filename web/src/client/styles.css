@@ -151,6 +151,23 @@ button.link {
   text-align: left;
 }
 
+/* A sortable column header has to read as a header rather than as a link, so
+   it takes the cell's own type and only the column being sorted is coloured. */
+button.link.sort {
+  text-transform: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+button.link.sort.active {
+  color: var(--accent);
+}
+
+.num button.link.sort {
+  width: 100%;
+  text-align: right;
+}
+
 input,
 select,
 textarea {
@@ -459,4 +476,59 @@ dd {
 
 .modal h2 {
   margin-top: 0;
+}
+
+/* Where a selection came from. Green is this dashboard, red is a pair still
+   in the repository - which wins, and which is what has yet to be removed. */
+.origin {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.origin-db {
+  color: var(--fresh);
+}
+
+.origin-file {
+  color: var(--stale);
+}
+
+.origin-none {
+  color: var(--muted);
+}
+
+/* The two selection documents, side by side where there is room for them.
+   They are read against each other - an ignore glob eating a keep pattern is
+   the mistake worth seeing - so they do not stack until they have to. */
+.editors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.editors textarea {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+}
+
+/* One directory's block of the settings tab. */
+.level {
+  padding: 1rem;
+  margin: 1rem 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.level h3 {
+  margin: 0;
+}
+
+/* What a scan says its proposal would select. */
+.report {
+  max-height: 20rem;
+  overflow: auto;
+  font-size: 0.8rem;
 }
