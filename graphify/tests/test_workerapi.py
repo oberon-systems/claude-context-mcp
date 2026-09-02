@@ -238,3 +238,87 @@ def test_a_refused_directory_answers_with_the_reason(
     )
     assert response.status_code == 409
     assert "project 'other'" in response.json()["detail"]
+
+
+def test_a_project_can_be_registered_before_it_reads_anything(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The monorepo case: the row and the address exist, the slices follow."""
+    registered: list[tuple[str, str, str | None, str, bool]] = []
+
+    def record(
+        cursor: object,
+        project: str,
+        root_path: str,
+        project_type: str | None = None,
+        alias: str = "",
+        with_source: bool = True,
+    ) -> None:
+        registered.append((project, root_path, project_type, alias, with_source))
+
+    monkeypatch.setattr(workerapi, "register_project", record)
+    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
+    response = client.post(
+        "/projects", headers=AUTH, json={"name": "Mono Repo", "project_type": "docs"}
+    )
+    assert response.status_code == 201
+    # The name is cleaned by the rule that names every project, and the row
+    # still needs a root_path the column will accept.
+    assert registered == [("mono-repo", "registered://mono-repo", "docs", "", False)]
+    assert "make mounts" in response.json()["mounts"]
+
+
+def test_a_reserved_project_name_is_refused_rather_than_crashing(
+    client: TestClient,
+) -> None:
+    """`_settings` and its siblings hold records, not a tree."""
+    response = client.post("/projects", headers=AUTH, json={"name": "_settings"})
+    assert response.status_code == 409
+    assert "reserved" in response.json()["detail"]
+
+
+def test_registering_a_directory_registers_it_as_the_whole_tree(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A project given a path reads it whole, so its node ids stay unprefixed."""
+    registered: list[tuple[str, str, str | None, str, bool]] = []
+
+    def record(
+        cursor: object,
+        project: str,
+        root_path: str,
+        project_type: str | None = None,
+        alias: str = "",
+        with_source: bool = True,
+    ) -> None:
+        registered.append((project, root_path, project_type, alias, with_source))
+
+    monkeypatch.setattr(workerapi, "register_project", record)
+    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
+    response = client.post(
+        "/projects", headers=AUTH, json={"name": "", "root_path": "/src/kurum/"}
+    )
+    assert response.status_code == 201
+    assert registered == [("kurum", "/src/kurum", None, "", True)]
+
+
+def test_scanning_a_directory_that_is_not_mounted_is_refused(
+    client: TestClient,
+) -> None:
+    """Nothing is mounted at /code here, and a scan reads the tree."""
+    response = client.post("/projects/mono/scan", headers=AUTH, json={"alias": "web"})
+    assert response.status_code == 409
+    assert "recreated before it can be scanned" in response.json()["detail"]
+
+
+def test_the_settings_of_an_unmounted_source_report_only_that(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where a selection comes from cannot be answered without the tree."""
+    monkeypatch.setattr(
+        workerapi,
+        "list_sources",
+        lambda cursor, project: [("configs", "/mono/configs")],
+    )
+    body = client.get("/projects/mono/settings", headers=AUTH).json()
+    assert body["sources"] == [{"alias": "configs", "mounted": False}]

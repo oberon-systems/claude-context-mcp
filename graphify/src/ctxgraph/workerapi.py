@@ -28,8 +28,11 @@ from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
-from ctxgraph import indexjobs, jobs, sources
+from ctxgraph import bootstrap, indexjobs, jobs, sources
 from ctxgraph.config import (
+    IGNORE_FILE,
+    KEEP_FILE,
+    KNOWN_PROJECT_TYPES,
     LLM_INPUT_CHARS,
     LLM_MAX_TOKENS,
     WORKER_API_DOCS,
@@ -41,12 +44,14 @@ from ctxgraph.config import (
     WORKER_MAX_BATCH,
     WORKER_MAX_REPLY_CHARS,
 )
+from ctxgraph.discovery import to_spec
 from ctxgraph.identifiers import (
     project_mount,
     project_name,
     source_alias,
     source_mount,
 )
+from ctxgraph.selection import resolve
 from ctxgraph.storage import (
     add_source,
     drop_source,
@@ -54,6 +59,7 @@ from ctxgraph.storage import (
     get_db_url,
     list_sources,
     put_cached_summary,
+    register_project,
     save_llm_summary,
 )
 from ctxgraph.summary_text import (
@@ -260,6 +266,143 @@ def get_projects() -> dict[str, Any]:
             }
         )
     return {"projects": projects}
+
+
+class ProjectRequest(BaseModel):
+    """A project to register, with or without a directory to read."""
+
+    name: str = Field(
+        default="",
+        description="what the project is addressed by; derived from root_path if unset",
+    )
+    root_path: str = Field(
+        default="",
+        description="host path of its tree; empty registers a project reading nothing",
+    )
+    alias: str = Field(
+        default="",
+        description="what that directory is called inside the project",
+    )
+    project_type: str = Field(
+        default="", description="codebase, docs or config; the default is codebase"
+    )
+
+
+@api.post("/projects", status_code=201)
+def post_project(request: ProjectRequest) -> dict[str, Any]:
+    """Register a project, so it can be mounted and then indexed.
+
+    Nothing is mounted or indexed by this. The override is a file on the host
+    and the services hold the mounts they started with, so the row comes first
+    and `make mounts` finishes the job - which is what the reply says.
+
+    A project registered with no directory is the monorepo case: the row, the
+    address and the agent files exist, and the slices arrive one at a time
+    through `POST /projects/{project}/sources`.
+    """
+    root_path = request.root_path.strip().rstrip("/")
+    project_type = request.project_type.strip() or None
+    if project_type is not None and project_type not in KNOWN_PROJECT_TYPES:
+        LOG.warning(
+            "type=%s is not one of %s; storing it anyway",
+            project_type,
+            ", ".join(sorted(KNOWN_PROJECT_TYPES)),
+        )
+    try:
+        # Inside the guard: `project_name` refuses a reserved or underivable
+        # name, and that is the caller's mistake rather than this service's.
+        name = project_name(request.name.strip(), root_path)
+        with transaction() as cursor:
+            register_project(
+                cursor,
+                name,
+                # A project reading nothing still needs a root_path: the column
+                # is NOT NULL UNIQUE, and where it was registered from is the
+                # honest answer until its first directory arrives.
+                root_path or f"registered://{name}",
+                project_type,
+                source_alias(request.alias.strip(), root_path) if request.alias else "",
+                with_source=bool(root_path),
+            )
+            view = source_view(cursor, name)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    view["mounts"] = "run `make mounts` on the host, then index the project"
+    return view
+
+
+@api.get("/projects/{project}/settings")
+def get_settings(project: str) -> dict[str, Any]:
+    """Say where each source of a project would read its selection from now.
+
+    `project_sources.keep_source` records what the last run actually used;
+    this is the live answer, and the two differ exactly when the selection was
+    changed since. Only the origin is reported - the documents themselves are
+    in `project_settings`, which the dashboard reads directly.
+    """
+    with transaction() as cursor:
+        listed = list_sources(cursor, project)
+        resolved = []
+        for alias, _ in listed:
+            mount = source_mount(project, alias)
+            if not os.path.isdir(mount):
+                resolved.append({"alias": alias, "mounted": False})
+                continue
+            selection = resolve(cursor, project, alias, mount)
+            resolved.append(
+                {
+                    "alias": alias,
+                    "mounted": True,
+                    "keep_source": selection.keep_origin,
+                    "ignore_source": selection.ignore_origin,
+                    "keep_file": os.path.isfile(os.path.join(mount, KEEP_FILE)),
+                    "ignore_file": os.path.isfile(os.path.join(mount, IGNORE_FILE)),
+                }
+            )
+    return {"project": project, "sources": resolved}
+
+
+class ScanRequest(BaseModel):
+    """Which directory of a project to propose a selection for."""
+
+    alias: str = Field(default="", description="the source to scan")
+
+
+@api.post("/projects/{project}/scan")
+def post_scan(project: str, request: ScanRequest) -> dict[str, Any]:
+    """Propose a selection for one directory, and say what it would select.
+
+    The same scan `make install` runs before a project exists, pointed at a
+    mount instead: the file types actually present decide the proposal, read
+    from the parser tables rather than restated. Nothing is stored - the
+    caller accepts it by saving it.
+    """
+    alias = request.alias.strip()
+    mount = source_mount(project, alias)
+    if not os.path.isdir(mount):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{project} does not read {mount}; the override has to be "
+                "rewritten and this service recreated before it can be scanned"
+            ),
+        )
+    inventory = bootstrap.collect(mount)
+    keep_lines = bootstrap.keep_document(inventory)
+    ignore_lines = bootstrap.ignore_document(inventory)
+    report = bootstrap.verify(
+        mount,
+        inventory,
+        to_spec(keep_lines),
+        to_spec(ignore_lines),
+    )
+    return {
+        "project": project,
+        "alias": alias,
+        "ctxkeep": "\n".join(keep_lines) + "\n",
+        "ctxignore": "\n".join(ignore_lines) + "\n",
+        "report": "\n".join(report),
+    }
 
 
 class SourceRequest(BaseModel):
