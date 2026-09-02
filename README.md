@@ -313,68 +313,68 @@ server gives those sessions one.
 
 ### Claude Code
 
-Registering it per project is usually what you want, since the graph belongs to
-one codebase. That writes `.mcp.json` at the project root, which can be
-committed:
+Three commands, three places the registration can live. Pick one; they are
+alternatives, not steps.
+
+Per project, committed with the codebase - this is what `make install` writes,
+to `.mcp.json` at the project root:
 
 ```bash
 claude mcp add --transport http --scope project context http://localhost:3000/mcp/myproject
 ```
 
-The file it writes is short enough to keep by hand instead:
+Per project, kept on your machine instead - `--scope local` is the default, and
+it writes to `~/.claude.json` under `projects["/path/to/myproject"]`, leaving
+the tree with no file of ours in it:
 
-```json
-{
-  "mcpServers": {
-    "context": {
-      "type": "http",
-      "url": "http://localhost:3000/mcp/myproject"
-    }
-  }
+```bash
+cd /path/to/myproject
+claude mcp add --transport http context http://localhost:3000/mcp/myproject
+```
+
+Once for every project you will ever open - `--scope user`, at the top level of
+`~/.claude.json`. The address has to name a project, so name it with a variable
+and let the shell fill it in:
+
+```bash
+claude mcp add --scope user --transport http context 'http://localhost:3000/mcp/${CTX_PROJECT:-myproject}'
+```
+
+Quote it with single quotes: the `${...}` has to reach the config unexpanded.
+Claude Code substitutes it from the environment each time it opens the session,
+and `:-` supplies the project to fall back on when the variable is not set.
+
+The variable is what makes one entry follow you between codebases. `$(pwd)`
+cannot go in the URL - it is a path, not a name, and nothing runs a command
+substitution on your behalf - so derive the name in your shell, in `~/.bashrc`:
+
+```bash
+claude() {
+    CTX_PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]' \
+        | tr -c 'a-z0-9._-' '-' | sed 's/^-*//; s/-*$//')" command claude "$@"
 }
 ```
 
-`--scope` decides where that registration is kept, and the file above is only
-one of the three answers:
+That is the pipeline `make install` uses to name a project after its directory,
+so the two agree. Where they cannot - a monorepo slice, or a project onboarded
+under `PROJECT_NAME=` - set `CTX_PROJECT` yourself, per directory, with
+[direnv](https://direnv.net/) or an alias.
 
-- `local`, the default, writes the same entry to `~/.claude.json` under
-  `projects["/path/to/myproject"].mcpServers`. The binding is still one
-  repository to one graph; it is your machine that remembers it, and the tree
-  stays clean.
-- `project` writes `.mcp.json` at the root, which is what `make install` does
-  and what a team shares through the repository.
-- `user` writes the top-level `mcpServers` of `~/.claude.json`: one entry for
-  every project you open.
+Check what a directory resolves to before trusting it:
 
-Written by hand, the local one nests that same `mcpServers` object under the
-repository's own path:
-
-```json
-{
-  "projects": {
-    "/path/to/myproject": {
-      "mcpServers": {
-        "context": {
-          "type": "http",
-          "url": "http://localhost:3000/mcp/myproject"
-        }
-      }
-    }
-  }
-}
+```bash
+cd /path/to/myproject
+claude mcp get context
 ```
 
-The user one is the same object at the top level of that file, outside
-`projects` altogether. Prefer the command over the editor for both: Claude Code
-rewrites `~/.claude.json` while it runs, and an edit made underneath a live
-session goes with it.
+The `Scope` line names the file the entry came from, and `Status: connected`
+means the address answered. Which project the session actually bound to is
+`list_projects`, from inside a session: it returns every indexed name, and the
+directories each one reads.
 
-One user-scope entry cannot name a project, since the project is part of the
-address - so a session opened through it lands on `DEFAULT_PROJECT` or on
-nothing, as the paragraph above this section describes, and reads a particular
-graph only when a call carries a `project` of its own. That is the trade for
-registering once: every tool accepts the argument, and `list_projects` is where
-the names come from.
+Prefer these commands to editing `~/.claude.json` by hand. Claude Code rewrites
+that file while it runs, and an edit made underneath a live session goes with
+it.
 
 Registering only names the address. Claude still asks before every call to a
 server it holds no permission rule for, so `make install` writes one into
