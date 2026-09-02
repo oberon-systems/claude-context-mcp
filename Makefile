@@ -102,9 +102,10 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 
 # Everything a codebase needs to be usable from an agent, in one pass: the
 # `context` server registered for both agents, the skills installed, an
-# instruction file, the .ctxkeep/.ctxignore pair generated from what the tree
-# actually holds, the shell aliases, and the projects row the rest of the
-# stack addresses the tree by.
+# instruction file, the selection generated from what the tree actually holds
+# and stored on the project row, the shell aliases, and the projects row the
+# rest of the stack addresses the tree by. Nothing is written into the tree
+# being onboarded except the agent files themselves.
 #
 # It reads AGENT_ROOT exactly as the skill targets below do, and their
 # comment is where that variable is explained, so onboarding a neighbour is
@@ -135,16 +136,11 @@ PERMISSIONS ?=
 SOURCE ?= $(AGENT_ROOT)
 ALIAS ?=
 EMPTY = $(filter none,$(SOURCE))
-# The project is named after AGENT_ROOT even when SOURCE is a directory inside
-# it, so the /mcp/<project> address written into the agent files is the one the
-# row is created under. `project_name` cleans the basename the same way it
-# cleans a path's last segment, so this is what onboarding has always derived.
-INSTALL_NAME = $(if $(PROJECT_NAME),$(PROJECT_NAME),$(notdir $(abspath $(AGENT_ROOT))))
 
-# The one command a codebase needs. It writes the selection files, installs
-# the skills, writes the alias, registers the project and gives the API a
-# mount for the tree - but it does not index. That is a button in the
-# dashboard, because an index run is not part of setting up.
+# The one command a codebase needs. It stores the selection, installs the
+# skills, writes the alias, registers the project and gives the API a mount
+# for the tree - but it does not index. That is a button in the dashboard,
+# because an index run is not part of setting up.
 #
 # Registering is the mount step: REGISTER=1 has it store the tree as a project
 # with no indexed_at, which is what puts the row in the dashboard with an
@@ -156,11 +152,9 @@ install: require-env require-not-root  ## Onboard AGENT_ROOT (SOURCE=none leaves
 	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
 		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
-		PERMISSIONS='$(PERMISSIONS)' FORCE='$(FORCE)' scripts/install.sh
-	@$(MAKE) --no-print-directory mounts REGISTER=1 \
-		PROJECT='$(if $(EMPTY),$(abspath $(AGENT_ROOT)),$(abspath $(SOURCE)))' \
-		PROJECT_NAME='$(INSTALL_NAME)' ALIAS='$(ALIAS)' \
-		CREATE='$(EMPTY)' TYPE='$(TYPE)'
+		PERMISSIONS='$(PERMISSIONS)' FORCE='$(FORCE)' \
+		SOURCE='$(if $(EMPTY),none,$(abspath $(SOURCE)))' ALIAS='$(ALIAS)' \
+		TYPE='$(TYPE)' scripts/install.sh
 	@# The API is long lived, so a tree added just now is invisible to it
 	@# until the container is recreated against the rewritten override.
 	$(COMPOSE) up -d worker-api

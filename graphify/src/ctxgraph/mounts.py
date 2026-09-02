@@ -30,6 +30,7 @@ check and writes the file.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from ctxgraph.config import KNOWN_PROJECT_TYPES
@@ -37,9 +38,11 @@ from ctxgraph.identifiers import project_name, source_alias
 from ctxgraph.storage import (
     drop_source,
     get_db_connection,
+    has_settings,
     list_all_sources,
     promote_root,
     register_project,
+    write_settings,
 )
 
 
@@ -88,6 +91,19 @@ def parse_args() -> argparse.Namespace:
         dest="project_type",
         help="type for --register; empty keeps the stored one",
     )
+    # Passed as variable names rather than as values: the two documents are
+    # kilobytes of globs and comments, and an argument list is neither the
+    # place for them nor safe from a shell that has to build it.
+    parser.add_argument(
+        "--ctxkeep-env",
+        default="",
+        help="environment variable holding the .ctxkeep to store, if any",
+    )
+    parser.add_argument(
+        "--ctxignore-env",
+        default="",
+        help="environment variable holding the .ctxignore to store, if any",
+    )
     parser.add_argument(
         "--drop",
         default="",
@@ -107,6 +123,7 @@ def register(
     alias: str,
     project_type: str,
     with_source: bool = True,
+    selection: tuple[str, str] = ("", ""),
 ) -> str:
     """Store one directory as a source and return the project it belongs to."""
     project = project_name(name, root_path)
@@ -127,6 +144,17 @@ def register(
                 alias,
                 with_source,
             )
+            # Only into a project that has none. Onboarding fills in what is
+            # missing and reports the rest as kept - a second run must not
+            # replace a selection somebody has since edited, which is the same
+            # rule that kept it from overwriting a file already in the tree.
+            keep, ignore = selection
+            if (keep or ignore) and not has_settings(cursor, project):
+                write_settings(cursor, project, alias, keep or None, ignore or None)
+                print(
+                    f"stored the generated selection for {project}",
+                    file=sys.stderr,
+                )
         conn.commit()
     finally:
         conn.close()
@@ -214,6 +242,10 @@ def main() -> None:
             alias,
             args.project_type.strip(),
             not args.create,
+            (
+                os.environ.get(args.ctxkeep_env, "") if args.ctxkeep_env else "",
+                os.environ.get(args.ctxignore_env, "") if args.ctxignore_env else "",
+            ),
         )
 
     trees = mounted_sources()

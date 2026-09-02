@@ -74,14 +74,19 @@ def test_a_created_project_is_not_mounted(
 ) -> None:
     """It reads no directory yet, so the path it was onboarded from is not one."""
     registered: list[tuple[str, ...]] = []
-    monkeypatch.setattr(
-        mounts,
-        "register",
-        lambda root, name, alias, project_type, with_source=True: registered.append(
-            (root, name, alias, str(with_source))
-        )
-        or name,
-    )
+
+    def record(
+        root: str,
+        name: str,
+        alias: str,
+        project_type: str,
+        with_source: bool = True,
+        selection: tuple[str, str] = ("", ""),
+    ) -> str:
+        registered.append((root, name, alias, str(with_source)))
+        return name
+
+    monkeypatch.setattr(mounts, "register", record)
     lines = run(
         monkeypatch,
         capsys,
@@ -94,3 +99,64 @@ def test_a_created_project_is_not_mounted(
     )
     assert registered == [("/mono", "mono", "", "False")]
     assert not any(line.startswith("mono\t-\t") for line in lines)
+
+
+def test_the_generated_selection_reaches_the_register_step(
+    listed: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Onboarding no longer writes the pair into the tree, so it stores it.
+
+    The documents travel as variable names rather than as values: an argument
+    list is neither the place for kilobytes of globs nor safe from the shell
+    that has to build it.
+    """
+    stored: list[tuple[str, str]] = []
+
+    def record(
+        root: str,
+        name: str,
+        alias: str,
+        project_type: str,
+        with_source: bool = True,
+        selection: tuple[str, str] = ("", ""),
+    ) -> str:
+        stored.append(selection)
+        return name
+
+    monkeypatch.setattr(mounts, "register", record)
+    monkeypatch.setenv("KEEP_DOC", "*.py\n")
+    monkeypatch.setenv("IGNORE_DOC", "*.pem\n")
+    run(
+        monkeypatch,
+        capsys,
+        "--add",
+        "/src/keenv",
+        "--register",
+        "--ctxkeep-env",
+        "KEEP_DOC",
+        "--ctxignore-env",
+        "IGNORE_DOC",
+    )
+    assert stored == [("*.py\n", "*.pem\n")]
+
+
+def test_an_unnamed_variable_stores_nothing(
+    listed: None, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A bare `make mounts` must not touch a project's stored selection."""
+    stored: list[tuple[str, str]] = []
+
+    def record(
+        root: str,
+        name: str,
+        alias: str,
+        project_type: str,
+        with_source: bool = True,
+        selection: tuple[str, str] = ("", ""),
+    ) -> str:
+        stored.append(selection)
+        return name
+
+    monkeypatch.setattr(mounts, "register", record)
+    run(monkeypatch, capsys, "--add", "/src/keenv", "--register")
+    assert stored == [("", "")]

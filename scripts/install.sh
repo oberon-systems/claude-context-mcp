@@ -119,15 +119,29 @@ elif PROJECT_PATH="$source_dir" PROJECT_NAME="$scan_name" \
         out { print > out }
     ' "$work/scan"
     project="$(tr -d '[:space:]' < "$work/name")"
+    # Stored on the project rather than written into the tree. The mount is
+    # read-only by contract, so a selection kept in the repository could only
+    # ever be edited by editing that repository - and the two files this used
+    # to leave behind were configuration of this service living in somebody
+    # else's checkout. The mount step below writes them, and only into a
+    # project that has no selection yet.
+    #
+    # A pair already in the tree still decides that project's index, and goes
+    # on doing so until it is deleted. The dashboard says which projects those
+    # are.
+    CTXKEEP_DOC="$(cat "$work/ctxkeep")"
+    CTXIGNORE_DOC="$(cat "$work/ctxignore")"
+    export CTXKEEP_DOC CTXIGNORE_DOC
     for name in ctxkeep ctxignore; do
-        if offer ".$name" "$source_dir/.$name" "$work/$name"; then
-            cp "$work/$name" "$source_dir/.$name"
-            note ".$name" "written"
+        if [ -e "$source_dir/.$name" ]; then
+            note ".$name" "kept (in the tree, and it beats what is stored)"
+        else
+            note ".$name" "stored on the project, not written to the tree"
         fi
     done
     sed 's/^/  /' "$work/report"
 else
-    echo "  the scan failed, so no selection file was written:" >&2
+    echo "  the scan failed, so no selection was generated:" >&2
     sed 's/^/  /' "$work/scan.err" >&2
     note ".ctxkeep" "skipped (scan failed)"
     note ".ctxignore" "skipped (scan failed)"
@@ -301,7 +315,27 @@ else
     echo "  added to $shell_rc, active in the next shell"
 fi
 
-# 6. Whether the address just written answers anything yet.
+# 6. The row the rest of the stack addresses the tree by, and the mount that
+#    lets it be read. Done here rather than from the Makefile because the
+#    selection generated above travels with it: `--register` stores it on the
+#    project, and only on a project that has none.
+echo
+echo "Registration"
+mount_args=(REGISTER=1 "PROJECT_NAME=$project" "ALIAS=${ALIAS:-}" \
+    "TYPE=${TYPE:-}")
+if [ "$source_dir" = "none" ]; then
+    mount_args+=("PROJECT=$target" CREATE=1)
+else
+    mount_args+=("PROJECT=$source_dir")
+fi
+if "$make_bin" --no-print-directory -C "$repo_root" mounts \
+        "${mount_args[@]}" 2>&1 | sed 's/^/  /'; then
+    note "project row" "$project registered"
+else
+    note "project row" "failed, run '$make_prefix mounts' by hand"
+fi
+
+# 7. Whether the address just written answers anything yet.
 echo
 echo "Stack"
 if curl -fsS "localhost:$port/health" > /dev/null 2>&1; then
