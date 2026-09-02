@@ -131,7 +131,7 @@ Six things, none of which replaces a file that already exists:
 
 | Step                           | What it leaves behind                                                                                                    |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ |
-| `.ctxkeep` / `.ctxignore`      | generated from the file types the tree actually holds, and verified                                                      |
+| the selection                  | generated from the file types the tree holds, verified, and stored on the project row rather than in the tree            |
 | `.mcp.json`                    | the `context` server for Claude Code, at `/mcp/<project>`                                                                |
 | `.gemini/settings.json`        | the same address for the Gemini CLI                                                                                      |
 | `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                                      |
@@ -194,8 +194,8 @@ Each lands under a name taken from the last segment of its path (`api`,
 for the built-in projects described under [Agent memory](#agent-memory). The indexed repository needs nothing
 of its own for this - no checkout of this project inside it, no `.env`, no
 Makefile - because the path is an argument of the indexing job rather than a
-setting. All it may optionally carry is `.ctxignore` / `.ctxkeep`, described
-below.
+setting. What it indexes is stored here too, though a `.ctxignore` or
+`.ctxkeep` left in the tree still overrides that - described below.
 
 `TYPE=` says what kind of project it is, which is what a search across the
 database narrows on:
@@ -278,9 +278,8 @@ the next index run prunes the nodes it left behind. Each of these rewrites the
 compose override and recreates the API, because a running service holds the
 mounts it started with.
 
-Each directory carries its own `.ctxignore` and `.ctxkeep`, read from its own
-root, so a slice says which of its files are worth indexing without the
-repository it was cut from having to agree.
+Each directory carries its own selection, so a slice says which of its files
+are worth indexing without the repository it was cut from having to agree.
 
 A project indexed whole is a single unnamed directory and stays one until you
 name it:
@@ -306,11 +305,6 @@ session to one of the indexed codebases. The older SSE pair (`/sse` plus
 `/message`, `/sse/<project>`) is still served for clients that cannot do
 better, but nothing should be pointed at it by choice.
 
-Name the project in the address whenever more than one is indexed. A session
-opened on a bare `/mcp` has no default, and every tool call then has to carry a
-`project` argument of its own; `DEFAULT_PROJECT` in the environment of the
-server gives those sessions one.
-
 ### Claude Code
 
 Three commands, three places the registration can live. Pick one; they are
@@ -326,55 +320,6 @@ claude mcp add --transport http --scope project context http://localhost:3000/mc
 Per project, kept on your machine instead - `--scope local` is the default, and
 it writes to `~/.claude.json` under `projects["/path/to/myproject"]`, leaving
 the tree with no file of ours in it:
-
-```bash
-cd /path/to/myproject
-claude mcp add --transport http context http://localhost:3000/mcp/myproject
-```
-
-Once for every project you will ever open - `--scope user`, at the top level of
-`~/.claude.json`. The address has to name a project, so name it with a variable
-and let the shell fill it in:
-
-```bash
-claude mcp add --scope user --transport http context 'http://localhost:3000/mcp/${CTX_PROJECT:-myproject}'
-```
-
-Quote it with single quotes: the `${...}` has to reach the config unexpanded.
-Claude Code substitutes it from the environment each time it opens the session,
-and `:-` supplies the project to fall back on when the variable is not set.
-
-The variable is what makes one entry follow you between codebases. `$(pwd)`
-cannot go in the URL - it is a path, not a name, and nothing runs a command
-substitution on your behalf - so derive the name in your shell, in `~/.bashrc`:
-
-```bash
-claude() {
-    CTX_PROJECT="$(basename "$PWD" | tr '[:upper:]' '[:lower:]' \
-        | tr -c 'a-z0-9._-' '-' | sed 's/^-*//; s/-*$//')" command claude "$@"
-}
-```
-
-That is the pipeline `make install` uses to name a project after its directory,
-so the two agree. Where they cannot - a monorepo slice, or a project onboarded
-under `PROJECT_NAME=` - set `CTX_PROJECT` yourself, per directory, with
-[direnv](https://direnv.net/) or an alias.
-
-Check what a directory resolves to before trusting it:
-
-```bash
-cd /path/to/myproject
-claude mcp get context
-```
-
-The `Scope` line names the file the entry came from, and `Status: connected`
-means the address answered. Which project the session actually bound to is
-`list_projects`, from inside a session: it returns every indexed name, and the
-directories each one reads.
-
-Prefer these commands to editing `~/.claude.json` by hand. Claude Code rewrites
-that file while it runs, and an edit made underneath a live session goes with
-it.
 
 Registering only names the address. Claude still asks before every call to a
 server it holds no permission rule for, so `make install` writes one into
@@ -436,12 +381,17 @@ reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/depl
 
 ### Choosing what gets indexed
 
-Two optional gitignore-style files at the root of each indexed directory,
-`.ctxignore` (paths to prune) and `.ctxkeep` (files that become nodes,
-replacing the default selection). `make install` generates both from what
-the tree holds, and a project reading several directories reads the pair of
-each of them. Per-format nuances - what Ansible, Docker Compose, Puppet,
-JSON, HTML and PHP parsing extracts - are in
+Two gitignore-style documents: `ctxignore` (paths to prune) and `ctxkeep`
+(files that become nodes, replacing the default selection). They are stored in
+the database and edited on the settings tab of a project's page, at three
+levels - one directory, the whole project, or every project. `make install`
+generates a pair from what the tree holds and stores it on the project row.
+
+A `.ctxignore` or `.ctxkeep` file left at the root of an indexed directory
+beats all of that, and goes on deciding that directory until it is deleted.
+The dashboard marks which projects are still in that state. Per-format
+nuances - what Ansible, Docker Compose, Puppet, JSON, HTML and PHP parsing
+extracts - are in
 [formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
 
 ## Make targets

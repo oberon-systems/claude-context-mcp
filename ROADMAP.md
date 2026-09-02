@@ -21,7 +21,7 @@ Expanding the breadth of what the graph covers and how accurately it resolves re
 - [ ] **Shebang Support:** Enable parsing for extension-less scripts.
 - [ ] **Language Extractor Improvements:** Enhance Python/Ruby cross-file resolution.
 - [ ] **Incremental Extraction (Code):** Speed up re-indexing for large codebases.
-- [ ] **base**: some settings, formats and so should being stored in database (\_configs)
+- [x] **base**: some settings, formats and so should being stored in database (`project_settings`)
 
 ## Developer Experience & Workflows
 
@@ -47,11 +47,14 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
 - [x] **Every Project At Once:** `--auto` on both summarizing passes, which is also what naming no project does.
 - [ ] **web**: should show how many files without summory (llm generated) in each project
-- [ ] **web**: allow to change repository type in web interface
+- [x] **web**: allow to change repository type in web interface
 - [ ] **web**: drow graph for a specific file
 - [x] **web**: reindex button for force reindex
 - [ ] **web**: indexing status and summarize status
-- [ ] **base**, **web**: store `_settings` per-project: auto-indexing params (time, inotify etc), settings for auto-summarize (llm url, schedulers and other).
+- [ ] **base**, **web**: the auto-indexing params (time, inotify etc) and the
+      auto-summarize ones (llm url, schedulers and other). The table is there -
+      `project_settings.settings` is an empty JSONB on every level - so this is
+      the knobs and their UI, not a migration.
 
 ## Semantic & Advanced Intelligence
 
@@ -71,6 +74,20 @@ Adding vector context and agent memory.
 ---
 
 ## Completed Items
+
+- The selection in the database: `.ctxkeep` and `.ctxignore` move out of the
+  repository being indexed and into `project_settings`, resolved most specific
+  first - the directory, then the project, then the global default under
+  `_settings`. Each half resolves on its own, so a project may take its keep
+  list from its own row and its ignore list from the default. A file still at
+  the root of an indexed directory beats all three and goes on deciding that
+  directory until it is deleted, which is what makes the move something to do
+  one repository at a time rather than a flag day; the dashboard marks which
+  ones those still are, per project and per directory, from what the last index
+  run actually read. `make install` stores the pair it generates instead of
+  writing it into the tree, and the scan behind it is a button on the settings
+  tab. The dashboard also registers a project and its directories, drops a
+  directory, changes a project's type, and searches and sorts the project list
 
 - Several directories per project: `project_sources` holds what a project
   reads, so a monorepo is indexed in slices rather than whole. Each directory

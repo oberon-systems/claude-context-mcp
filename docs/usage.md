@@ -210,11 +210,16 @@ browser's behalf and it has no authentication of its own, so anything that
 can reach the entry point can edit what it shows.
 
 - **Projects** - what's indexed, where it came from, node/edge/file/plan
-  counts, and how stale the index is.
-- **A project** - four tabs: _overview_ (node type breakdown), _graph_ (the
+  counts, and how stale the index is. Searchable by name or path, sortable by
+  every count and by freshness, with the type editable in place and a `Sel`
+  column saying whether the last index run read its selection from here or
+  from a file left in the tree. _New project_ registers one.
+- **A project** - five tabs: _overview_ (node type breakdown, and the
+  directories it reads, which can be added and dropped here), _graph_ (the
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
   and inspect one node's summary, metadata, neighbours and stored source),
-  _files_ (file nodes with entity counts and hash status).
+  _files_ (file nodes with entity counts and hash status), _settings_ (what
+  it indexes).
 - **Plans** - every plan in the database, filterable by project, status,
   type or a text search; opens as rendered markdown and edits in place.
 - **Suggestions** - the recorded gaps, most often hit first, filterable by
@@ -222,8 +227,15 @@ can reach the entry point can edit what it shows.
   authors: the status, the wording and the vocabularies are editable, the
   hit count and the first sighting are not, and there is no way to create
   one here - a suggestion is written by the agent that hit the gap.
+- **Settings** - the selection every project falls back to, when neither it
+  nor one of its directories has said what to index.
 
-The only writes it can make are to plans and suggestions, and dropping a
-project - a drop reports what it will cost before it happens and asks the
-project name to be typed as confirmation. Re-indexing is the button next to it
-remains the way in.
+Registering a project or a directory writes a row and mounts nothing: the
+compose override is a file on the host and both services hold the mounts they
+started with, so `make mounts` there is what finishes the job. The dashboard
+says so in its own reply rather than leaving it to be discovered.
+
+A drop reports what it will cost before it happens and asks the project name
+to be typed as confirmation. Dropping a directory is not a drop of what it
+indexed - those nodes go on the next index run, the same way a deleted file's
+do.

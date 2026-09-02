@@ -88,8 +88,10 @@ so `deploy/configs/prod/nginx.conf` is `configs/prod/nginx.conf` in the graph.
 Two slices may hold a file of the same name without colliding, and one
 extraction pass still resolves a call from one slice into the other.
 
-Each directory carries its own `.ctxignore` and `.ctxkeep`, read from its own
-root rather than from the repository they were cut from.
+Each directory carries its own selection, resolved from its own settings row
+rather than from the repository the slices were cut from. The settings tab of
+the project's page edits one per directory; see
+[formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
 
 ## Changing what a project reads
 

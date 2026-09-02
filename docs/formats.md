@@ -17,22 +17,22 @@ parsers to extract structural information.
 
 ## Controlling what gets indexed
 
-Two optional files at the root of each indexed directory, both gitignore
-syntax, read fresh on every index run:
+Two documents decide it, both gitignore syntax, read fresh on every index
+run:
 
-| File         | Purpose                                             |
-| ------------ | --------------------------------------------------- |
-| `.ctxignore` | Paths pruned from the walk                          |
-| `.ctxkeep`   | Files that become nodes; everything else is skipped |
+| Document    | Purpose                                             |
+| ----------- | --------------------------------------------------- |
+| `ctxignore` | Paths pruned from the walk                          |
+| `ctxkeep`   | Files that become nodes; everything else is skipped |
 
 ```text
-# .ctxignore
+# ctxignore
 .git/
 .cache/
 build/
 *.qcow2
 
-# .ctxkeep
+# ctxkeep
 *.py
 *.ts
 *.hcl
@@ -40,19 +40,44 @@ build/
 Makefile
 ```
 
-`.ctxkeep` **replaces** the default selection instead of adding to it, which
+`ctxkeep` **replaces** the default selection instead of adding to it, which
 is how a project indexes file types this repo has never heard of.
-`.ctxignore` is additive on top of the built-in skip list (`.git`, `.venv`,
+`ctxignore` is additive on top of the built-in skip list (`.git`, `.venv`,
 `node_modules`, `dist`, `target`, ...), so forgetting `.git/` there still
 does not walk into git's internals.
 
-Without either file, the built-in defaults apply: every extension a parser
+With neither, the built-in defaults apply: every extension a parser
 understands, plus `.sql` as an unparsed file node. Files above 1 MB are
 always skipped, whichever way they were selected.
 
-`make install` generates both files from what the tree holds, and verifies
-the result by simulation before writing it - so a generated pair is a
-working starting point, not a guess to double check by hand.
+### Where the selection lives
+
+The pair is stored in the database, on the project, and edited on the
+_settings_ tab of the project's page in the dashboard. Both halves resolve
+independently and most specific first, so a project may take its keep list
+from its own row and its ignore list from the global default:
+
+| Level     | Scope                                             |
+| --------- | ------------------------------------------------- |
+| directory | one directory of a project reading several        |
+| project   | every directory of one project                    |
+| global    | every project, edited under _Settings_ in the nav |
+
+Ahead of all three: a `.ctxkeep` or `.ctxignore` file at the root of the
+indexed directory. A repository that ships one goes on deciding its own index
+until that file is deleted, whatever is stored here. `make install` no longer
+writes them - it stores the pair it generates on the project row instead, and
+only when the project has no selection yet.
+
+The dashboard shows which is which. The projects table carries a `Sel` column
+reading `DB` or `FILE`, and the settings tab says it per directory, so the
+repositories still carrying the pair are the ones to clear out. Both report
+what the **last index run** actually read, so a selection changed since is not
+what the graph was built from.
+
+Whatever the level, the scan behind `make install` is one button on the
+settings tab: it reads the file types the directory actually holds, proposes
+a pair, and reports what that pair would select before it is saved.
 
 ## Ansible
 
