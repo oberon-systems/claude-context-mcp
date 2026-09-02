@@ -136,7 +136,7 @@ Six things, none of which replaces a file that already exists:
 | `.gemini/settings.json`        | the same address for the Gemini CLI                                                                                      |
 | `.claude/skills/*/SKILL.md`    | every skill, copied for that root (`make skill-install` on its own)                                                      |
 | `CLAUDE.local.md`, `GEMINI.md` | how an agent should use the graph, from `templates/CLAUDE.local.md` - `GEMINI.md` only when the tree has none of its own |
-| shell alias                    | `context-install`, in `~/.bashrc` - one command onboards a tree, and indexing is a button in the dashboard               |
+| shell aliases                  | `context-install`, `context-project`, `context-source`, `context-source-drop` and `context-sources`, in `~/.bashrc`      |
 
 Then it indexes the tree, so the address it just wrote answers immediately.
 
@@ -150,6 +150,8 @@ project that will never exist.
 | -------------- | --------------------- | ------------------------------------------ |
 | `AGENT_ROOT`   | this repository       | the tree being onboarded                   |
 | `PROJECT_NAME` | its last path segment | the name it is stored and addressed under  |
+| `SOURCE`       | `AGENT_ROOT`          | which directory it reads; `none` reads yet |
+| `ALIAS`        | empty                 | what that directory is called inside it    |
 | `TYPE`         | `codebase`            | `docs` or `config`; unset keeps the stored |
 | `ALIASES`      | `1`                   | `ALIASES=0` leaves the shell rc file alone |
 | `SHELL_RC`     | `~/.bashrc`           | which rc file the alias block goes to      |
@@ -251,6 +253,47 @@ Node ids are unique within a project, not across the database: `README.md` is a
 node in every one of them. Edges stay inside one project, because the indexer
 is handed a single tree and resolves every target within it.
 
+## A monorepo, in slices
+
+A project does not have to be a whole tree. It can be several directories,
+each mounted read-only at `/code/<project>/<alias>` and walked into one graph:
+
+```bash
+context-project PROJECT_NAME=mono          # from /home/you/work/mono
+cd deploy/configs && context-source mono   # adds it as `configs`
+cd ../../tools/agents && context-source mono
+```
+
+`context-project` writes the agent files, the skills and the project row, and
+registers no directory at all. Each `context-source` adds the directory the
+shell stands in, under an alias taken from its name or given as a second
+argument. That alias opens every node id the directory produced -
+`configs/prod/nginx.conf` - so two slices may each hold a `README.md` without
+colliding, while one extractor pass still resolves a call from one slice into
+the other.
+
+`context-sources` prints what every project reads and flags a directory this
+host no longer has. `context-source-drop mono configs` stops reading one, and
+the next index run prunes the nodes it left behind. Each of these rewrites the
+compose override and recreates the API, because a running service holds the
+mounts it started with.
+
+Each directory carries its own `.ctxignore` and `.ctxkeep`, read from its own
+root, so a slice says which of its files are worth indexing without the
+repository it was cut from having to agree.
+
+A project indexed whole is a single unnamed directory and stays one until you
+name it:
+
+```bash
+make source-promote PROJECT_NAME=api ALIAS=root
+```
+
+Every node id then gains `root/` as its first segment, so index the project
+again before trusting its graph. Projects onboarded before any of this existed
+need no migration: an unnamed directory is still mounted at `/code/<project>`
+and still produces the ids it always did.
+
 ## Connecting the agents
 
 `make install` writes both files described here, which is the reason to read
@@ -335,10 +378,11 @@ reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/depl
 
 ### Choosing what gets indexed
 
-Two optional gitignore-style files at the indexed project's root,
+Two optional gitignore-style files at the root of each indexed directory,
 `.ctxignore` (paths to prune) and `.ctxkeep` (files that become nodes,
 replacing the default selection). `make install` generates both from what
-the tree holds. Per-format nuances - what Ansible, Docker Compose, Puppet,
+the tree holds, and a project reading several directories reads the pair of
+each of them. Per-format nuances - what Ansible, Docker Compose, Puppet,
 JSON, HTML and PHP parsing extracts - are in
 [formats](https://oberon-systems.github.io/claude-context-mcp/formats.html).
 
@@ -350,6 +394,7 @@ Run `make` for the full list, including the per-service subdivisions.
 make init        create the virtualenv and install the pre-commit hooks
 make install     onboard AGENT_ROOT=<path> onto the stack and register it
                  TYPE=docs|config categorises it; unset keeps what is stored
+                 SOURCE=<dir> is the directory it reads, SOURCE=none none yet
                  ALIASES=0 leaves ~/.bashrc alone
 make lint        run every pre-commit hook over every file
 make build       build every service image
@@ -357,6 +402,12 @@ make pull        pull the published images, discarding a local build
 make up          start the database, the services and the entry point
 make down        stop the stack, keeping the database volume
 make mounts      rewrite the compose override from the projects table
+make sources     list what each project reads (PROJECT_NAME= narrows it)
+make source-add  add PROJECT=<host path> to PROJECT_NAME= as ALIAS=
+make source-drop stop PROJECT_NAME= reading ALIAS=
+make source-promote
+                 name the root of PROJECT_NAME= as ALIAS=, so a second
+                 directory can join it
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
                  with no PROJECT= it describes every indexed project, and
                  LIMIT=<n> then caps each of them rather than the run
@@ -548,7 +599,8 @@ Full walkthrough: [deployment](https://oberon-systems.github.io/claude-context-m
 Schema migrations are goose-managed (`migrations/`); `make up` applies
 whatever is pending before anything else touches the database. Core tables:
 `projects` - one row per project, carrying the `type` a search narrows on -
-plus `graph_nodes`, `graph_edges` and `code_embeddings` (unused for now).
+`project_sources` - the directories each one reads - plus `graph_nodes`,
+`graph_edges` and `code_embeddings` (unused for now).
 Plans, memories and suggestions are `graph_nodes` rows under the built-in
 projects `_plans`, `_memory` and `_suggestions`, which no tree is indexed
 into, so they survive a project drop and `make clean`. Full internals,

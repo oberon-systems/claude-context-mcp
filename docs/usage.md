@@ -14,7 +14,13 @@ make build       build every service image
 make up          start postgres, mcp-server, the viewer and the dashboard
 make down        stop the stack, keeping the database volume
 context-install  onboard the tree you stand in; index it from the dashboard
+context-project  onboard it as a project that reads no directory yet
+context-source   add the directory you stand in to a project, under an alias
+context-sources  list what every project reads
 make mounts      rewrite the compose override from the projects table
+make sources     the same listing, and what PROJECT_NAME= alone reads
+make source-add  add PROJECT=<host path> to PROJECT_NAME= as ALIAS=
+make source-drop stop PROJECT_NAME= reading ALIAS=
 make summarize   describe PROJECT's files with the model (BG=1 detaches)
 make backup      write the database, or one project, to a file
 make restore     put a backup file back
@@ -85,6 +91,29 @@ one kind. Each row names its project, and the limit is shared out between the
 projects rather than spent on whichever sorts first, so six indexed codebases
 answer with six projects' hits. A named `project` and a `project_type` cannot
 be combined - one narrows what the other spans.
+
+## Projects that read several directories
+
+A project is a selection of host directories rather than one tree. One
+directory is mounted whole at `/code/<project>` and its node ids are paths
+relative to it, which is what every project onboarded before this was. Several
+directories are mounted at `/code/<project>/<alias>`, and each alias becomes
+the first segment of every node id that directory produced:
+
+```text
+list_projects()
+search_code_nodes(query: "nginx.conf", project: "mono")
+get_node_summary(node_id: "configs/prod/nginx.conf")
+```
+
+`list_projects` carries a `sources` field naming the alias and the host path
+of each one, so a lookup knows which prefix to expect. A search matches the
+node id as well as the name, so the alias is also how a search is narrowed to
+one slice.
+
+Both halves of the graph are built in one pass over every directory, so a call
+from one slice resolves into a definition in another rather than becoming an
+external placeholder.
 
 ## Memory
 

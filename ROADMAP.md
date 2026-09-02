@@ -40,6 +40,9 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **Local Build:** Streamlined `make build` with stable tagging.
 - [x] **Gap Tracking:** Persistent storage for agent-reported missing context/gaps.
 - [ ] **Shared Records (\_common):** Handle cross-project conventions, the way plans are already handled. The `_` prefix is reserved for these: indexing refuses a project name starting with one.
+- [x] **Several directories per project:** index slices of a monorepo into one
+      graph instead of taking the whole tree or splitting it into unrelated
+      projects.
 - [ ] **Cross-Project Lookups:** Link relations between codebases.
 - [x] **Web Interface:** Dashboard for plans, metadata, and graph overview.
 - [x] **Every Project At Once:** `--auto` on both summarizing passes, which is also what naming no project does.
@@ -48,6 +51,7 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **web**: drow graph for a specific file
 - [x] **web**: reindex button for force reindex
 - [ ] **web**: indexing status and summarize status
+- [ ] **base**, **web**: store `_settings` per-project: auto-indexing params (time, inotify etc), settings for auto-summarize (llm url, schedulers and other).
 
 ## Semantic & Advanced Intelligence
 
@@ -67,6 +71,22 @@ Adding vector context and agent memory.
 ---
 
 ## Completed Items
+
+- Several directories per project: `project_sources` holds what a project
+  reads, so a monorepo is indexed in slices rather than whole. Each directory
+  is mounted read-only at `/code/<project>/<alias>` and walked from its own
+  root with its own `.ctxignore`/`.ctxkeep`, the alias becomes the first
+  segment of every node id that directory produced, and one extractor pass
+  still resolves a call from one slice into another. The empty alias is a
+  project mounted whole at `/code/<project>`, which every project already
+  indexed backfills to, so no id changed and nothing needed re-indexing.
+  `context-project` registers a project that reads nothing yet,
+  `context-source` hands it the directory the shell stands in,
+  `context-sources` and `context-source-drop` are the other two, and
+  `make source-promote` names the root of a project indexed whole so a second
+  directory can join it. `projects.root_path` stays the primary directory, so
+  the worker API, the backup script and the dashboard address a project by a
+  host path exactly as before
 
 - Plans as a built-in project: `_plans` joins `_memory` and `_suggestions`, so
   every record an agent writes is now a `graph_nodes` row and none of them
