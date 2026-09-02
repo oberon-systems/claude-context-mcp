@@ -40,6 +40,167 @@ def get_db_connection() -> Connection:
     return psycopg2.connect(get_db_url())
 
 
+def list_sources(cursor: Cursor, project: str) -> list[tuple[str, str]]:
+    """Read the directories one project is built from, as (alias, host path).
+
+    The empty alias is a project mounted whole at `/code/<project>`, which is
+    what every project was before a project could hold more than one directory.
+    Ordered the way the mounts are written, so the first row is the primary.
+    """
+    cursor.execute(
+        """
+        SELECT alias, root_path FROM project_sources
+         WHERE project = %s ORDER BY created_at, alias;
+        """,
+        (project,),
+    )
+    return [(str(alias), str(root_path)) for alias, root_path in cursor.fetchall()]
+
+
+def source_owner(cursor: Cursor, root_path: str) -> str | None:
+    """Return the project a host directory already belongs to, if any."""
+    cursor.execute(
+        "SELECT project FROM project_sources WHERE root_path = %s;", (root_path,)
+    )
+    row = cursor.fetchone()
+    return str(row[0]) if row is not None else None
+
+
+def set_primary(cursor: Cursor, project: str) -> None:
+    """Point projects.root_path at the first source the project holds.
+
+    The column is the primary source rather than a second copy of the truth:
+    everything that addresses a project by a host path - the worker API, the
+    backup script, the dashboard - reads it, so it follows the sources instead
+    of being maintained beside them.
+    """
+    cursor.execute(
+        """
+        UPDATE projects SET root_path = source.root_path
+          FROM (
+              SELECT root_path FROM project_sources
+               WHERE project = %s ORDER BY created_at, alias LIMIT 1
+          ) AS source
+         WHERE projects.name = %s AND projects.root_path <> source.root_path;
+        """,
+        (project, project),
+    )
+
+
+def add_source(cursor: Cursor, project: str, alias: str, root_path: str) -> None:
+    """Record one more directory a project is built from.
+
+    A project holds either a single unnamed source or several named ones.
+    Mixing the two would nest one bind mount inside another and index the same
+    files twice, under two ids, so it is refused rather than resolved.
+    """
+    owner = source_owner(cursor, root_path)
+    if owner is not None and owner != project:
+        raise RuntimeError(
+            f"{root_path!r} is already a source of project {owner!r}; "
+            "one directory belongs to one project"
+        )
+    cursor.execute(
+        "SELECT name FROM projects WHERE root_path = %s AND name <> %s;",
+        (root_path, project),
+    )
+    row = cursor.fetchone()
+    if row is not None:
+        raise RuntimeError(
+            f"{root_path!r} is where project {row[0]!r} was onboarded; "
+            "onboard this one from a directory of its own"
+        )
+    sources = dict(list_sources(cursor, project))
+    if alias in sources:
+        if sources[alias] != root_path:
+            raise RuntimeError(
+                f"project {project!r} already reads {alias!r} from "
+                f"{sources[alias]!r}; drop that source before pointing the "
+                "alias somewhere else"
+            )
+        return
+    if alias and "" in sources:
+        raise RuntimeError(
+            f"project {project!r} is mounted whole from {sources['']!r}; name "
+            f"its root first, with `make source-promote PROJECT_NAME={project} "
+            "ALIAS=<alias>`, then add this one"
+        )
+    if not alias and sources:
+        raise RuntimeError(
+            f"project {project!r} already reads named directories "
+            f"({', '.join(sorted(sources))}); pass an alias for {root_path!r}"
+        )
+    cursor.execute(
+        """
+        INSERT INTO project_sources (project, alias, root_path)
+        VALUES (%s, %s, %s);
+        """,
+        (project, alias, root_path),
+    )
+    set_primary(cursor, project)
+
+
+def ensure_source(cursor: Cursor, project: str, alias: str, root_path: str) -> None:
+    """Record a directory as a source unless the project already reads it.
+
+    Registering and indexing both arrive with a host path that is usually
+    already stored, so the alias only decides what a directory the project has
+    never seen is called.
+    """
+    cursor.execute(
+        "SELECT alias FROM project_sources WHERE project = %s AND root_path = %s;",
+        (project, root_path),
+    )
+    if cursor.fetchone() is not None:
+        return
+    add_source(cursor, project, alias, root_path)
+
+
+def drop_source(cursor: Cursor, project: str, alias: str) -> None:
+    """Stop reading one directory of a project.
+
+    The nodes it produced stay until the next index run prunes them, which is
+    the same path a deleted file takes.
+    """
+    sources = dict(list_sources(cursor, project))
+    if alias not in sources:
+        raise RuntimeError(
+            f"project {project!r} has no source {alias!r}; it reads "
+            f"{', '.join(repr(name) for name in sorted(sources)) or 'nothing'}"
+        )
+    if len(sources) == 1:
+        raise RuntimeError(
+            f"{alias!r} is the only source of project {project!r}; drop the "
+            "project itself rather than leaving it with no tree"
+        )
+    cursor.execute(
+        "DELETE FROM project_sources WHERE project = %s AND alias = %s;",
+        (project, alias),
+    )
+    set_primary(cursor, project)
+
+
+def promote_root(cursor: Cursor, project: str, alias: str) -> None:
+    """Give the unnamed source of a project a name, so a second one can join.
+
+    Every node id gains the alias as its first segment. Nothing rewrites them
+    here: the next index run discovers the files under their new paths, and
+    `prune_missing_files` deletes the nodes and hashes left at the old ones.
+    """
+    sources = dict(list_sources(cursor, project))
+    if "" not in sources:
+        raise RuntimeError(
+            f"project {project!r} has no unnamed source to promote; it reads "
+            f"{', '.join(repr(name) for name in sorted(sources)) or 'nothing'}"
+        )
+    if alias in sources:
+        raise RuntimeError(f"project {project!r} already reads {alias!r}")
+    cursor.execute(
+        "UPDATE project_sources SET alias = %s WHERE project = %s AND alias = '';",
+        (alias, project),
+    )
+
+
 def check_project_identity(cursor: Cursor, project: str, root_path: str) -> None:
     """Refuse a name/path pairing that would merge or orphan a graph.
 
@@ -48,28 +209,34 @@ def check_project_identity(cursor: Cursor, project: str, root_path: str) -> None
     letting the second one through would merge two unrelated codebases into
     one graph. A path arriving under a new name means a rename, which is
     legitimate but has to move the existing rows rather than orphan them, so
-    it is refused here rather than half done.
+    it is refused here rather than half done. A project reading named
+    directories is exempt from the first half: taking another path is what it
+    is for, and `add_source` is where that is decided.
     """
-    cursor.execute("SELECT root_path, type FROM projects WHERE name = %s;", (project,))
+    cursor.execute("SELECT type FROM projects WHERE name = %s;", (project,))
     row = cursor.fetchone()
-    if row is not None and row[0] != root_path:
-        raise RuntimeError(
-            f"project {project!r} is already indexed from {row[0]!r}; "
-            f"pass PROJECT_NAME to index {root_path!r} under another name"
-        )
     # A built-in project holds records written through the MCP tools; there
     # is no tree behind it, and an index run would prune every one of them.
-    if row is not None and row[1] in BUILTIN_PROJECT_TYPES:
+    if row is not None and row[0] in BUILTIN_PROJECT_TYPES:
         raise RuntimeError(
-            f"project {project!r} holds agent {row[1]}, not an indexed tree; "
+            f"project {project!r} holds agent {row[0]}, not an indexed tree; "
             f"indexing into it would delete every record it holds"
         )
 
-    cursor.execute("SELECT name FROM projects WHERE root_path = %s;", (root_path,))
-    row = cursor.fetchone()
-    if row is not None and row[0] != project:
+    sources = dict(list_sources(cursor, project))
+    # A project mounted whole reads one directory and only that one. A project
+    # reading named directories is expected to gain more, which is what
+    # `add_source` is for, so an unknown path is only a collision here.
+    if "" in sources and sources[""] != root_path:
         raise RuntimeError(
-            f"{root_path!r} is already indexed as {row[0]!r}; "
+            f"project {project!r} is already indexed from {sources['']!r}; "
+            f"pass PROJECT_NAME to index {root_path!r} under another name"
+        )
+
+    owner = source_owner(cursor, root_path)
+    if owner is not None and owner != project:
+        raise RuntimeError(
+            f"{root_path!r} is already indexed as {owner!r}; "
             f"rename it in the projects table before indexing it as {project!r}"
         )
 
@@ -79,6 +246,7 @@ def ensure_project(
     project: str,
     root_path: str,
     project_type: str | None = None,
+    alias: str = "",
 ) -> None:
     """Register the project being indexed, or refresh when it was.
 
@@ -87,6 +255,16 @@ def ensure_project(
     demote a project that was registered as something other than the default.
     """
     check_project_identity(cursor, project, root_path)
+    cursor.execute("SELECT 1 FROM projects WHERE name = %s;", (project,))
+    # A registered project holding no directory is one onboarded ahead of its
+    # slices. Registering `root_path` as its tree here is exactly what its
+    # owner avoided by onboarding it empty, so the run stops instead.
+    if cursor.fetchone() is not None and not list_sources(cursor, project):
+        raise RuntimeError(
+            f"project {project!r} reads no directories yet; add one with "
+            f"`make source-add PROJECT=<host path> PROJECT_NAME={project} "
+            "ALIAS=<alias>` before indexing it"
+        )
     cursor.execute(
         """
         INSERT INTO projects (name, root_path, indexed_at, type)
@@ -97,6 +275,7 @@ def ensure_project(
         """,
         (project, root_path, project_type, DEFAULT_PROJECT_TYPE, project_type),
     )
+    ensure_source(cursor, project, alias, root_path)
 
 
 def register_project(
@@ -104,6 +283,8 @@ def register_project(
     project: str,
     root_path: str,
     project_type: str | None = None,
+    alias: str = "",
+    with_source: bool = True,
 ) -> None:
     """Record a tree as a project without claiming it has been indexed.
 
@@ -111,6 +292,11 @@ def register_project(
     index run; the graph itself comes later. `indexed_at` is therefore left
     alone in both branches - NULL on the insert, untouched on the update - so
     a project already indexed keeps its freshness when it is onboarded again.
+
+    `with_source` false writes the row and no directory at all, which is how a
+    monorepo is onboarded before its slices are added one at a time. Until the
+    first source arrives, `root_path` is where the project was onboarded from
+    rather than a directory anything reads.
     """
     check_project_identity(cursor, project, root_path)
     cursor.execute(
@@ -122,6 +308,8 @@ def register_project(
         """,
         (project, root_path, project_type, DEFAULT_PROJECT_TYPE, project_type),
     )
+    if with_source:
+        ensure_source(cursor, project, alias, root_path)
 
 
 def list_projects(cursor: Cursor) -> list[tuple[str, str, str, int]]:
@@ -136,6 +324,29 @@ def list_projects(cursor: Cursor) -> list[tuple[str, str, str, int]]:
         """
     )
     return cursor.fetchall()
+
+
+def list_all_sources(cursor: Cursor) -> list[tuple[str, str, str]]:
+    """Read every mountable directory as (project, alias, host path).
+
+    The built-in projects hold records rather than files and never gain a
+    source; they are excluded here as well, so the listing cannot grow one by
+    accident.
+    """
+    cursor.execute(
+        """
+        SELECT s.project, s.alias, s.root_path
+          FROM project_sources AS s
+          JOIN projects AS p ON p.name = s.project
+         WHERE NOT (p.type = ANY(%s))
+         ORDER BY s.project, s.created_at, s.alias;
+        """,
+        (list(BUILTIN_PROJECT_TYPES),),
+    )
+    return [
+        (str(project), str(alias), str(root_path))
+        for project, alias, root_path in cursor.fetchall()
+    ]
 
 
 def upsert_file_node(

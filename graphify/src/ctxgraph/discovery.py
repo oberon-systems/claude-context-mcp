@@ -15,6 +15,7 @@ from ctxgraph.config import (
     KEEP_FILE,
     MAX_FILE_BYTES,
 )
+from ctxgraph.identifiers import source_node_id
 from ctxgraph.parsers import is_default_source
 
 LOG = logging.getLogger(__name__)
@@ -45,6 +46,20 @@ def iter_source_files(root_path: str) -> Iterator[tuple[str, str]]:
         load_spec(root_path, IGNORE_FILE),
         load_spec(root_path, KEEP_FILE),
     )
+
+
+def iter_project_files(mount: str, aliases: list[str]) -> Iterator[tuple[str, str]]:
+    """Yield (absolute path, project relative path) for every source of a project.
+
+    Each source is walked from its own root and carries its own selection pair,
+    so a slice of a monorepo says which of its files are worth indexing without
+    the repository it was cut from having to agree. The empty alias is the
+    project mounted whole, and yields exactly what `iter_source_files` does.
+    """
+    for alias in aliases:
+        base = os.path.join(mount, alias) if alias else mount
+        for full_path, rel_path in iter_source_files(base):
+            yield full_path, source_node_id(alias, rel_path)
 
 
 def walk_selected(

@@ -99,6 +99,10 @@ MAX_TYPE_LENGTH = 50
 # projects.name is VARCHAR(64). It also travels in a URL path, so the
 # characters it may contain are narrower than the column would allow.
 MAX_PROJECT_NAME_LENGTH = 64
+# project_sources.alias is VARCHAR(64) too. It names a directory under the
+# project mount and opens every node id the source produces, so it is cleaned
+# by the same rule a project name is.
+MAX_SOURCE_ALIAS_LENGTH = 64
 # Generated files (minified bundles, vendored blobs) cost minutes of parsing
 # and contribute nothing but noise.
 MAX_FILE_BYTES = 1_000_000

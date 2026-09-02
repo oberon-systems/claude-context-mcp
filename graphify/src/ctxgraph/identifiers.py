@@ -15,6 +15,7 @@ from ctxgraph.config import (
     ENTITY_SEPARATOR,
     MAX_NODE_ID_LENGTH,
     MAX_PROJECT_NAME_LENGTH,
+    MAX_SOURCE_ALIAS_LENGTH,
 )
 
 # A project name travels in the /mcp/<name> endpoint as well as in the
@@ -65,6 +66,30 @@ def project_name(explicit: str, root_path: str) -> str:
     return truncate(cleaned, MAX_PROJECT_NAME_LENGTH)
 
 
+def source_alias(explicit: str, root_path: str) -> str:
+    """Settle on the alias one source directory of a project is known by.
+
+    An alias is a path segment under the project mount and the first segment of
+    every node id the source produces, so it is cleaned by the rule that names
+    a project rather than a looser one of its own. Unlike a project name it may
+    start with the built-in prefix: it addresses nothing on its own.
+    """
+    candidate = explicit.strip() or posixpath.basename(root_path.rstrip("/"))
+    cleaned = _PROJECT_NAME_ALLOWED.sub("-", candidate.lower()).strip("-")
+    # "." and ".." survive the allowed set, and either would climb out of the
+    # mount the alias is a directory in.
+    if not cleaned or cleaned in {".", ".."}:
+        raise RuntimeError(
+            f"cannot derive a source alias from {root_path!r}; pass one explicitly"
+        )
+    return truncate(cleaned, MAX_SOURCE_ALIAS_LENGTH)
+
+
+def source_node_id(alias: str, rel_path: str) -> str:
+    """Prefix a path relative to one source with the alias it came from."""
+    return posixpath.join(alias, rel_path) if alias else rel_path
+
+
 def project_mount(project: str) -> str:
     """Return where a project's tree is mounted inside the container.
 
@@ -72,3 +97,13 @@ def project_mount(project: str) -> str:
     row it belongs to cannot disagree about what a project is called.
     """
     return posixpath.join(CODE_ROOT, project)
+
+
+def source_mount(project: str, alias: str) -> str:
+    """Return where one source of a project is mounted inside the container.
+
+    The empty alias is the project mounted whole, which is what a project with
+    a single unnamed source has always been.
+    """
+    mount = project_mount(project)
+    return posixpath.join(mount, alias) if alias else mount

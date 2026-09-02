@@ -25,11 +25,12 @@ from ctxgraph.config import (
     PROJECT_ROOT,
     SOURCE_GRAPHIFYY,
 )
-from ctxgraph.discovery import iter_source_files, read_source
+from ctxgraph.discovery import iter_project_files, read_source
 from ctxgraph.identifiers import (
     entity_node_id,
     project_mount,
     project_name,
+    source_mount,
     truncate,
 )
 from ctxgraph.interop import (
@@ -51,6 +52,7 @@ from ctxgraph.storage import (
     get_file_hash,
     insert_edge,
     list_projects,
+    list_sources,
     prune_missing_files,
     prune_orphans,
     upsert_entity_node,
@@ -223,7 +225,7 @@ def index_with_graphifyy(
     cursor: Cursor,
     project: str,
     mount: str,
-    sources: list[tuple[str, str]],
+    files: list[tuple[str, str]],
     gaps: dict[str, str],
     summarizer: Summarizer | None = None,
     fresh: bool = False,
@@ -232,14 +234,16 @@ def index_with_graphifyy(
 
     The whole code corpus goes through in one call: graphifyy resolves a call
     against every file it was given at once, so feeding it only the files that
-    changed would lose the edges between them. Everything it wrote last time
-    is dropped first, which is what keeps a deleted function from living on.
+    changed would lose the edges between them - and a project reading several
+    directories has them resolved across all of them for the same reason.
+    Everything it wrote last time is dropped first, which is what keeps a
+    deleted function from living on.
 
     `gaps` collects the files that came back without a node of their own, and
     why. A run that writes fewer nodes than it selected files has to say so:
     the graph is what agents are told to trust instead of the filesystem.
     """
-    if not sources:
+    if not files:
         return 0, 0
 
     cleared = install_extractor_cache(project, fresh)
@@ -248,14 +252,14 @@ def index_with_graphifyy(
 
     heads: dict[str, str] = {}
     unread: dict[str, str] = {}
-    for full_path, rel_path in sources:
+    for full_path, rel_path in files:
         content, reason = read_source(full_path, rel_path)
         if content is None:
             unread[rel_path] = reason
         else:
             heads[rel_path] = "\n".join(content.splitlines()[:SUMMARY_HEAD_LINES])
 
-    extraction = extract([Path(full_path) for full_path, _ in sources])
+    extraction = extract([Path(full_path) for full_path, _ in files])
     normalize_extraction(extraction, mount)
 
     clear_producer_artifacts(cursor, project, SOURCE_GRAPHIFYY)
@@ -263,13 +267,13 @@ def index_with_graphifyy(
     # has entities our own parsers wrote for these same files, and nothing
     # else would ever collect them: the parsers no longer visit a code file,
     # so their own per-file cleanup never runs on one again.
-    for _, rel_path in sources:
+    for _, rel_path in files:
         clear_file_artifacts(cursor, project, rel_path)
 
     nodes, edges, extracted = import_extraction(
         cursor, project, extraction, heads, summarizer
     )
-    for _, rel_path in sources:
+    for _, rel_path in files:
         if rel_path not in extracted:
             gaps[rel_path] = unread.get(rel_path, "extractor returned nothing")
     return nodes, edges
@@ -336,6 +340,7 @@ def scan_and_build_graph(
         with conn.cursor() as cursor:
             ensure_project(cursor, project, root_path, project_type)
             conn.commit()
+            sources = list_sources(cursor, project)
             # A project can leave the database through the dashboard or the
             # drop_project tool, neither of which can reach this volume.
             dropped, entries = prune_extractor_caches(
@@ -348,17 +353,34 @@ def scan_and_build_graph(
                     dropped,
                 )
 
-        discovered = list(iter_source_files(mount))
-        code_sources = [pair for pair in discovered if is_graphifyy_source(pair[1])]
-        sources = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
+        aliases = [alias for alias, _ in sources]
+        # Every source, or none of them. Indexing what is mounted while one
+        # directory is missing would walk none of its files and let
+        # `prune_missing_files` delete every node it ever had.
+        missing = [
+            alias
+            for alias in aliases
+            if not os.path.isdir(source_mount(project, alias))
+        ]
+        if missing:
+            raise RuntimeError(
+                f"{project} reads {len(aliases)} directories and "
+                f"{', '.join(repr(alias) for alias in missing)} is not mounted "
+                f"under {mount}; regenerate the compose override with `make "
+                "mounts` and recreate this service before indexing again"
+            )
+
+        discovered = list(iter_project_files(mount, aliases))
+        code_files = [pair for pair in discovered if is_graphifyy_source(pair[1])]
+        native_files = [pair for pair in discovered if not is_graphifyy_source(pair[1])]
         LOG.info(
             "Indexing %d files of project %s from %s "
             "(%d via graphifyy, %d via our parsers)",
             len(discovered),
             project,
-            root_path,
-            len(code_sources),
-            len(sources),
+            ", ".join(path for _, path in sources),
+            len(code_files),
+            len(native_files),
         )
 
         # Every selected file the run leaves without a node of its own, and
@@ -372,7 +394,7 @@ def scan_and_build_graph(
                     cursor,
                     project,
                     mount,
-                    code_sources,
+                    code_files,
                     gaps,
                     summarizer,
                     fresh,
@@ -387,7 +409,7 @@ def scan_and_build_graph(
         # file - a Dockerfile copying a module, a playbook naming a script -
         # resolves to the file node graphifyy already wrote, rather than
         # becoming an external placeholder next to it.
-        known_files: set[str] = {rel_path for _, rel_path in code_sources}
+        known_files: set[str] = {rel_path for _, rel_path in code_files}
         symbols: dict[str, list[str]] = {}
         all_entities: dict[str, list[dict[str, str]]] = {}
         entity_total = 0
@@ -395,7 +417,7 @@ def scan_and_build_graph(
         failures = 0
 
         with conn.cursor() as cursor:
-            for full_path, rel_path in sources:
+            for full_path, rel_path in native_files:
                 content, reason = read_source(full_path, rel_path)
                 if content is None:
                     gaps[rel_path] = reason
@@ -432,7 +454,7 @@ def scan_and_build_graph(
                         entity_node_id(rel_path, entity["name"])
                     )
 
-            for full_path, rel_path in sources:
+            for full_path, rel_path in native_files:
                 if rel_path not in known_files:
                     continue
                 content, _ = read_source(full_path, rel_path)
