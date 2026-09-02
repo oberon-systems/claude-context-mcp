@@ -334,9 +334,47 @@ The file it writes is short enough to keep by hand instead:
 }
 ```
 
-Drop `--scope project` to register the server for yourself across every
-project (`~/.claude.json`), which suits the case where one stack indexes one
-codebase you always work in.
+`--scope` decides where that registration is kept, and the file above is only
+one of the three answers:
+
+- `local`, the default, writes the same entry to `~/.claude.json` under
+  `projects["/path/to/myproject"].mcpServers`. The binding is still one
+  repository to one graph; it is your machine that remembers it, and the tree
+  stays clean.
+- `project` writes `.mcp.json` at the root, which is what `make install` does
+  and what a team shares through the repository.
+- `user` writes the top-level `mcpServers` of `~/.claude.json`: one entry for
+  every project you open.
+
+Written by hand, the local one nests that same `mcpServers` object under the
+repository's own path:
+
+```json
+{
+  "projects": {
+    "/path/to/myproject": {
+      "mcpServers": {
+        "context": {
+          "type": "http",
+          "url": "http://localhost:3000/mcp/myproject"
+        }
+      }
+    }
+  }
+}
+```
+
+The user one is the same object at the top level of that file, outside
+`projects` altogether. Prefer the command over the editor for both: Claude Code
+rewrites `~/.claude.json` while it runs, and an edit made underneath a live
+session goes with it.
+
+One user-scope entry cannot name a project, since the project is part of the
+address - so a session opened through it lands on `DEFAULT_PROJECT` or on
+nothing, as the paragraph above this section describes, and reads a particular
+graph only when a call carries a `project` of its own. That is the trade for
+registering once: every tool accepts the argument, and `list_projects` is where
+the names come from.
 
 Registering only names the address. Claude still asks before every call to a
 server it holds no permission rule for, so `make install` writes one into
