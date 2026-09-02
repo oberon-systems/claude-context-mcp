@@ -74,7 +74,8 @@ const PROJECT_TYPES =
 function projectDescription(sessionProject: string | null): string {
   return sessionProject === null
     ? "Project to query. Required here: this session was opened on /mcp " +
-        "without naming one. list_projects returns the available names."
+        "without naming one. list_projects returns the available names, and " +
+        "the directories each one reads."
     : `Project to query. Defaults to "${sessionProject}"; name another ` +
         "indexed project to read its graph instead.";
 }
@@ -185,7 +186,10 @@ const listToolsHandler = async (
         name: "list_projects",
         description:
           "List the projects in this database, with their type, root paths " +
-          "and node counts. Types are " +
+          "and node counts. `sources` is what each project reads: one entry " +
+          "with an empty alias is a tree indexed whole, and several named " +
+          "ones are separate directories whose alias opens every node id " +
+          "they produced. Types are " +
           PROJECT_TYPES,
         inputSchema: {
           type: "object",
@@ -958,8 +962,16 @@ function makeCallToolHandler(
     // a bad argument or a database outage does not tear down the session.
     try {
       if (name === "list_projects") {
+        // sources says which directories a project reads. A project built
+        // from several of them prefixes every node id with the alias the file
+        // came from, so a lookup that does not know the aliases misses.
         const res = await dbPool.query(
-          `SELECT p.name, p.type, p.root_path, p.indexed_at, COUNT(n.id) AS nodes
+          `SELECT p.name, p.type, p.root_path, p.indexed_at, COUNT(n.id) AS nodes,
+                  (SELECT coalesce(json_agg(json_build_object(
+                            'alias', s.alias, 'root_path', s.root_path)
+                            ORDER BY s.created_at, s.alias), '[]'::json)
+                     FROM project_sources AS s
+                    WHERE s.project = p.name) AS sources
              FROM projects AS p
              LEFT JOIN graph_nodes AS n ON n.project = p.name
             GROUP BY p.name, p.type, p.root_path, p.indexed_at

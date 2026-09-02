@@ -16,7 +16,14 @@ export const PROJECTS = `
            WHERE g.project = p.name AND g.type = 'file') AS files,
          (SELECT count(*) FROM graph_nodes AS l
            WHERE l.project = '_plans'
-             AND l.metadata ->> 'about' = p.name) AS plans
+             AND l.metadata ->> 'about' = p.name) AS plans,
+         -- What the project reads. An empty alias is the project mounted
+         -- whole; several named ones are the slices it was assembled from.
+         (SELECT coalesce(json_agg(json_build_object(
+                   'alias', s.alias, 'root_path', s.root_path)
+                   ORDER BY s.created_at, s.alias), '[]'::json)
+            FROM project_sources AS s
+           WHERE s.project = p.name) AS sources
     FROM projects AS p
    ORDER BY p.name`;
 
@@ -31,7 +38,14 @@ export const PROJECT = `
            WHERE g.project = p.name AND g.type = 'file') AS files,
          (SELECT count(*) FROM graph_nodes AS l
            WHERE l.project = '_plans'
-             AND l.metadata ->> 'about' = p.name) AS plans
+             AND l.metadata ->> 'about' = p.name) AS plans,
+         -- What the project reads. An empty alias is the project mounted
+         -- whole; several named ones are the slices it was assembled from.
+         (SELECT coalesce(json_agg(json_build_object(
+                   'alias', s.alias, 'root_path', s.root_path)
+                   ORDER BY s.created_at, s.alias), '[]'::json)
+            FROM project_sources AS s
+           WHERE s.project = p.name) AS sources
     FROM projects AS p
    WHERE p.name = $1`;
 

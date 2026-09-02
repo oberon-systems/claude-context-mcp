@@ -41,10 +41,18 @@ from ctxgraph.config import (
     WORKER_MAX_BATCH,
     WORKER_MAX_REPLY_CHARS,
 )
-from ctxgraph.identifiers import project_mount, project_name
+from ctxgraph.identifiers import (
+    project_mount,
+    project_name,
+    source_alias,
+    source_mount,
+)
 from ctxgraph.storage import (
+    add_source,
+    drop_source,
     get_cached_summary,
     get_db_url,
+    list_sources,
     put_cached_summary,
     save_llm_summary,
 )
@@ -224,23 +232,103 @@ def get_projects() -> dict[str, Any]:
         )
         rows = cursor.fetchall()
         running = {}
+        project_sources = {}
         for name, *_ in rows:
             job = jobs.running_job(cursor, name)
             running[name] = int(job["id"]) if job else None
+            project_sources[name] = list_sources(cursor, str(name))
     projects = []
     for name, root_path, indexed_at, files, pending in rows:
+        listed = project_sources[name]
         projects.append(
             {
                 "name": name,
                 "root_path": root_path,
+                "sources": [
+                    {"alias": alias, "root_path": path} for alias, path in listed
+                ],
                 "indexed_at": indexed_at,
                 "files": int(files),
-                "mounted": os.path.isdir(project_mount(str(name))),
+                # Every directory, or the project is not readable: indexing it
+                # while one is missing prunes every node that one produced.
+                "mounted": bool(listed)
+                and all(
+                    os.path.isdir(source_mount(str(name), alias)) for alias, _ in listed
+                ),
                 "without_llm_summary": int(pending),
                 "running_job": running[name],
             }
         )
     return {"projects": projects}
+
+
+class SourceRequest(BaseModel):
+    """One more directory for a project to read."""
+
+    root_path: str = Field(min_length=1, description="host path of the directory")
+    alias: str = Field(
+        default="",
+        description="what it is called inside the project; derived when unset",
+    )
+
+
+def source_view(cursor: Cursor, project: str) -> dict[str, Any]:
+    """Return what a project reads, and whether the host has it mounted."""
+    listed = list_sources(cursor, project)
+    return {
+        "project": project,
+        "sources": [
+            {
+                "alias": alias,
+                "root_path": path,
+                "mounted": os.path.isdir(source_mount(project, alias)),
+            }
+            for alias, path in listed
+        ],
+    }
+
+
+@api.get("/projects/{project}/sources")
+def get_sources(project: str) -> dict[str, Any]:
+    """List the directories one project is built from."""
+    with transaction() as cursor:
+        return source_view(cursor, project)
+
+
+@api.post("/projects/{project}/sources", status_code=201)
+def post_source(project: str, request: SourceRequest) -> dict[str, Any]:
+    """Add a directory to a project.
+
+    Nothing is mounted by this: the override is a file on the host, and the
+    services read the mounts they were started with. `make mounts` writes it
+    and recreates them, which is what the reply says.
+    """
+    root_path = request.root_path.strip().rstrip("/")
+    # Always named, even when the caller passed no alias: this endpoint adds a
+    # directory to a project, and the unnamed source - the project mounted
+    # whole - is settled when the project is onboarded, on the host.
+    alias = source_alias(request.alias.strip(), root_path)
+    try:
+        with transaction() as cursor:
+            add_source(cursor, project, alias, root_path)
+            view = source_view(cursor, project)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    view["mounts"] = "run `make mounts` on the host, then index the project"
+    return view
+
+
+@api.delete("/projects/{project}/sources/{alias}")
+def delete_source(project: str, alias: str) -> dict[str, Any]:
+    """Stop a project reading one directory."""
+    try:
+        with transaction() as cursor:
+            drop_source(cursor, project, alias)
+            view = source_view(cursor, project)
+    except (RuntimeError, psycopg2.Error) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    view["mounts"] = "run `make mounts` on the host, then index the project"
+    return view
 
 
 def resolve_target(cursor: Cursor, project: str, root_path: str) -> tuple[str, str]:

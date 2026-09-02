@@ -12,10 +12,19 @@ export type IndexJob = {
   finished_at: string | null;
 };
 
+export type ProjectSource = {
+  alias: string;
+  root_path: string;
+};
+
 export type Project = {
   name: string;
   type: string;
   root_path: string;
+  // What the project reads. One entry with an empty alias is a project
+  // mounted whole; several named ones are the slices it was assembled from,
+  // and each alias opens every node id that directory produced.
+  sources: ProjectSource[];
   indexed_at: string | null;
   stale_seconds: number | null;
   nodes: number;

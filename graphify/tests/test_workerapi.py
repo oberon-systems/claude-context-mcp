@@ -180,3 +180,61 @@ def test_a_manual_summary_is_never_overwritten(
     ).json()
     assert body["applied"] is False
     assert "manual" in body["reason"]
+
+
+def test_the_sources_of_a_project_are_listed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each directory says whether this container actually has it mounted.
+
+    Nothing is mounted at /code here, which is what makes the flag false
+    without patching the filesystem out from under the test client.
+    """
+    monkeypatch.setattr(
+        workerapi,
+        "list_sources",
+        lambda cursor, project: [("configs", "/mono/configs")],
+    )
+    body = client.get("/projects/mono/sources", headers=AUTH).json()
+    assert body["sources"] == [
+        {"alias": "configs", "root_path": "/mono/configs", "mounted": False}
+    ]
+
+
+def test_adding_a_directory_says_the_host_has_to_mount_it(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing here can write the compose override or recreate a service."""
+    added: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        workerapi,
+        "add_source",
+        lambda cursor, project, alias, root: added.append((project, alias, root)),
+    )
+    monkeypatch.setattr(workerapi, "list_sources", lambda cursor, project: [])
+    response = client.post(
+        "/projects/mono/sources",
+        headers=AUTH,
+        json={"root_path": "/mono/tools/agents/", "alias": ""},
+    )
+    assert response.status_code == 201
+    assert added == [("mono", "agents", "/mono/tools/agents")]
+    assert "make mounts" in response.json()["mounts"]
+
+
+def test_a_refused_directory_answers_with_the_reason(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The rule that refuses it is in storage; the reason travels unchanged."""
+
+    def refuse(cursor: object, project: str, alias: str, root: str) -> None:
+        raise RuntimeError("already a source of project 'other'")
+
+    monkeypatch.setattr(workerapi, "add_source", refuse)
+    response = client.post(
+        "/projects/mono/sources",
+        headers=AUTH,
+        json={"root_path": "/mono/tools/agents", "alias": "agents"},
+    )
+    assert response.status_code == 409
+    assert "project 'other'" in response.json()["detail"]

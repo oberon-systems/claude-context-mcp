@@ -59,7 +59,9 @@ export function ProjectsPage() {
               <td>
                 <span className="kind">{project.type}</span>
               </td>
-              <td className="path">{project.root_path}</td>
+              <td className="path">
+                <Root project={project} />
+              </td>
               <td className="num">
                 <Count value={project.nodes} />
               </td>
@@ -91,6 +93,10 @@ export function ProjectsPage() {
                   <span className="muted" title="records, not a tree">
                     -
                   </span>
+                ) : project.sources.length === 0 ? (
+                  <span className="muted" title="no directory to read yet">
+                    -
+                  </span>
                 ) : (
                   <IndexButton project={project.name} onFinished={reload} />
                 )}
@@ -99,6 +105,26 @@ export function ProjectsPage() {
           ))}
         </tbody>
       </table>
+    </>
+  );
+}
+
+/** Where a project reads its files, in one cell.
+ *
+ * The primary directory, plus how many more there are: a project assembled
+ * from several slices of a monorepo has no single root to name, and the
+ * project page lists all of them.
+ */
+function Root({ project }: { project: Project }) {
+  if (project.sources.length === 0 && !project.root_path.includes("://")) {
+    return <span className="muted">no directory yet</span>;
+  }
+  return (
+    <>
+      {project.root_path}
+      {project.sources.length > 1 && (
+        <span className="muted"> +{project.sources.length - 1} more</span>
+      )}
     </>
   );
 }

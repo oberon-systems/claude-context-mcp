@@ -5,6 +5,11 @@ import { UpstreamError, upstream } from "../content.js";
 import { count, dbPool } from "../db.js";
 import * as sql from "../queries.js";
 
+type ProjectSource = {
+  alias: string;
+  root_path: string;
+};
+
 type ProjectRow = {
   name: string;
   type: string;
@@ -15,6 +20,7 @@ type ProjectRow = {
   edges: string;
   files: string;
   plans: string;
+  sources: ProjectSource[];
 };
 
 type DropReportRow = {
@@ -34,6 +40,7 @@ function project(row: ProjectRow) {
     name: row.name,
     type: row.type,
     root_path: row.root_path,
+    sources: row.sources,
     indexed_at: row.indexed_at,
     stale_seconds:
       row.stale_seconds === null ? null : Number(row.stale_seconds),
@@ -110,6 +117,41 @@ projectsRouter.get(
       limit: "1",
     }).catch(passOn);
     res.json(body.jobs[0] ?? null);
+  }),
+);
+
+// What a project reads. Adding or dropping a directory is stored here and
+// mounted nowhere: the compose override is a file on the host, and both
+// services read the mounts they were started with, so the API says as much in
+// its reply and `make mounts` is what finishes the job.
+projectsRouter.post(
+  "/projects/:name/sources",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const body = req.body as { root_path?: unknown; alias?: unknown };
+    const answer = await upstream<unknown>(
+      "POST",
+      `/projects/${encodeURIComponent(name)}/sources`,
+      {},
+      {
+        root_path: String(body?.root_path ?? ""),
+        alias: String(body?.alias ?? ""),
+      },
+    ).catch(passOn);
+    res.status(201).json(answer);
+  }),
+);
+
+projectsRouter.delete(
+  "/projects/:name/sources/:alias",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const answer = await upstream<unknown>(
+      "DELETE",
+      `/projects/${encodeURIComponent(name)}/sources/` +
+        encodeURIComponent(req.params.alias),
+    ).catch(passOn);
+    res.json(answer);
   }),
 );
 

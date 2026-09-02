@@ -144,6 +144,45 @@ function Overview({
         <Tile label="Plans" value={project.plans} />
       </div>
 
+      <h2>Directories</h2>
+      {project.sources.length === 0 ? (
+        <Empty>
+          This project reads no directory yet. Add one with{" "}
+          <code>context-source {project.name} &lt;alias&gt;</code> from the
+          directory itself, then index it here.
+        </Empty>
+      ) : (
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>Alias</th>
+              <th>Host path</th>
+            </tr>
+          </thead>
+          <tbody>
+            {project.sources.map((source) => (
+              <tr key={source.alias}>
+                <td>
+                  {source.alias === "" ? (
+                    <span className="muted">the whole tree</span>
+                  ) : (
+                    <code>{source.alias}/</code>
+                  )}
+                </td>
+                <td className="path">{source.root_path}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {project.sources.length > 1 && (
+        <p className="muted">
+          Each alias opens every node id that directory produced, so a file of
+          the first slice is <code>{project.sources[0].alias}/...</code> in the
+          graph.
+        </p>
+      )}
+
       <h2>Node types</h2>
       <div className="chips">
         {project.types.map((entry) => (
