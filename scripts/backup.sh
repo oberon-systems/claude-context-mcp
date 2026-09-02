@@ -204,9 +204,20 @@ COPY (SELECT name, root_path, indexed_at, type
 -- The directories the project reads. Without them a restore brings back a
 -- project mounted whole from its primary source, which for a project
 -- assembled from several slices is not the tree it was indexed from.
-\qecho 'COPY project_sources (project, alias, root_path, created_at) FROM stdin;'
-COPY (SELECT project, alias, root_path, created_at
+\qecho 'COPY project_sources (project, alias, root_path, created_at,'
+\qecho '                       keep_source, ignore_source) FROM stdin;'
+COPY (SELECT project, alias, root_path, created_at, keep_source, ignore_source
         FROM project_sources WHERE project = :'name') TO STDOUT;
+\qecho '\\.'
+
+-- What the project indexes. Without it a restore silently returns every
+-- directory to the built-in selection, which is a different graph from the
+-- one that was backed up. The global default under '_settings' belongs to no
+-- single project and travels in the whole-database archive instead.
+\qecho 'COPY project_settings (project, alias, ctxkeep, ctxignore, settings,'
+\qecho '                       updated_at) FROM stdin;'
+COPY (SELECT project, alias, ctxkeep, ctxignore, settings, updated_at
+        FROM project_settings WHERE project = :'name') TO STDOUT;
 \qecho '\\.'
 
 \qecho 'COPY graph_nodes (project, id, name, type, file_path, content,'
