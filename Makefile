@@ -115,7 +115,8 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 # TYPE= categorises the project for the cross-project search - codebase, docs
 # or config - and is stored with the row; empty keeps whatever a project was
 # registered as before. ALIASES=0 leaves the shell rc file alone; SHELL_RC=
-# names a different one.
+# names a different one. PERMISSIONS=0 leaves ~/.claude/settings.json alone,
+# at the price of a confirmation prompt on every call the agent makes.
 # MAKE_PREFIX is how the onboarded codebase reaches these targets, substituted
 # into the instruction file: a plain `make` from inside this repository, and
 # `make -C` here from anywhere else, since the stack lives here and nothing of
@@ -124,6 +125,7 @@ init:  ## Create the virtualenv and install the pre-commit hooks
 MAKE_PREFIX ?= $(if $(filter $(abspath $(AGENT_ROOT)),$(CURDIR)),make,make -C $(CURDIR))
 ALIASES ?=
 SHELL_RC ?=
+PERMISSIONS ?=
 
 # Which directory the onboarded project reads, and under which alias. The
 # whole tree and no alias is what a project has always been. SOURCE=none
@@ -154,7 +156,7 @@ install: require-env require-not-root  ## Onboard AGENT_ROOT (SOURCE=none leaves
 	@AGENT_ROOT='$(abspath $(AGENT_ROOT))' PROJECT_NAME='$(PROJECT_NAME)' \
 		MAKE_PREFIX='$(MAKE_PREFIX)' MAKE_BIN='$(MAKE)' \
 		COMPOSE='$(COMPOSE)' ALIASES='$(ALIASES)' SHELL_RC='$(SHELL_RC)' \
-		FORCE='$(FORCE)' scripts/install.sh
+		PERMISSIONS='$(PERMISSIONS)' FORCE='$(FORCE)' scripts/install.sh
 	@$(MAKE) --no-print-directory mounts REGISTER=1 \
 		PROJECT='$(if $(EMPTY),$(abspath $(AGENT_ROOT)),$(abspath $(SOURCE)))' \
 		PROJECT_NAME='$(INSTALL_NAME)' ALIAS='$(ALIAS)' \

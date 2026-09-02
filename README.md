@@ -338,6 +338,26 @@ Drop `--scope project` to register the server for yourself across every
 project (`~/.claude.json`), which suits the case where one stack indexes one
 codebase you always work in.
 
+Registering only names the address. Claude still asks before every call to a
+server it holds no permission rule for, so `make install` writes one into
+`~/.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__context"],
+    "ask": ["mcp__context__drop_project", "mcp__context__drop_memory"]
+  }
+}
+```
+
+A bare server name allows every tool it exposes; the four `drop_*` tools go
+back into `ask`, which outranks `allow`, so nothing deletes graph state without
+a prompt. That file is yours rather than any codebase's, which is why the rule
+is written once and holds for every project you onboard afterwards.
+`PERMISSIONS=0` skips the step, and a server you have already denied or set to
+ask keeps the answer you gave it.
+
 ### Gemini CLI
 
 Gemini reads `.gemini/settings.json` at the project root. There is no `add`

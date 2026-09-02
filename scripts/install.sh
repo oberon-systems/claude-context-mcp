@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Onboard one codebase onto the stack in a single pass: agent configuration,
-# the skills, the instruction file, the file-selection pair and the shell
-# aliases.
+# Onboard one codebase onto the stack in a single pass: agent configuration
+# and the permission that spares it a prompt per call, the skills, the
+# instruction file, the file-selection pair and the shell aliases.
 #
 # Reached through `make install`, which passes everything in the environment.
 # Nothing here overwrites a file that exists - every step reports written,
@@ -150,11 +150,21 @@ else
     note "directory" "$source_dir"
 fi
 
-# 2. Both agents, one address.
+# 2. Both agents, one address - and, for Claude, the standing permission its
+#    Gemini counterpart already gets from `trust: true`. That one lives in the
+#    user's settings rather than the codebase's, so it is granted once and
+#    holds for every project; PERMISSIONS=0 leaves the file alone and every
+#    call goes on asking.
 echo
 echo "Agents"
+claude_settings="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 "$python_bin" scripts/mcp_register.py "$target" "$project" "$port"
 note "agent configuration" "$project on port $port"
+if [ "${PERMISSIONS:-1}" = "0" ]; then
+    note "claude permissions" "skipped (PERMISSIONS=0)"
+else
+    note "claude permissions" "$claude_settings"
+fi
 
 # 3. Every skill under skills/ is copied under AGENT_ROOT for Claude and
 #    linked from there for Gemini, so both agents read the same file.

@@ -72,3 +72,4 @@ To ensure compatibility across all environments and tools, all documentation, co
 
 - **DNS Rebinding:** The server implements basic DNS rebinding protection via `ALLOWED_HOSTS` and `ALLOWED_ORIGINS` environment variables.
 - **Trust:** When registering the MCP server for Gemini, `trust: true` is recommended only for codebases you own.
+- **Permissions:** The Claude counterpart of that flag is the `mcp__context` allow rule `make install` writes to `~/.claude/settings.json`. It covers every tool of the server except the four `drop_*` ones, which stay behind a prompt; `PERMISSIONS=0` skips it entirely.
