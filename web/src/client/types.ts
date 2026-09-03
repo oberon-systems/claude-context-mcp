@@ -22,13 +22,49 @@ export type ProjectSource = {
   ignore_source: string | null;
 };
 
+// When a project indexes itself, as one level states it. Every field may be
+// absent, which is that level inheriting it from the one above.
+export type Indexing = {
+  mode?: string;
+  interval_minutes?: number;
+  debounce_minutes?: number;
+};
+
+// Everything a level says apart from the two selection documents, which are
+// columns of their own. One JSONB object, so the next knob is a key.
+export type LevelSettings = {
+  indexing?: Indexing;
+};
+
 // One level of the selection: a directory, the project, or the global
 // default. Either document may be null, which is that level declining to
 // speak for it and letting the level above answer.
 export type SettingsLevel = {
   ctxkeep: string | null;
   ctxignore: string | null;
+  settings: LevelSettings | null;
   updated_at: string | null;
+};
+
+// What a project's directories come to once folded into the single run they
+// share: the most eager of them decides, and only those in `auto` are
+// watched. Answered by the API, which is where that fold is implemented.
+export type ProjectSchedule = {
+  project: string;
+  mode: string;
+  interval_minutes: number;
+  debounce_minutes: number;
+  watched: string[];
+  levels: {
+    alias: string;
+    mode: string;
+    interval_minutes: number;
+    debounce_minutes: number;
+    origins: Record<string, string>;
+  }[];
+  last_run: string | null;
+  next_run: string | null;
+  scheduler: boolean;
 };
 
 export type SettingsSource = ProjectSource & SettingsLevel;

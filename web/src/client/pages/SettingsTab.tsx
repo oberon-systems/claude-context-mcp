@@ -8,10 +8,12 @@ import {
   SelectionBadge,
   Spinner,
 } from "../components/Common.js";
+import { IndexingEditor } from "../components/IndexingFields.js";
 import { useApi } from "../hooks/useApi.js";
 import type {
   FileType,
   Page,
+  ProjectSchedule,
   ProjectSettings,
   ScanResult,
   SettingsLevel,
@@ -35,6 +37,10 @@ export function SettingsTab({ project }: { project: string }) {
   const types = useApi<Omit<Page<FileType>, "total" | "limit" | "offset">>(
     `/projects/${encodeURIComponent(project)}/file-types`,
   );
+  const schedule = useApi<ProjectSchedule>(
+    `/projects/${encodeURIComponent(project)}/schedule`,
+  );
+  const path = `/projects/${encodeURIComponent(project)}`;
 
   if (settings.error !== null) {
     return <ErrorBox message={settings.error} />;
@@ -64,6 +70,35 @@ export function SettingsTab({ project }: { project: string }) {
         What the last index run actually wrote, not what the selection below
         would pick up. The two differ whenever the selection has changed since.
       </p>
+
+      <h2>Schedule</h2>
+      {schedule.data !== null && <Effective schedule={schedule.data} />}
+      <IndexingEditor
+        key={`project-${settings.data.project?.updated_at ?? "none"}`}
+        path={`${path}/indexing/${PROJECT_LEVEL}`}
+        indexing={settings.data.project?.settings?.indexing}
+        onSaved={() => {
+          settings.reload();
+          schedule.reload();
+        }}
+      />
+
+      {settings.data.sources.length > 1 &&
+        settings.data.sources.map((source) => (
+          <div className="level" key={`schedule-${source.alias}`}>
+            <h3>
+              <code>{source.alias}/</code> only
+            </h3>
+            <IndexingEditor
+              path={`${path}/indexing/${encodeURIComponent(source.alias)}`}
+              indexing={source.settings?.indexing}
+              onSaved={() => {
+                settings.reload();
+                schedule.reload();
+              }}
+            />
+          </div>
+        ))}
 
       <h2>Selection</h2>
       {settings.data.sources.length === 0 ? (
@@ -117,6 +152,54 @@ export function SettingsTab({ project }: { project: string }) {
         global default. A <code>.ctxkeep</code> or <code>.ctxignore</code> still
         in the tree beats all three, and goes on doing so until it is deleted.
       </p>
+    </>
+  );
+}
+
+/** What the levels above come to, once folded into the one run they share.
+ *
+ * The fold is the API's: the most eager directory decides the project, and
+ * only the directories in `auto` are watched. Stating it here is what keeps
+ * the rule from becoming folklore about a settings page.
+ */
+function Effective({ schedule }: { schedule: ProjectSchedule }) {
+  const when = (stamp: string | null) =>
+    stamp === null ? "never" : new Date(stamp).toLocaleString("en-GB");
+  const minutes = (count: number) => `${count} minute${count === 1 ? "" : "s"}`;
+  return (
+    <>
+      <p className={schedule.mode === "off" ? "muted" : undefined}>
+        {schedule.mode === "off" ? (
+          <>
+            Nothing indexes this project on its own. The Index button on the
+            overview tab is the only thing that starts a run.
+          </>
+        ) : schedule.mode === "periodic" ? (
+          <>Indexed every {minutes(schedule.interval_minutes)}.</>
+        ) : (
+          <>
+            Watching {schedule.watched.length} of {schedule.levels.length}{" "}
+            director
+            {schedule.levels.length === 1 ? "y" : "ies"}: indexed when one of
+            them changes, at most once every{" "}
+            {minutes(schedule.debounce_minutes)}, and swept every{" "}
+            {minutes(schedule.interval_minutes)} regardless.
+          </>
+        )}{" "}
+        <span className="muted">
+          Last run {when(schedule.last_run)}
+          {schedule.next_run !== null && (
+            <> - next sweep {when(schedule.next_run)}</>
+          )}
+          .
+        </span>
+      </p>
+      {!schedule.scheduler && schedule.mode !== "off" && (
+        <p className="stale">
+          The service is running with INDEX_SCHEDULER off, so nothing acts on
+          this. What is saved here takes effect when it is turned back on.
+        </p>
+      )}
     </>
   );
 }

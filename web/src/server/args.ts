@@ -100,6 +100,45 @@ export function readBodyString(
   return value;
 }
 
+export function readBodyNumber(
+  body: unknown,
+  name: string,
+  low: number,
+  high: number,
+): number | undefined {
+  if (body === null || typeof body !== "object") {
+    throw badRequest("A JSON object body is required");
+  }
+  const value = (body as Record<string, unknown>)[name];
+  // Null is how a level says it has nothing of its own to add, which is not
+  // the same answer as leaving the field out of the request entirely.
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw badRequest(`Field "${name}" must be a whole number`);
+  }
+  if (value < low || value > high) {
+    throw badRequest(`Field "${name}" must be between ${low} and ${high}`);
+  }
+  return value;
+}
+
+export function readBodyEnum<T extends string>(
+  body: unknown,
+  name: string,
+  allowed: readonly T[],
+): T | undefined {
+  const value = readBodyString(body, name);
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  if (!allowed.includes(value as T)) {
+    throw badRequest(`Field "${name}" must be one of ${allowed.join(", ")}`);
+  }
+  return value as T;
+}
+
 export function requireBodyString(body: unknown, name: string): string {
   const value = readBodyString(body, name);
   if (value === undefined || value.trim() === "") {

@@ -9,6 +9,7 @@ import {
 } from "../args.js";
 import { UpstreamError, upstream } from "../content.js";
 import { count, dbPool } from "../db.js";
+import { INDEXING_KEY, readIndexing } from "../indexing.js";
 import * as sql from "../queries.js";
 
 type ProjectSource = {
@@ -358,6 +359,42 @@ projectsRouter.put(
       ignore === undefined || ignore === "" ? null : `${ignore}\n`,
     ]);
     res.json(saved.rows[0]);
+  }),
+);
+
+// When a project indexes itself. The levels are the selection's own, and a
+// field left out inherits from the one above it.
+projectsRouter.put(
+  "/projects/:name/indexing/:alias",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const value = readIndexing(req.body);
+    const level = alias(req.params.alias);
+    const saved =
+      value === null
+        ? await dbPool.query(sql.CLEAR_INDEXING, [name, level, INDEXING_KEY])
+        : await dbPool.query(sql.SAVE_INDEXING, [
+            name,
+            level,
+            JSON.stringify({ [INDEXING_KEY]: value }),
+          ]);
+    res.json(saved.rows[0] ?? { project: name, alias: level });
+  }),
+);
+
+// What the schedule of a project comes to once its directories are folded
+// into the single run they share. Asked of the API rather than worked out
+// here: the fold is one rule, and a second implementation of it in another
+// language would eventually disagree with the one that acts on it.
+projectsRouter.get(
+  "/projects/:name/schedule",
+  route(async (req, res) => {
+    const name = await requireProject(req.params.name);
+    const schedule = await upstream<unknown>(
+      "GET",
+      `/projects/${encodeURIComponent(name)}/schedule`,
+    ).catch(passOn);
+    res.json(schedule);
   }),
 );
 

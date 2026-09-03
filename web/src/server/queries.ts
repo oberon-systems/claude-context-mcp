@@ -146,6 +146,7 @@ export const PROJECT_SETTINGS = `
          s.ignore_source,
          t.ctxkeep,
          t.ctxignore,
+         t.settings,
          t.updated_at
     FROM project_sources AS s
     LEFT JOIN project_settings AS t
@@ -154,7 +155,7 @@ export const PROJECT_SETTINGS = `
    ORDER BY s.created_at, s.alias`;
 
 export const PROJECT_LEVEL_SETTINGS = `
-  SELECT ctxkeep, ctxignore, updated_at
+  SELECT ctxkeep, ctxignore, settings, updated_at
     FROM project_settings
    WHERE project = $1 AND alias = $2`;
 
@@ -169,6 +170,25 @@ export const SAVE_SETTINGS = `
     ctxignore = EXCLUDED.ctxignore,
     updated_at = CURRENT_TIMESTAMP
   RETURNING project, alias, ctxkeep, ctxignore, updated_at`;
+
+// The same merge ctxgraph.storage.write_settings_json runs. Only the one key
+// is touched: the column carries every knob a level holds, and a schedule
+// being saved must not clear what a later one stores beside it.
+export const SAVE_INDEXING = `
+  INSERT INTO project_settings (project, alias, settings)
+  VALUES ($1, $2, $3::jsonb)
+  ON CONFLICT (project, alias) DO UPDATE SET
+    settings = project_settings.settings || EXCLUDED.settings,
+    updated_at = CURRENT_TIMESTAMP
+  RETURNING project, alias, settings, updated_at`;
+
+// Dropping the key is how a level goes back to inheriting. The row stays: it
+// may still hold the selection documents, which are columns of their own.
+export const CLEAR_INDEXING = `
+  UPDATE project_settings
+     SET settings = settings - $3, updated_at = CURRENT_TIMESTAMP
+   WHERE project = $1 AND alias = $2
+  RETURNING project, alias, settings, updated_at`;
 
 export const CLEAR_SETTINGS = `
   DELETE FROM project_settings

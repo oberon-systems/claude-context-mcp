@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { put } from "../api.js";
 import { ErrorBox, Spinner } from "../components/Common.js";
+import { IndexingEditor } from "../components/IndexingFields.js";
 import { useApi } from "../hooks/useApi.js";
 import type { SettingsLevel } from "../types.js";
 
@@ -50,13 +51,34 @@ export function SettingsPage() {
     <>
       <h1>Global defaults</h1>
       <p className="muted">
+        What every project falls back to when neither it nor one of its
+        directories has said otherwise.
+      </p>
+
+      {failure !== null && <ErrorBox message={failure} />}
+
+      <h2>Indexing schedule</h2>
+      <p className="muted">
+        When a project is indexed without anyone asking. <code>auto</code>{" "}
+        watches the mounted directories and starts a run once they have been
+        quiet for the throttle - and still sweeps on the interval, because a
+        watch is blind on a network filesystem and where the host has run out of
+        inotify watches.
+      </p>
+      <IndexingEditor
+        root
+        path="/settings/indexing"
+        indexing={data.settings?.indexing}
+        onSaved={reload}
+      />
+
+      <h2>Selection</h2>
+      <p className="muted">
         What a project indexes when neither it nor one of its directories has
         said. A <code>.ctxkeep</code> or <code>.ctxignore</code> in a tree beats
         this and everything else; leaving both empty falls back to the built-in
         set of file types the parsers know.
       </p>
-
-      {failure !== null && <ErrorBox message={failure} />}
 
       <div className="editors">
         <label>
