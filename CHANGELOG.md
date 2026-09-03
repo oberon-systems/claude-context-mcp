@@ -1,3 +1,39 @@
+## v0.15.0 (2026-09-03)
+
+### Features
+
+- **web**: set the indexing schedule at every level it resolves from
+- **graphify**: index a project on a schedule, off, periodic or auto
+- **web**: edit what a project indexes, and the directories it reads
+- **web**: register a project, change its type, and find one in the list
+- **scripts, make**: onboard a codebase without writing selection files into it
+- **workerapi**: register a project, scan a directory, say where a selection came from
+- **migrations, graphify**: hold the selection of a project in the database
+- **scripts, make, docs**: grant claude the standing permission gemini gets from trust
+- **workerapi, web, mcp-server**: show what a project reads
+- **graphify, scripts, make**: mount one directory per source
+- **graphify**: index a project from several directories
+- **migrations**: hold the directories a project reads
+
+### Bug Fixes
+
+- **graphify**: run the suite under the console script as well
+- **scripts**: carry a project's selection through a backup
+- **scripts**: carry the project sources through a backup
+
+### Build
+
+- **context**: remove ctx files, moved into db
+
+### Documentation
+
+- **readme, docs, roadmap**: when a project indexes itself, and what goes blind about it
+- **readme, docs, roadmap**: the selection is a setting, not a file in the tree
+- **readme**: give the registration section runbook form
+- **readme**: name the three scopes a registration can be kept in
+- **templates**: state the commit and branch rules
+- **readme, docs, roadmap**: a monorepo indexed in slices
+
 ## v0.14.2 (2026-08-26)
 
 ### Refactor
