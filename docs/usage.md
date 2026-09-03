@@ -218,8 +218,8 @@ can reach the entry point can edit what it shows.
   directories it reads, which can be added and dropped here), _graph_ (the
   viewer's page, proxied so the frame shares this origin), _nodes_ (search
   and inspect one node's summary, metadata, neighbours and stored source),
-  _files_ (file nodes with entity counts and hash status), _settings_ (what
-  it indexes).
+  _files_ (file nodes with entity counts and hash status), _settings_ (when
+  it is indexed, and what it indexes).
 - **Plans** - every plan in the database, filterable by project, status,
   type or a text search; opens as rendered markdown and edits in place.
 - **Suggestions** - the recorded gaps, most often hit first, filterable by
@@ -227,8 +227,38 @@ can reach the entry point can edit what it shows.
   authors: the status, the wording and the vocabularies are editable, the
   hit count and the first sighting are not, and there is no way to create
   one here - a suggestion is written by the agent that hit the gap.
-- **Settings** - the selection every project falls back to, when neither it
-  nor one of its directories has said what to index.
+- **Settings** - what every project falls back to when neither it nor one of
+  its directories has said otherwise: the indexing schedule, and the
+  selection.
+
+### Indexing on a schedule
+
+A project is indexed by hand until something says otherwise, and what says
+otherwise is a mode stored beside the selection, at the same three levels:
+
+| Mode       | What it does                                                  |
+| ---------- | ------------------------------------------------------------- |
+| `off`      | nothing runs on its own; the Index button is the only trigger |
+| `periodic` | a run every N minutes                                         |
+| `auto`     | a run when a file changes, throttled, and the timer as well   |
+
+`auto` watches the mounted directories with inotify and starts a run once
+they have been quiet for the throttle. The timer stays under it as a
+fallback, because a watch can be blind and say nothing about it: a tree on a
+network filesystem delivers no events at all, and a watch the host refuses
+for want of `fs.inotify.max_user_watches` is one the container cannot raise.
+
+A project reading several directories folds them into one decision, because
+a run covers all of them: the most eager directory decides the mode, the
+shortest interval of the directories asking to be indexed wins, and a
+directory left `off` is not watched. That last one is the point of the level
+
+- watch the slice being worked on, and leave the vendored slice that churns
+  alone. The settings tab states the result above the fields.
+
+Two runs of one project never overlap: an index run holds a row, and a second
+start is refused while the first is going, whether it came from the schedule
+or from the button.
 
 Registering a project or a directory writes a row and mounts nothing: the
 compose override is a file on the host and both services hold the mounts they

@@ -63,6 +63,11 @@ from its own row and its ignore list from the global default:
 | project   | every directory of one project                    |
 | global    | every project, edited under _Settings_ in the nav |
 
+The indexing schedule uses the same three levels and the same rule - see
+[Indexing on a schedule](usage.md#indexing-on-a-schedule). It is stored in
+the `settings` column of the same rows rather than in the two document
+columns, so a knob added later is a key and not a migration.
+
 Ahead of all three: a `.ctxkeep` or `.ctxignore` file at the root of the
 indexed directory. A repository that ships one goes on deciding its own index
 until that file is deleted, whatever is stored here. `make install` no longer

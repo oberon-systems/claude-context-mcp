@@ -379,6 +379,15 @@ one fixed data directory - so onboarding a tree elsewhere reuses
 the running stack rather than starting a second one. Full variable
 reference: [deployment](https://oberon-systems.github.io/claude-context-mcp/deployment.html).
 
+### When a project is indexed
+
+By hand, until something says otherwise: the Index button on the dashboard,
+and nothing else, is what starts a run. A schedule turns that into `periodic`
+(every N minutes) or `auto` (a run when a watched file changes, throttled,
+with the timer kept as a fallback), set globally or per project - and per
+directory for a project reading several. Details:
+[usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
+
 ### Choosing what gets indexed
 
 Two gitignore-style documents: `ctxignore` (paths to prune) and `ctxkeep`
@@ -583,10 +592,11 @@ most often hit first, which is the ranking the whole thing exists for.
 ## Web interface
 
 `make up` serves a dashboard at <http://localhost:3000>: indexed projects and
-their staleness, a per-project node/graph/file browser, every plan in the
-database, editable in place, and the recorded gaps, ranked by how often they
-were hit. It has no authentication of its own, so anything that can reach the
-entry point can edit what it shows. Details:
+their staleness, a per-project node/graph/file browser, when and what each
+project indexes, every plan in the database, editable in place, and the
+recorded gaps, ranked by how often they were hit. It has no authentication of
+its own, so anything that can reach the entry point can edit what it shows.
+Details:
 [usage](https://oberon-systems.github.io/claude-context-mcp/usage.html).
 
 ## Backup and restore

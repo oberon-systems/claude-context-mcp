@@ -34,7 +34,7 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [x] **migrate plans**: should be a system table as \_memory and others
 - [x] **Cross-Project Plans:** One `plans` table for the whole database, with the project as a tag and `project: "*"` for a plan that belongs to none.
 - [x] **Repository Categorization:** Tag projects (e.g., 'codebase' vs 'docs') to enable targeted cross-repository searches.
-- [ ] **File tracking per project**: notice that a tree changed and index it without being asked. Every codebase is mounted read-only at `/code/<project>` and the API runs the indexing in its own process, so the watcher belongs there rather than on the host. Three signals worth weighing, and they are not exclusive: `inotify` over the mounts (immediate, but a watch per directory and a limit to raise on large trees), a timer per project (cheap, coarse, and it walks trees nothing touched), and the `file_hashes` the graph already keeps (exact, but only found by walking). Whatever drives it, the run is the same `POST /index` the dashboard button uses, and `index_jobs` already refuses two runs of one project at once.
+- [x] **File tracking per project**: notice that a tree changed and index it without being asked. Every codebase is mounted read-only at `/code/<project>` and the API runs the indexing in its own process, so the watcher belongs there rather than on the host. Three signals worth weighing, and they are not exclusive: `inotify` over the mounts (immediate, but a watch per directory and a limit to raise on large trees), a timer per project (cheap, coarse, and it walks trees nothing touched), and the `file_hashes` the graph already keeps (exact, but only found by walking). Whatever drives it, the run is the same `POST /index` the dashboard button uses, and `index_jobs` already refuses two runs of one project at once.
 - [ ] **Git Integration:** Automatic re-indexing and history-enriched nodes.
 - [x] **Maintenance Tools:** Backup/Restore (`make backup`, `make restore`).
 - [x] **Local Build:** Streamlined `make build` with stable tagging.
@@ -51,10 +51,10 @@ Simplifying how users interact with the stack and how agents manage project cont
 - [ ] **web**: drow graph for a specific file
 - [x] **web**: reindex button for force reindex
 - [ ] **web**: indexing status and summarize status
-- [ ] **base**, **web**: the auto-indexing params (time, inotify etc) and the
-      auto-summarize ones (llm url, schedulers and other). The table is there -
-      `project_settings.settings` is an empty JSONB on every level - so this is
-      the knobs and their UI, not a migration.
+- [ ] **base**, **web**: the auto-summarize params (llm url, schedulers and
+      other), on the plumbing the indexing ones already use -
+      `project_settings.settings` is one JSONB per level, so this is another
+      key and not a migration.
 
 ## Semantic & Advanced Intelligence
 
@@ -74,6 +74,18 @@ Adding vector context and agent memory.
 ---
 
 ## Completed Items
+
+Indexing on a schedule: a project is indexed by hand until a mode says
+otherwise, and the mode is stored beside the selection at the same three
+levels. `periodic` is a timer; `auto` watches the mounted directories with
+inotify and starts a run once they have been quiet for the throttle, keeping
+the timer under it as a fallback - a watch is blind on a network filesystem
+and where `fs.inotify.max_user_watches` is exhausted, and it says so in
+neither case. The scheduler is a thread of the worker API, which is the only
+process holding the mounts, and every run it starts goes through the same
+guard the dashboard button does. A project reading several directories folds
+them into one run: the most eager directory decides, and one left `off` is
+not watched.
 
 - The selection in the database: `.ctxkeep` and `.ctxignore` move out of the
   repository being indexed and into `project_settings`, resolved most specific

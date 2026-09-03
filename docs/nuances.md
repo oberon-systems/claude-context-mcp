@@ -32,6 +32,16 @@ Core tables:
   `(source, target, relation)`
 - `code_embeddings` - `vector(1536)` chunks with an HNSW cosine index, not
   populated yet
+- `project_settings` - one row per level: the two selection documents as
+  columns, and everything else as one `settings` JSONB. The indexing schedule
+  is the key `indexing`, holding `mode`, `interval_minutes` and
+  `debounce_minutes`, any of which may be absent - that is the level
+  inheriting it from the one above. A knob added later is another key rather
+  than another migration
+- `index_jobs` - one row per index run, with a partial unique index that
+  refuses a second run of a project while the first is going. The row is
+  opened at start rather than queued, so a run interrupted by a restart is
+  closed as failed when the worker API comes back up
   Plans, memories and suggestions have no table of their own: they are
   `graph_nodes` rows under the built-in projects `_plans`, `_memory` and
   `_suggestions`, created by a migration rather than by an index run. That is

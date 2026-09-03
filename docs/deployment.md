@@ -18,21 +18,41 @@ directory; there is no per-stack path to keep two apart.
 Copy `.env.example` to `.env`. `make up` and `make install` refuse to run
 without it.
 
-| Variable            | Default   | Purpose                                                                                         |
-| ------------------- | --------- | ----------------------------------------------------------------------------------------------- |
-| `PROJECT_PATH`      | required  | Absolute host path of the codebase to index; the default tree, mounted like every other one     |
-| `PROJECT_NAME`      | derived   | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
-| `POSTGRES_PASSWORD` | required  | Database password; compose fails fast when unset                                                |
-| `POSTGRES_USER`     | `user`    | Database user                                                                                   |
-| `POSTGRES_DB`       | `context` | Database name                                                                                   |
-| `GATEWAY_PORT`      | `3000`    | The one published host port; nginx routes it to every service                                   |
-| `GATEWAY_BIND`      | `0.0.0.0` | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
-| `GATEWAY_HOSTS`     | derived   | `Host` header values the MCP server and the dashboard API accept, comma separated               |
-| `TAG`               | `latest`  | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
+| Variable                 | Default   | Purpose                                                                                         |
+| ------------------------ | --------- | ----------------------------------------------------------------------------------------------- |
+| `PROJECT_PATH`           | required  | Absolute host path of the codebase to index; the default tree, mounted like every other one     |
+| `PROJECT_NAME`           | derived   | Name the codebase is stored and addressed under; defaults to the last segment of `PROJECT_PATH` |
+| `POSTGRES_PASSWORD`      | required  | Database password; compose fails fast when unset                                                |
+| `POSTGRES_USER`          | `user`    | Database user                                                                                   |
+| `POSTGRES_DB`            | `context` | Database name                                                                                   |
+| `GATEWAY_PORT`           | `3000`    | The one published host port; nginx routes it to every service                                   |
+| `GATEWAY_BIND`           | `0.0.0.0` | Interface the entry point binds. `127.0.0.1` keeps the whole stack off the network              |
+| `GATEWAY_HOSTS`          | derived   | `Host` header values the MCP server and the dashboard API accept, comma separated               |
+| `TAG`                    | `latest`  | Tag applied to images built by `make build`; compose only ever runs `:latest`                   |
+| `INDEX_SCHEDULER`        | on        | Whether the worker API indexes on a schedule at all. `0` leaves every project to the button     |
+| `SCHEDULER_TICK_SECONDS` | `30`      | How often it looks for a project that is due                                                    |
 
 `PROJECT_PATH`/`PROJECT_NAME` are arguments to the indexing job only - they
 decide what gets mounted and under which name, and never reach the compose
 project or the containers themselves.
+
+The schedule itself is per project and lives in the database, not here - see
+[Indexing on a schedule](usage.md#indexing-on-a-schedule). One host limit
+belongs on this page though: `auto` mode watches the mounted directories with
+inotify, and the kernel caps how many directories may be watched at once.
+
+```bash
+sysctl fs.inotify.max_user_watches
+```
+
+The default is generous on most distributions and not on all of them. A watch
+the kernel refuses is logged by the worker API, and the projects it covered
+fall back to their interval - so `auto` degrades to `periodic` rather than to
+nothing. Raise it on the host if you would rather have the watch:
+
+```bash
+sudo sysctl -w fs.inotify.max_user_watches=524288
+```
 
 ## The entry point
 
