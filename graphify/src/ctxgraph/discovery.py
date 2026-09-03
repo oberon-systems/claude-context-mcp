@@ -93,14 +93,49 @@ def walk_selected(
         ]
         for file_name in sorted(file_names):
             rel_path = posixpath.join(rel_dir, file_name)
-            if keep_spec is None:
-                if not is_default_source(file_name):
-                    continue
-            elif not keep_spec.match_file(rel_path):
-                continue
-            if ignore_spec is not None and ignore_spec.match_file(rel_path):
-                continue
-            yield os.path.join(current_dir, file_name), rel_path
+            if selects_file(rel_path, keep_spec, ignore_spec):
+                yield os.path.join(current_dir, file_name), rel_path
+
+
+def selects_file(
+    rel_path: str,
+    keep_spec: pathspec.PathSpec | None,
+    ignore_spec: pathspec.PathSpec | None,
+) -> bool:
+    """Whether the two specs select one file, the directories already settled.
+
+    No keep list means the built-in extension set, which is why the absence of
+    a spec is not an empty one here either.
+    """
+    if keep_spec is None:
+        if not is_default_source(posixpath.basename(rel_path)):
+            return False
+    elif not keep_spec.match_file(rel_path):
+        return False
+    return ignore_spec is None or not ignore_spec.match_file(rel_path)
+
+
+def selects(
+    rel_path: str,
+    keep_spec: pathspec.PathSpec | None,
+    ignore_spec: pathspec.PathSpec | None,
+) -> bool:
+    """Whether a path the walk never produced would have been selected.
+
+    A watcher is told about a file rather than arriving at it, so the pruning
+    `walk_selected` does on the way down has to be applied to the path itself:
+    the default skip list and the ignore spec both speak about directories,
+    and without this a project would be re-indexed for every write under .git.
+    """
+    parts = rel_path.split("/")
+    prefix = ""
+    for part in parts[:-1]:
+        if part in DEFAULT_IGNORED_DIRS:
+            return False
+        prefix = posixpath.join(prefix, part)
+        if ignore_spec is not None and ignore_spec.match_file(f"{prefix}/"):
+            return False
+    return selects_file(rel_path, keep_spec, ignore_spec)
 
 
 def read_source(full_path: str, rel_path: str) -> tuple[str | None, str]:

@@ -26,6 +26,9 @@ LEASE = "11111111-2222-3333-4444-555555555555"
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """Build an app with a token set and no database behind it."""
     monkeypatch.setattr(workerapi, "WORKER_API_TOKEN", TOKEN)
+    # The suite is not the service: an app built here must not start indexing
+    # trees of its own on a thread nothing in the test is waiting for.
+    monkeypatch.setattr(workerapi, "SCHEDULER_ENABLED", False)
     cursor = MagicMock()
 
     @contextmanager
@@ -322,3 +325,65 @@ def test_the_settings_of_an_unmounted_source_report_only_that(
     )
     body = client.get("/projects/mono/settings", headers=AUTH).json()
     assert body["sources"] == [{"alias": "configs", "mounted": False}]
+
+
+def test_a_project_already_indexing_is_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard `open_run` holds is the answer the dashboard already knew."""
+
+    def refuse(
+        cursor: object, project: str, project_type: str | None, fresh: bool
+    ) -> None:
+        raise RuntimeError("job 7 is already indexing this project")
+
+    monkeypatch.setattr(workerapi.indexjobs, "open_run", refuse)
+    answer = client.post("/index", json={"project": "kurum"}, headers=AUTH)
+    assert answer.status_code == 409
+    assert answer.json()["detail"] == "job 7 is already indexing this project"
+
+
+def test_an_accepted_run_is_handed_to_a_thread(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The row is answered with, and the work starts after the transaction."""
+    started: list[tuple] = []
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "open_run",
+        lambda cursor, project, project_type, fresh: {"id": 11, "project": project},
+    )
+    monkeypatch.setattr(
+        workerapi.indexjobs,
+        "run_in_background",
+        lambda *args: started.append(args),
+    )
+    answer = client.post(
+        "/index", json={"project": "kurum", "root_path": "/src/kurum"}, headers=AUTH
+    )
+    assert answer.status_code == 202
+    assert answer.json()["id"] == 11
+    assert started == [(11, "kurum", "/src/kurum", None, False)]
+
+
+def test_the_schedule_of_a_project_is_folded_before_it_is_answered(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One directory in auto decides the project, and says which is watched."""
+    monkeypatch.setattr(
+        workerapi,
+        "list_sources",
+        lambda cursor, project: [("services", "/mono/services"), ("vendor", "/mono/v")],
+    )
+    monkeypatch.setattr(
+        workerapi.schedule,
+        "resolve",
+        lambda cursor, project, alias: workerapi.schedule.Schedule(
+            "auto" if alias == "services" else "off", 60, 5, {}
+        ),
+    )
+    monkeypatch.setattr(workerapi.indexjobs, "last_run", lambda cursor, project: None)
+    body = client.get("/projects/mono/schedule", headers=AUTH).json()
+    assert body["mode"] == "auto"
+    assert body["watched"] == ["services"]
+    assert body["next_run"] is None

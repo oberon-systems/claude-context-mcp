@@ -28,13 +28,14 @@ from psycopg2.extensions import cursor as Cursor
 from psycopg2.pool import ThreadedConnectionPool
 from pydantic import BaseModel, Field
 
-from ctxgraph import bootstrap, indexjobs, jobs, sources
+from ctxgraph import bootstrap, indexjobs, jobs, schedule, sources
 from ctxgraph.config import (
     IGNORE_FILE,
     KEEP_FILE,
     KNOWN_PROJECT_TYPES,
     LLM_INPUT_CHARS,
     LLM_MAX_TOKENS,
+    SCHEDULER_ENABLED,
     WORKER_API_DOCS,
     WORKER_API_PORT,
     WORKER_API_TOKEN,
@@ -362,6 +363,40 @@ def get_settings(project: str) -> dict[str, Any]:
     return {"project": project, "sources": resolved}
 
 
+@api.get("/projects/{project}/schedule")
+def get_schedule(project: str) -> dict[str, Any]:
+    """Say when this project indexes itself, and where that was decided.
+
+    The directories of a project fold into one run, so the fold is answered
+    here rather than repeated in the dashboard: a rule with two
+    implementations is a rule that will eventually disagree with itself.
+    """
+    with transaction() as cursor:
+        aliases = [alias for alias, _ in list_sources(cursor, project)]
+        settled = schedule.for_project(cursor, project, aliases)
+        last = indexjobs.last_run(cursor, project)
+    return {
+        "project": project,
+        "mode": settled.mode,
+        "interval_minutes": settled.interval_minutes,
+        "debounce_minutes": settled.debounce_minutes,
+        "watched": list(settled.watched),
+        "levels": [
+            {
+                "alias": alias,
+                "mode": one.mode,
+                "interval_minutes": one.interval_minutes,
+                "debounce_minutes": one.debounce_minutes,
+                "origins": one.origins,
+            }
+            for alias, one in settled.per_alias.items()
+        ],
+        "last_run": last,
+        "next_run": schedule.next_due(settled, last),
+        "scheduler": SCHEDULER_ENABLED,
+    }
+
+
 class ScanRequest(BaseModel):
     """Which directory of a project to propose a selection for."""
 
@@ -513,43 +548,22 @@ def post_index(request: IndexRequest) -> dict[str, Any]:
     the parsers are in this image, so nothing has to start a container. Poll
     `/index/{id}` for how it went.
     """
+    project_type = request.project_type.strip() or None
     with transaction() as cursor:
         project, root_path = resolve_target(
             cursor, request.project.strip(), request.root_path.strip()
         )
-
-        if not os.path.isdir(project_mount(project)):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"{project} is not mounted at "
-                    f"{project_mount(project)}; the override has to be "
-                    "rewritten and this service recreated before it can be read"
-                ),
-            )
-
-        running = indexjobs.running_job(cursor, project)
-        if running is not None:
-            raise HTTPException(
-                status_code=409,
-                detail=f"job {running['id']} is already indexing this project",
-            )
-        job_id = indexjobs.open_job(
-            cursor,
-            project,
-            request.fresh,
-            request.project_type.strip() or None,
-        )
-        view = indexjobs.job_row(cursor, job_id)
+        try:
+            # The same guard the schedule starts its runs through: whether a
+            # project may be indexed right now is one rule, not two.
+            view = indexjobs.open_run(cursor, project, project_type, request.fresh)
+        except RuntimeError as refused:
+            raise HTTPException(status_code=409, detail=str(refused)) from refused
 
     indexjobs.run_in_background(
-        job_id,
-        project,
-        root_path,
-        request.project_type.strip() or None,
-        request.fresh,
+        view["id"], project, root_path, project_type, request.fresh
     )
-    return view or {"id": job_id}
+    return view
 
 
 @api.get("/index")
@@ -892,6 +906,12 @@ def create_app() -> FastAPI:
         return {"status": "ok", "database": "ok"}
 
     app.include_router(api)
+    if SCHEDULER_ENABLED:
+        # Imported here so the package stays importable where `watchfiles` is
+        # not installed: only the service that holds the mounts schedules runs.
+        from ctxgraph.scheduler import Scheduler
+
+        Scheduler().start()
     return app
 
 

@@ -259,6 +259,55 @@ def clear_settings(cursor: Cursor, project: str, alias: str) -> None:
     )
 
 
+def read_settings_json(cursor: Cursor, project: str, alias: str) -> dict:
+    """Read the settings object of one level, without any fallback.
+
+    The two selection documents are columns of their own; everything else a
+    level says - the indexing schedule today - is one JSONB object, so a new
+    knob is a key rather than a migration.
+    """
+    cursor.execute(
+        "SELECT settings FROM project_settings WHERE project = %s AND alias = %s;",
+        (project, alias),
+    )
+    row = cursor.fetchone()
+    if row is None or not isinstance(row[0], dict):
+        return {}
+    return row[0]
+
+
+def write_settings_json(
+    cursor: Cursor, project: str, alias: str, key: str, value: dict | None
+) -> None:
+    """Store or drop one key of a level's settings, leaving the rest alone.
+
+    The row is created when it does not exist: a project may say when it is
+    indexed while saying nothing about what is indexed. `None` removes the key
+    rather than storing an empty object, because that is what sends the
+    question back to the level above.
+    """
+    if value is None:
+        cursor.execute(
+            """
+            UPDATE project_settings
+               SET settings = settings - %s, updated_at = CURRENT_TIMESTAMP
+             WHERE project = %s AND alias = %s;
+            """,
+            (key, project, alias),
+        )
+        return
+    cursor.execute(
+        """
+        INSERT INTO project_settings (project, alias, settings)
+        VALUES (%s, %s, %s::jsonb)
+        ON CONFLICT (project, alias) DO UPDATE SET
+            settings = project_settings.settings || EXCLUDED.settings,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        (project, alias, json.dumps({key: value})),
+    )
+
+
 def has_settings(cursor: Cursor, project: str) -> bool:
     """Report whether a project holds a settings row at any of its levels.
 
@@ -414,6 +463,23 @@ def list_projects(cursor: Cursor) -> list[tuple[str, str, str, int]]:
         """
     )
     return cursor.fetchall()
+
+
+def list_indexable_projects(cursor: Cursor) -> list[tuple[str, str]]:
+    """Read every project that stands for a tree, as (name, host path).
+
+    The built-in projects hold records written through the MCP tools, and an
+    index run over one of them would prune every record it found, so they are
+    not offered to anything that indexes on its own.
+    """
+    cursor.execute(
+        """
+        SELECT name, root_path FROM projects
+         WHERE NOT (type = ANY(%s)) ORDER BY name;
+        """,
+        (list(BUILTIN_PROJECT_TYPES),),
+    )
+    return [(str(name), str(root_path)) for name, root_path in cursor.fetchall()]
 
 
 def list_all_sources(cursor: Cursor) -> list[tuple[str, str, str]]:

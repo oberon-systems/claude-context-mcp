@@ -9,11 +9,14 @@ this module writes.
 from __future__ import annotations
 
 import logging
+import os
 import threading
+from datetime import datetime
 from typing import Any
 
 from psycopg2.extensions import cursor as Cursor
 
+from ctxgraph.identifiers import project_mount
 from ctxgraph.storage import get_db_connection
 
 LOG = logging.getLogger(__name__)
@@ -72,6 +75,66 @@ def open_job(
         (project, fresh, project_type),
     )
     return int(cursor.fetchone()[0])
+
+
+def last_run(cursor: Cursor, project: str) -> datetime | None:
+    """When a run for this project last started, whatever became of it.
+
+    A failed run counts: the scheduler waits an interval after it rather than
+    trying again on the next tick, so a project that cannot be indexed is not
+    indexed once a minute forever.
+    """
+    cursor.execute(
+        "SELECT MAX(started_at) FROM index_jobs WHERE project = %s;", (project,)
+    )
+    row = cursor.fetchone()
+    return row[0] if row else None
+
+
+def open_run(
+    cursor: Cursor, project: str, project_type: str | None, fresh: bool
+) -> dict[str, Any]:
+    """Check that a project may start a run now, and record that it has.
+
+    One implementation of "may this project be indexed", so a run the schedule
+    started and a run the dashboard asked for cannot come to different
+    conclusions. The thread is left to the caller: it outlives the transaction
+    this is called in, and starting it before the row is committed would let a
+    rollback leave a run nothing is tracking.
+    """
+    mount = project_mount(project)
+    if not os.path.isdir(mount):
+        raise RuntimeError(
+            f"{project} is not mounted at {mount}; the override has to be "
+            "rewritten and this service recreated before it can be read"
+        )
+    running = running_job(cursor, project)
+    if running is not None:
+        raise RuntimeError(f"job {running['id']} is already indexing this project")
+    job_id = open_job(cursor, project, fresh, project_type)
+    return job_row(cursor, job_id) or {"id": job_id}
+
+
+def fail_orphaned(cursor: Cursor, before: datetime) -> list[tuple[int, str]]:
+    """Close the runs an earlier process left behind, and name them.
+
+    A run is a daemon thread of the API, and `index_jobs` carries no lease: a
+    restart in the middle of one leaves the row `running` forever, and the
+    partial unique index then refuses every further run of that project -
+    scheduled or by hand. Indexing only ever happens in this process, so a row
+    still running from before this process started belongs to a dead one.
+    """
+    cursor.execute(
+        """
+        UPDATE index_jobs
+           SET status = 'failed', finished_at = CURRENT_TIMESTAMP,
+               error = 'worker-api restarted while this run was going'
+         WHERE status = 'running' AND started_at < %s
+        RETURNING id, project;
+        """,
+        (before,),
+    )
+    return [(int(row[0]), str(row[1])) for row in cursor.fetchall()]
 
 
 def close_job(

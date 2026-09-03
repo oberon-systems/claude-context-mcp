@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ctxgraph.config import IGNORE_FILE, KEEP_FILE
-from ctxgraph.discovery import SpecPair, iter_project_files, load_spec
+from ctxgraph.discovery import SpecPair, iter_project_files, load_spec, selects, to_spec
 
 
 def build(root: Path) -> None:
@@ -65,3 +65,24 @@ def test_a_project_reading_nothing_selects_nothing(tmp_path: Path) -> None:
     """An empty selection is empty rather than the whole mount."""
     build(tmp_path)
     assert selected(tmp_path, []) == []
+
+
+def test_a_watched_path_under_a_skipped_directory_selects_nothing() -> None:
+    """Every commit writes under .git, and none of it is worth a re-index."""
+    assert not selects(".git/refs/heads/main.py", None, None)
+    assert not selects("node_modules/left-pad/index.js", None, None)
+
+
+def test_a_watched_path_obeys_the_two_specs() -> None:
+    """The rule a walk applies, for a path that arrives without one."""
+    keep = to_spec(["*.py"])
+    ignore = to_spec(["build/"])
+    assert selects("src/run.py", keep, ignore)
+    assert not selects("src/run.txt", keep, ignore)
+    assert not selects("build/run.py", keep, ignore)
+
+
+def test_a_watched_path_without_a_keep_list_uses_the_built_in_set() -> None:
+    """No keep list is the built-in extension set, not everything."""
+    assert selects("src/run.py", None, None)
+    assert not selects("notes.txt", None, None)

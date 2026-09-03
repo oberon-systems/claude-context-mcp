@@ -58,6 +58,35 @@ FORCE_REEXTRACT = os.getenv("FORCE_REEXTRACT", "").strip().lower() not in {
     "no",
 }
 
+# Where a schedule lives in `project_settings.settings`, at any of the three
+# levels the selection uses. An absent field asks the level above.
+INDEXING_KEY = "indexing"
+# What a schedule may say: manual only, a timer, or the mounts watched with
+# the timer left as a fallback.
+INDEXING_MODES = ("off", "periodic", "auto")
+DEFAULT_INDEXING_MODE = "off"
+DEFAULT_INDEX_INTERVAL_MINUTES = 60
+DEFAULT_INDEX_DEBOUNCE_MINUTES = 5
+# Clamped when read rather than refused: these values are editable in psql as
+# well as in the dashboard, and one typed as 0 would spin the scheduler.
+MIN_INDEX_INTERVAL_MINUTES = 1
+MAX_INDEX_INTERVAL_MINUTES = 10080
+MIN_INDEX_DEBOUNCE_MINUTES = 1
+MAX_INDEX_DEBOUNCE_MINUTES = 1440
+# Whether this process starts runs of its own. On by default, and the API is
+# the only process it should ever be on in: the one-shot container and the
+# suite import the same package.
+SCHEDULER_ENABLED = os.getenv("INDEX_SCHEDULER", "").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
+SCHEDULER_TICK_SECONDS = int(os.getenv("SCHEDULER_TICK_SECONDS", "30"))
+# How many runs one tick may start. Indexing is CPU-bound and a restart can
+# leave every project overdue at once, so they are started a tick apart rather
+# than all together.
+SCHEDULER_STARTS_PER_TICK = int(os.getenv("SCHEDULER_STARTS_PER_TICK", "1"))
+
 DEFAULT_IGNORED_DIRS = frozenset(
     {
         ".cache",

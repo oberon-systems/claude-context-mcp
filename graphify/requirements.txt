@@ -17,6 +17,9 @@ llama-cpp-python==0.3.7
 # manylinux wheels, so the builder stage compiles nothing new for them.
 fastapi==0.121.1
 uvicorn==0.35.0
+# The inotify watch behind `auto` indexing. uvicorn is installed without
+# [standard], so this is not here transitively; it ships manylinux wheels.
+watchfiles==1.1.1
 pathspec==1.1.1
 psycopg2-binary==2.9.12
 # Ansible structure lives in the YAML values, not in the tree-sitter tree.

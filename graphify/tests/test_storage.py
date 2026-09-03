@@ -8,6 +8,7 @@ path is refused, and how a project made of several directories is assembled.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -23,9 +24,11 @@ from ctxgraph.storage import (
     list_sources,
     promote_root,
     read_settings,
+    read_settings_json,
     register_project,
     set_selection_origin,
     write_settings,
+    write_settings_json,
 )
 
 
@@ -44,6 +47,7 @@ class FakeCursor:
         projects: dict[str, tuple[str, str]] | None = None,
         sources: list[tuple[str, str, str]] | None = None,
         settings: dict[tuple[str, str], tuple[str | None, str | None]] | None = None,
+        objects: dict[tuple[str, str], dict] | None = None,
     ) -> None:
         """Seed the database this cursor pretends to be."""
         self.rows = list(rows or [])
@@ -53,6 +57,8 @@ class FakeCursor:
         self.sources = list(sources or [])
         # (project, alias) -> (ctxkeep, ctxignore)
         self.settings = dict(settings or {})
+        # (project, alias) -> the settings JSONB of that level
+        self.objects = {key: dict(value) for key, value in (objects or {}).items()}
         # (project, alias) -> (keep_source, ignore_source)
         self.origins: dict[tuple[str, str], tuple[str, str]] = {}
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
@@ -97,7 +103,20 @@ class FakeCursor:
             return [stored] if stored else []
         if text.startswith("SELECT 1 FROM project_settings WHERE project"):
             return [(1,) for project, _ in self.settings if project == params[0]][:1]
-        if text.startswith("INSERT INTO project_settings"):
+        if text.startswith("SELECT settings FROM project_settings"):
+            stored = self.objects.get((params[0], params[1]))
+            return [(stored,)] if stored is not None else []
+        if text.startswith("INSERT INTO project_settings (project, alias, settings)"):
+            merged = dict(self.objects.get((params[0], params[1]), {}))
+            merged.update(json.loads(params[2]))
+            self.objects[(params[0], params[1])] = merged
+            return []
+        if text.startswith("UPDATE project_settings SET settings = settings -"):
+            stored = self.objects.get((params[1], params[2]))
+            if stored is not None:
+                stored.pop(params[0], None)
+            return []
+        if text.startswith("INSERT INTO project_settings (project, alias, ctxkeep"):
             self.settings[(params[0], params[1])] = (params[2], params[3])
             return []
         if text.startswith("DELETE FROM project_settings"):
@@ -419,3 +438,25 @@ def test_dropping_a_directory_drops_the_settings_it_had() -> None:
     assert read_settings(cursor, "mono", "agents") == (None, None)
     # The project level is not a directory and is left exactly as it was.
     assert read_settings(cursor, "mono", "") == ("*.md\n", None)
+
+
+def test_a_level_saying_nothing_holds_an_empty_object() -> None:
+    """A missing row and a row with no keys answer the same thing."""
+    assert read_settings_json(FakeCursor(), "kurum", "") == {}
+
+
+def test_one_key_is_written_without_disturbing_the_others() -> None:
+    """The column carries every knob, so a write is a merge and not a replace."""
+    cursor = FakeCursor(objects={("kurum", ""): {"summarizing": {"mode": "off"}}})
+    write_settings_json(cursor, "kurum", "", "indexing", {"mode": "auto"})
+    assert read_settings_json(cursor, "kurum", "") == {
+        "summarizing": {"mode": "off"},
+        "indexing": {"mode": "auto"},
+    }
+
+
+def test_clearing_a_key_sends_the_question_back_up() -> None:
+    """Removing it is what inheriting means; an empty object still answers."""
+    cursor = FakeCursor(objects={("kurum", ""): {"indexing": {"mode": "auto"}}})
+    write_settings_json(cursor, "kurum", "", "indexing", None)
+    assert read_settings_json(cursor, "kurum", "") == {}
